@@ -176,6 +176,30 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
 .stat.bad{background:#fdeceb;border:1px solid #f0c2be;color:#8f2f28}
 .mact{display:flex;gap:10px;flex-wrap:wrap}
 .mact .btn{flex:1;min-width:120px;justify-content:center}
+
+/* ── 뷰 탭 ── */
+.views{display:flex;gap:6px;margin-bottom:18px;background:var(--surface);border:1px solid var(--line);
+  border-radius:12px;padding:5px;box-shadow:var(--sh);width:fit-content}
+.vtab{background:none;border:0;font:inherit;font-size:13.5px;font-weight:700;color:var(--mid);
+  padding:9px 18px;border-radius:9px;cursor:pointer}
+.vtab:hover{color:var(--tx);background:var(--sunk)}
+.vtab.on{background:var(--mint);color:#fff}
+[hidden]{display:none!important}
+
+/* ── 판정 뱃지 ── */
+.vd{display:inline-block;font-size:11px;font-weight:800;padding:3px 9px;border-radius:20px;white-space:nowrap}
+.vd.approve{background:var(--mint-lt);color:var(--mint-dk);border:1px solid #a8ddc7}
+.vd.hide{background:#fdeceb;color:#8f2f28;border:1px solid #f0c2be}
+.vd.revise{background:var(--amber-lt);color:#7c5408;border:1px solid #eed9ae}
+.vd.revise2{background:#eef0fb;color:#3f4a91;border:1px solid #c8cff0}
+.vd.reg{background:var(--violet-lt);color:#5b3fa8;border:1px solid #d6c9f4}
+.vd.hold{background:var(--sunk);color:var(--mid);border:1px solid var(--line2)}
+.aRow td{font-size:12.8px}
+.aRow .why{color:var(--mid);font-size:12.3px;line-height:1.55}
+.aRow .pid{font-family:var(--mono);color:var(--dim);font-size:12px}
+.aDone{color:var(--mint-dk);font-weight:700;font-size:11.5px}
+.aWait{color:var(--dim);font-size:11.5px}
+.mtable tbody tr.on td{background:#dff3ea!important}
 </style>
 </head>
 <body>
@@ -201,6 +225,12 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
     <span class="sync" id="sync">● 불러오는 중…</span>
   </div>
 
+  <nav class="views">
+    <button class="vtab on" data-v="log">📋 업무일지</button>
+    <button class="vtab" data-v="audit">🔎 검수 기록</button>
+  </nav>
+
+  <div id="view-log">
   <div class="kpis" id="kpis"></div>
 
   <div class="card today">
@@ -279,6 +309,97 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
     </div>
     <div class="urlbox" id="curl"></div>
   </div>
+  </div><!-- /view-log -->
+
+  <div id="view-audit" hidden>
+    <div class="kpis" id="aKpis"></div>
+
+    <div class="card">
+      <div class="chd"><h2>🔎 검수 기록</h2>
+        <span class="hint">판정 결과를 불러와 날짜별로 남깁니다</span>
+        <button class="btn ghost" id="aImp">판정 결과 불러오기</button>
+        <input type="file" id="aFile" accept="application/json,.json" hidden>
+        <button class="btn ghost" id="aExp">내보내기</button>
+      </div>
+      <div class="warn" id="aEmpty">
+        아직 기록이 없습니다. 순서는 이렇습니다.<br><br>
+        <b>1.</b> <a href="tools.html" style="color:var(--mint-dk);font-weight:700">📥 리뷰 수집기</a>로 그날 검수대기 리뷰를 전부 받습니다<br>
+        <b>2.</b> 받은 JSON을 건무에게 전달하면 판정해서 <b>판정 결과 JSON</b>을 돌려줍니다<br>
+        <b>3.</b> 위 <b>[판정 결과 불러오기]</b>로 넣으면 여기에 날짜별로 쌓입니다
+      </div>
+      <div class="tw" id="aDaysWrap" hidden>
+        <table class="mtable">
+          <thead><tr>
+            <th>날짜</th><th style="text-align:right">대상</th>
+            <th style="text-align:right">검수완료</th><th style="text-align:right">미노출</th>
+            <th style="text-align:right">발색샷 요청</th><th style="text-align:right">제품 매칭</th>
+            <th style="text-align:right">보류</th><th style="text-align:right">적용</th>
+          </tr></thead>
+          <tbody id="aDays"></tbody>
+          <tfoot id="aDaysFoot"></tfoot>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" id="aDetailCard" hidden>
+      <div class="chd"><h2 id="aDetailTitle">건별 판정</h2>
+        <span class="hint">판정 사유와 처리 상태</span>
+        <select id="aFilter" class="btn ghost" style="padding:8px 12px">
+          <option value="">전체</option>
+          <option value="approve">검수완료</option>
+          <option value="hide">미노출</option>
+          <option value="revise_color">발색샷 요청</option>
+          <option value="revise_product">제품 매칭 요청</option>
+          <option value="register">상품등록 필요</option>
+          <option value="hold">보류</option>
+        </select>
+      </div>
+      <div class="tw">
+        <table>
+          <thead><tr>
+            <th style="width:78px">리뷰 ID</th><th>브랜드 / 제품</th><th style="width:120px">유저</th>
+            <th style="width:112px">판정</th><th>사유</th><th style="width:88px">처리</th>
+          </tr></thead>
+          <tbody id="aItems"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="chd"><h2>📐 판정 기준</h2><span class="hint">이 규칙대로 분류합니다</span></div>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:118px">판정</th><th>조건</th><th style="width:150px">처리</th><th style="width:78px">누가</th></tr></thead>
+          <tbody>
+            <tr><td><span class="vd approve">검수완료</span></td>
+                <td>제품 매칭 ✓ · 직접 촬영 사진 · 본문 정상 · <b>컬러 제품이면 발색샷 있음</b></td>
+                <td><code>POST /approve</code></td><td>자동</td></tr>
+            <tr><td><span class="vd hide">미노출</span></td>
+                <td>사진 도용(웹 이미지·스크린샷) · 제품과 무관한 사진 · 본문 도배</td>
+                <td><code>PUT {visible:false}</code></td><td>자동</td></tr>
+            <tr><td><span class="vd revise">발색샷 요청</span></td>
+                <td>컬러 제품(립·틴트·파운데이션·팩트·네일 등)인데 <b>발색샷 없음</b><br>
+                    <span style="color:var(--dim)">뚜껑만 닫힌 사진 / 컬러는 보이나 발색 없음</span></td>
+                <td>수정요청 · 발색샷 템플릿</td><td>자동</td></tr>
+            <tr><td><span class="vd revise2">제품 매칭 요청</span></td>
+                <td>엑박이지만 <b>CMS에 해당 제품이 이미 있음</b></td>
+                <td>수정요청 · 상품명 템플릿</td><td><b>사람</b></td></tr>
+            <tr><td><span class="vd reg">상품등록 필요</span></td>
+                <td>엑박이고 <b>CMS에 제품이 없음</b> — 로고·정보 찾아 등록 후 재요청</td>
+                <td>CMS 상품등록</td><td><b>사람</b></td></tr>
+            <tr><td><span class="vd hold">보류</span></td>
+                <td>판단이 갈리는 건 — 애매한 사진, 경계선 내용</td>
+                <td>사람이 직접 확인</td><td><b>사람</b></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="warn" style="margin-top:14px">
+        <b>기계가 다 하지 못합니다.</b> 엑박·파일크기·본문도배는 자동으로 걸러지지만,
+        <b>사진이 제품과 맞는지</b>와 <b>발색샷이 실제로 있는지</b>는 사진을 직접 봐야 압니다.
+        그래서 수집 → 판정 → 적용을 나누고, 애매한 건 <b>보류</b>로 빼서 사람에게 넘깁니다.
+      </div>
+    </div>
+  </div><!-- /view-audit -->
 
 </div>
 <div class="toast" id="toast"></div>
@@ -896,6 +1017,151 @@ setTimeout(async () => {
   }
 }, 400);
 
+</script>
+
+<script>
+/* ═══════════ 검수 기록 ═══════════ */
+(function(){
+  var AKEY = 'unpa-audit-v1';
+  var AU = {};            /* { "2026-08-24": {date, collectedAt, items:[...]} } */
+  var aCur = null, aFilterV = '';
+
+  var VD = {
+    approve:       { cls:'approve',  label:'검수완료' },
+    hide:          { cls:'hide',     label:'미노출' },
+    revise_color:  { cls:'revise',   label:'발색샷 요청' },
+    revise_product:{ cls:'revise2',  label:'제품 매칭' },
+    register:      { cls:'reg',      label:'상품등록' },
+    hold:          { cls:'hold',     label:'보류' }
+  };
+
+  function aLoad(){ try{ var r=localStorage.getItem(AKEY); if(r){ var o=JSON.parse(r); if(o&&o.days) AU=o.days; } }catch(e){} }
+  function aSave(){ try{ localStorage.setItem(AKEY, JSON.stringify({v:1,savedAt:new Date().toISOString(),days:AU})); return true; }catch(e){ return false; } }
+
+  function count(day){
+    var c={approve:0,hide:0,revise_color:0,revise_product:0,register:0,hold:0,applied:0};
+    (day.items||[]).forEach(function(it){
+      if(c[it.verdict]!==undefined) c[it.verdict]++;
+      if(it.applied) c.applied++;
+    });
+    c.total=(day.items||[]).length;
+    return c;
+  }
+
+  function aRenderKpi(){
+    var days=Object.keys(AU), t={total:0,approve:0,hide:0,revise:0,hold:0,applied:0};
+    days.forEach(function(d){ var c=count(AU[d]);
+      t.total+=c.total; t.approve+=c.approve; t.hide+=c.hide;
+      t.revise+=c.revise_color+c.revise_product+c.register; t.hold+=c.hold; t.applied+=c.applied; });
+    var k=function(acc,lb,vl,sb){ return '<div class="kpi" style="--acc:'+acc+'"><div class="lb">'+lb+
+      '</div><div class="vl">'+vl+'</div><div class="sb">'+sb+'</div></div>'; };
+    document.getElementById('aKpis').innerHTML =
+      k('#0d9668','검수한 날', days.length+'<small>일</small>', '누적 대상 '+t.total.toLocaleString('ko-KR')+'건') +
+      k('#0d9668','검수완료', t.approve.toLocaleString('ko-KR')+'<small>건</small>', '적용됨 '+t.applied.toLocaleString('ko-KR')+'건') +
+      k('#c8443c','미노출', t.hide.toLocaleString('ko-KR')+'<small>건</small>', '어뷰징으로 판정') +
+      k('#b57611','수정요청 / 보류', (t.revise+t.hold).toLocaleString('ko-KR')+'<small>건</small>', '수정요청 '+t.revise+' · 보류 '+t.hold);
+  }
+
+  function aRenderDays(){
+    var days=Object.keys(AU).sort().reverse();
+    document.getElementById('aEmpty').hidden = days.length>0;
+    document.getElementById('aDaysWrap').hidden = days.length===0;
+    var tot={total:0,approve:0,hide:0,revise_color:0,revise_product:0,hold:0,applied:0};
+    document.getElementById('aDays').innerHTML = days.map(function(d){
+      var c=count(AU[d]);
+      ['total','approve','hide','revise_color','revise_product','hold','applied'].forEach(function(k){ tot[k]+=c[k]; });
+      return '<tr data-d="'+d+'" class="'+(d===aCur?'on':'')+'" style="cursor:pointer">'
+        +'<td class="m">'+d+'</td>'
+        +'<td style="text-align:right">'+c.total+'</td>'
+        +'<td style="text-align:right;color:#076e4c;font-weight:700">'+c.approve+'</td>'
+        +'<td style="text-align:right;color:#c8443c">'+c.hide+'</td>'
+        +'<td style="text-align:right;color:#b57611">'+c.revise_color+'</td>'
+        +'<td style="text-align:right">'+(c.revise_product+c.register)+'</td>'
+        +'<td style="text-align:right;color:#8b9a94">'+c.hold+'</td>'
+        +'<td style="text-align:right">'+(c.applied?('<span class="aDone">'+c.applied+'</span>'):'<span class="aWait">—</span>')+'</td></tr>';
+    }).join('');
+    document.getElementById('aDaysFoot').innerHTML='<tr><td>합계</td>'
+      +'<td style="text-align:right">'+tot.total+'</td>'
+      +'<td style="text-align:right;color:#076e4c">'+tot.approve+'</td>'
+      +'<td style="text-align:right;color:#c8443c">'+tot.hide+'</td>'
+      +'<td style="text-align:right;color:#b57611">'+tot.revise_color+'</td>'
+      +'<td style="text-align:right">'+tot.revise_product+'</td>'
+      +'<td style="text-align:right">'+tot.hold+'</td>'
+      +'<td style="text-align:right">'+tot.applied+'</td></tr>';
+    document.getElementById('aDays').querySelectorAll('tr').forEach(function(tr){
+      tr.onclick=function(){ aCur=tr.dataset.d; aRenderDays(); aRenderItems(); };
+    });
+  }
+
+  function esc(x){ return String(x==null?'':x).replace(/[&<>"]/g,function(m){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]; }); }
+
+  function aRenderItems(){
+    var card=document.getElementById('aDetailCard');
+    if(!aCur||!AU[aCur]){ card.hidden=true; return; }
+    card.hidden=false;
+    document.getElementById('aDetailTitle').textContent = aCur + ' 건별 판정';
+    var items=(AU[aCur].items||[]).filter(function(it){ return !aFilterV || it.verdict===aFilterV; });
+    document.getElementById('aItems').innerHTML = items.map(function(it){
+      var v=VD[it.verdict]||VD.hold;
+      return '<tr class="aRow">'
+        +'<td class="pid">'+esc(it.id)+'</td>'
+        +'<td><b>'+esc(it.brand||'')+'</b><br><span class="why">'+esc(it.product||'')+'</span></td>'
+        +'<td class="why">'+esc(it.user||'')+'</td>'
+        +'<td><span class="vd '+v.cls+'">'+v.label+'</span></td>'
+        +'<td class="why">'+esc(it.reason||'')+'</td>'
+        +'<td>'+(it.applied?'<span class="aDone">✓ 처리</span>':'<span class="aWait">대기</span>')+'</td></tr>';
+    }).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--dim);padding:22px">해당 판정이 없습니다.</td></tr>';
+  }
+
+  function aRenderAll(){ aRenderKpi(); aRenderDays(); aRenderItems(); }
+
+  /* 판정 결과 취합 */
+  function adopt(o){
+    var days = o && o.days ? o.days : (o && o.date ? (function(){ var d={}; d[o.date]=o; return d; })() : null);
+    if(!days){ toast('판정 결과 형식이 아닙니다', true); return; }
+    var n=0;
+    Object.keys(days).forEach(function(d){
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+      var day=days[d]; if(!day||!day.items) return;
+      AU[d]=day; n++;
+    });
+    if(!n){ toast('불러올 날짜가 없습니다', true); return; }
+    aSave();
+    aCur = Object.keys(days).sort().reverse()[0];
+    aRenderAll();
+    toast(n+'일치 판정 결과를 불러왔습니다');
+  }
+
+  document.getElementById('aImp').onclick=function(){ document.getElementById('aFile').click(); };
+  document.getElementById('aFile').onchange=function(e){
+    var f=e.target.files[0]; if(!f) return;
+    var r=new FileReader();
+    r.onload=function(){ try{ adopt(JSON.parse(r.result)); }catch(err){ toast('JSON 파싱 실패', true); } };
+    r.readAsText(f); e.target.value='';
+  };
+  document.getElementById('aExp').onclick=function(){
+    var blob=new Blob([JSON.stringify({v:1,savedAt:new Date().toISOString(),days:AU},null,1)],{type:'application/json'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download='unpa-audit-'+new Date().toISOString().slice(0,10)+'.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    toast('검수 기록을 내려받았습니다');
+  };
+  document.getElementById('aFilter').onchange=function(){ aFilterV=this.value; aRenderItems(); };
+
+  /* 탭 전환 */
+  document.querySelectorAll('.vtab').forEach(function(b){
+    b.onclick=function(){
+      document.querySelectorAll('.vtab').forEach(function(x){ x.classList.toggle('on', x===b); });
+      var v=b.dataset.v;
+      document.getElementById('view-log').hidden   = v!=='log';
+      document.getElementById('view-audit').hidden = v!=='audit';
+      if(v==='audit') aRenderAll();
+    };
+  });
+
+  aLoad(); aRenderAll();
+})();
 </script>
 </body>
 </html>
