@@ -142,6 +142,22 @@
       끝나면 <b>cms-brands.json</b>이 내려받아집니다. <b>GET만 사용하며 아무것도 바꾸지 않습니다.</b></div>
   </div>
 
+  <div class="tool">
+    <h2>🔎 제품검색 수집기 <span class="tag safe">읽기 전용</span></h2>
+    <p>엑박 리뷰의 <b>brandId 안에서 유저가 쓴 상품명을 분절 토큰으로 검색</b>해, 그 제품이 CMS에 실제로 있는지 확인합니다. 있으면 정확한 상품명이 후보로 잡힙니다.</p>
+    <div class="when"><b>언제</b> — 브랜드는 있는데(정식 등록) 그 안에 유저가 쓴 <b>제품이 있는지 없는지</b> 확정할 때 → 수정요청 vs 상품등록 판가름</div>
+    <div class="drag">
+      <p class="h">↓ 즐겨찾기 바로 드래그 ↓</p>
+      <a class="bm" id="bm4" href="#">🔎 제품검색</a>
+      <p class="a">클릭 말고 <b>끌어다 놓기</b></p>
+      <div class="copyrow" style="justify-content:center">
+        <button class="btn" data-copy="4">주소 복사 (드래그 안 될 때)</button>
+      </div>
+    </div>
+    <div class="note safe"><b>쓰는 법</b> — cms.unpa.me 아무 관리 화면에서든 클릭하면, 스크립트에 넣어둔 <b>대상 목록(현재 8/24 엑박 12건)</b>을 자동으로 브랜드별 검색합니다.
+      인증 대기가 뜨면 제품/브랜드 목록을 한 번 새로 불러주세요. 끝나면 <b>cms-products.json</b>이 내려받아집니다. <b>GET만 사용하며 아무것도 바꾸지 않습니다.</b></div>
+  </div>
+
   <h3 class="sec">02 · 알아낸 것</h3>
 
   <div class="tw">
@@ -180,7 +196,7 @@
 
   <footer>
     이 도구들은 조회와 관측만 합니다. 승인·미노출 같은 실제 처리는 아직 사람이 직접 누릅니다.<br>
-    스크립트 원본: <code style="font-family:var(--mono)">cms-collect.js</code> · <code style="font-family:var(--mono)">cms-recon.js</code> · <code style="font-family:var(--mono)">cms-brands.js</code>
+    스크립트 원본: <code style="font-family:var(--mono)">cms-collect.js</code> · <code style="font-family:var(--mono)">cms-recon.js</code> · <code style="font-family:var(--mono)">cms-brands.js</code> · <code style="font-family:var(--mono)">cms-products.js</code>
   </footer>
 </div>
 
@@ -190,10 +206,11 @@
     return "javascript:(function(){var s=document.createElement('script');s.src='"
       + BASE + file + "?t='+Date.now();document.body.appendChild(s);})();";
   }
-  var URLS = { 1: loader('cms-collect.js'), 2: loader('cms-recon.js'), 3: loader('cms-brands.js') };
+  var URLS = { 1: loader('cms-collect.js'), 2: loader('cms-recon.js'), 3: loader('cms-brands.js'), 4: loader('cms-products.js') };
   document.getElementById('bm1').href = URLS[1];
   document.getElementById('bm2').href = URLS[2];
   document.getElementById('bm3').href = URLS[3];
+  document.getElementById('bm4').href = URLS[4];
   document.querySelectorAll('.bm').forEach(function(a){
     a.addEventListener('click', function(e){ e.preventDefault(); });
   });
