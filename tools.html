@@ -90,7 +90,26 @@
     <a class="back" href="./">← 업무일지로</a>
   </header>
 
-  <h3 class="sec">01 · 자료 모으기</h3>
+  <h3 class="sec">⭐ 한 도구로 (수집→판정→처리)</h3>
+
+  <div class="tool" style="border-color:#a8ddc7;border-width:2px">
+    <h2>🧭 리뷰 검수 콘솔 <span class="tag warn">자동판정+처리</span></h2>
+    <p>날짜만 넣으면 그날 리뷰를 <b>모으고 · 자동 판정하고 · 대기열로 정리</b>합니다. 골라서 <b>수정요청·미노출까지 한 번에</b>. 아래 개별 도구 5종을 이거 하나로 합친 거예요.</p>
+    <div class="when"><b>자동</b> — 엑박·브랜드/제품 유무·본문도배·비화장품·<b>사진 포렌식(화면캡처/도용/직접촬영)</b>까지 판정. <b>실행</b>은 수정요청·미노출만, <b>승인·상품등록은 사람이</b>.</div>
+    <div class="drag">
+      <p class="h">↓ 즐겨찾기 바로 드래그 ↓</p>
+      <a class="bm" id="bm6" href="#">🧭 리뷰 검수 콘솔</a>
+      <p class="a">클릭 말고 <b>끌어다 놓기</b> · 즐겨찾기 바 <kbd>Cmd/Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd></p>
+      <div class="copyrow" style="justify-content:center">
+        <button class="btn" data-copy="6">주소 복사 (드래그 안 될 때)</button>
+      </div>
+    </div>
+    <div class="note safe"><b>쓰는 법</b> — cms.unpa.me 어느 화면에서든 클릭 → 패널에 <b>날짜 입력 → [스캔 시작]</b> → 대기열 확인 → 체크한 것 <b>[실행]</b>(확인창 승인).
+      스캔은 조회만이고, 실제 처리는 대기열에서 승인해야 나갑니다. 끝나면 처리 로그 JSON이 내려받아집니다.</div>
+    <div class="note warn" style="margin-top:8px"><b>사진 자동판별의 한계</b> — 화면캡처·도용·저해상은 자동으로 미노출 후보로 걸러지지만, "직접 찍었는데 제품과 무관한 사진"(예: 육회)은 <b>👀 확인</b> 대기열로 빠집니다. 승인은 눈으로 최종 판단하세요.</div>
+  </div>
+
+  <h3 class="sec">01 · 자료 모으기 <span style="font-weight:600;text-transform:none;letter-spacing:0;color:var(--dim)">— 개별 도구 (콘솔이 안 될 때·구조 파악용)</span></h3>
 
   <div class="tool">
     <h2>📥 리뷰 수집기 <span class="tag safe">읽기 전용</span></h2>
@@ -221,7 +240,7 @@
 
   <footer>
     01~04는 조회·관측·문구 저장이고, <b>05 적용기만 실제 상태를 바꿉니다</b>(미리보기·2중 승인 필수).<br>
-    스크립트 원본: <code style="font-family:var(--mono)">cms-collect.js</code> · <code style="font-family:var(--mono)">cms-recon.js</code> · <code style="font-family:var(--mono)">cms-brands.js</code> · <code style="font-family:var(--mono)">cms-products.js</code> · <code style="font-family:var(--mono)">cms-apply.js</code>
+    스크립트 원본: <code style="font-family:var(--mono)">cms-collect.js</code> · <code style="font-family:var(--mono)">cms-recon.js</code> · <code style="font-family:var(--mono)">cms-brands.js</code> · <code style="font-family:var(--mono)">cms-products.js</code> · <code style="font-family:var(--mono)">cms-apply.js</code> · <code style="font-family:var(--mono)">cms-console.js</code>
   </footer>
 </div>
 
@@ -231,9 +250,10 @@
     return "javascript:(function(){var s=document.createElement('script');s.src='"
       + BASE + file + "?t='+Date.now();document.body.appendChild(s);})();";
   }
-  var URLS = { 1: loader('cms-collect.js'), 2: loader('cms-recon.js'), 3: loader('cms-brands.js'), 4: loader('cms-products.js'), 5: loader('cms-apply.js') };
+  var URLS = { 1: loader('cms-collect.js'), 2: loader('cms-recon.js'), 3: loader('cms-brands.js'), 4: loader('cms-products.js'), 5: loader('cms-apply.js'), 6: loader('cms-console.js') };
   document.getElementById('bm1').href = URLS[1];
   document.getElementById('bm5').href = URLS[5];
+  document.getElementById('bm6').href = URLS[6];
   document.getElementById('bm2').href = URLS[2];
   document.getElementById('bm3').href = URLS[3];
   document.getElementById('bm4').href = URLS[4];
