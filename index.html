@@ -291,8 +291,9 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
     <div class="mbd">
       <div class="stat off" id="sbStat">확인 중…</div>
 
-      <div class="step">
-        <b>1단계 — 연결 정보</b><br>
+      <details class="step" id="sbStep1">
+        <summary id="sbStep1Sum" style="cursor:pointer;font-weight:700;color:var(--tx);list-style:revert">1단계 — 연결 정보</summary>
+        <div style="margin-top:9px">
         Supabase 대시보드 → 프로젝트 → <b>Project Settings → API</b> 에서 두 값을 복사해 붙여넣으세요.
         <div style="margin-top:11px;display:flex;flex-direction:column;gap:10px">
           <div class="fld"><label>Project URL</label>
@@ -300,11 +301,11 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
           <div class="fld"><label>anon public key</label>
             <input id="sbKey" type="text" placeholder="eyJhbGciOi..." spellcheck="false"></div>
           <button class="btn" id="sbSave">연결 정보 저장</button>
-        </div>
-      </div>
+        </div></div>
+      </details>
 
       <div class="step">
-        <b>2단계 — 표 만들기 (최초 1회)</b><br>
+        <b>2단계 — 표 만들기 (최초 1회)</b> <span style="color:var(--mint-dk);font-weight:800">✓ 완료됨</span><br>
         Supabase → <b>SQL Editor</b> → 아래를 붙여넣고 <b>Run</b>.
         <button class="btn ghost" id="sbSql" style="margin-top:9px;padding:6px 12px;font-size:12px">SQL 복사</button>
 <div class="sqlbox" id="sqlText">create table if not exists worklog_months (
@@ -325,7 +326,7 @@ create policy "own rows" on worklog_months
       </div>
 
       <div class="step" id="sbAuth">
-        <b>3단계 — 로그인</b><br>
+        <b>3단계 — 로그인</b> <span style="color:var(--amber);font-weight:800">← 지금 하실 것</span><br>
         계정이 없으면 그대로 입력하시면 <b>자동으로 가입</b>됩니다. 기기마다 한 번씩만 하면 됩니다.
         <div style="margin-top:11px;display:flex;flex-direction:column;gap:10px">
           <div class="fld"><label>이메일</label>
@@ -425,10 +426,7 @@ function save(m){
     const t = new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
     if (typeof SB !== 'undefined' && SB && SB_USER){
       for (const mm of [...dirty]){ await pushMonth(mm); dirty.delete(mm); }
-    } else {
-      dirty.clear();
-      sync('● 이 브라우저에 저장됨 <b>' + t + '</b>');
-    }
+    } else { dirty.clear(); sync('● 이 브라우저에 저장됨 <b>' + t + '</b>'); }
   }, 700);
 }
 function edit(m, d, field, val){
@@ -699,7 +697,19 @@ renderAll(); renderCms();
 const SB_CFG = 'unpa-sb-cfg';
 let SB = null, SB_USER = null, SB_BUSY = false;
 
-const cfgGet = () => { try { return JSON.parse(localStorage.getItem(SB_CFG) || 'null'); } catch { return null; } };
+/* 기본 연결 정보 — anon key 는 공개되어도 되는 값이며,
+ * 실제 방어선은 worklog_months 의 RLS 정책입니다.
+ * (비로그인 상태에서는 읽기·쓰기 모두 차단되는 것을 확인했습니다) */
+const SB_DEFAULT = {
+  url: 'https://uqphctcinhbqjdiinlur.supabase.co',
+  key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxcGhjdGNpbmhicWpkaWlubHVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4MDg1NzEsImV4cCI6MjA5ODM4NDU3MX0.-BbeKCu8LsRgwSx6bfYPOmBRtU0ogydAEoyePdXuXRc'
+};
+
+const cfgGet = () => {
+  try { const c = JSON.parse(localStorage.getItem(SB_CFG) || 'null');
+        if (c && c.url && c.key) return c; } catch {}
+  return SB_DEFAULT;
+};
 const cfgSet = c => localStorage.setItem(SB_CFG, JSON.stringify(c));
 
 function mstat(kind, html){
@@ -773,8 +783,13 @@ async function pushAll(){
 
 /* ── 모달 ── */
 $('#sbBtn').onclick = async () => {
-  const c = cfgGet() || {};
+  const c = cfgGet();
   $('#sbUrl').value = c.url || ''; $('#sbKey').value = c.key || '';
+  const isDef = c.url === SB_DEFAULT.url;
+  $('#sbStep1').open = !isDef;
+  $('#sbStep1Sum').innerHTML = isDef
+    ? '1단계 — 연결 정보 <b style="color:var(--mint-dk)">✓ 설정됨</b> <span style="font-weight:400;color:var(--dim)">(바꾸려면 클릭)</span>'
+    : '1단계 — 연결 정보';
   $('#sbMask').hidden = false;
   await sbInit();
 };
