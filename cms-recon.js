@@ -82,7 +82,7 @@
 
   try {
     performance.getEntriesByType('resource').forEach(function (e) {
-      if (/\/api\/|\.json/.test(e.name)) {
+      if (/\/api\/|\/admin\/|api-v2\.unpa\.me|\.json/.test(e.name)) {
         L.calls.push({ method: '(이미로드됨)', url: e.name.split('?')[0], query: e.name.split('?')[1] || '',
                        status: '-', topKeys: [], itemKeys: [], sample: null });
       }
