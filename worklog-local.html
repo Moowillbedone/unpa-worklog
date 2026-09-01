@@ -333,6 +333,7 @@ create policy "own rows" on worklog_months
           <div class="fld"><label>비밀번호 (6자 이상)</label>
             <input id="sbPw" type="password" placeholder="••••••••" autocomplete="current-password"></div>
           <button class="btn" id="sbIn">로그인 / 가입</button>
+          <button class="btn ghost" id="sbResend" style="display:none">✉️ 인증 메일 다시 보내기</button>
         </div>
       </div>
 
@@ -807,24 +808,66 @@ $('#sbSave').onclick = async () => {
   cfgSet({ url, key }); toast('저장했습니다');
   await sbInit();
 };
+function sbErr(msg){
+  const m = String(msg || '');
+  if (/email not confirmed/i.test(m))
+    return { html:'<b>메일 인증이 필요합니다.</b><br>' +
+      '가입은 되었지만 아직 인증 전이라 로그인이 막혀 있습니다.<br>' +
+      '① 메일함(스팸함 포함)에서 인증 링크를 누르거나<br>' +
+      '② 아래 <b>[인증 메일 다시 보내기]</b> 를 눌러 주세요.<br>' +
+      '<span style="font-weight:400">인증 자체를 끄려면 Supabase → Authentication → Sign In / Providers → Email → <b>Confirm email</b> 을 off 하시면 됩니다.</span>',
+      resend:true };
+  if (/user already registered/i.test(m))
+    return { html:'이미 가입된 계정입니다. 비밀번호를 확인해 주세요.' };
+  if (/invalid login/i.test(m))
+    return { html:'이메일 또는 비밀번호가 맞지 않습니다.' };
+  if (/rate limit|too many/i.test(m))
+    return { html:'요청이 너무 잦습니다. 잠시 후 다시 시도해 주세요.' };
+  if (/password/i.test(m) && /least|short/i.test(m))
+    return { html:'비밀번호는 6자 이상이어야 합니다.' };
+  return { html:'로그인 실패: ' + m };
+}
+
+function showResend(on){ $('#sbResend').style.display = on ? '' : 'none'; }
+
 $('#sbIn').onclick = async () => {
-  if (!SB) { toast('먼저 연결 정보를 저장해 주세요', true); return; }
+  if (!SB) { toast('연결 정보를 확인해 주세요', true); return; }
   const email = $('#sbEmail').value.trim(), pw = $('#sbPw').value;
   if (!email || pw.length < 6) { toast('이메일과 비밀번호(6자 이상)를 입력해 주세요', true); return; }
+  showResend(false);
   mstat('off','로그인 중…');
+
   let r = await SB.auth.signInWithPassword({ email, password: pw });
+
   if (r.error && /invalid login/i.test(r.error.message)){
     const s = await SB.auth.signUp({ email, password: pw });
-    if (s.error){ mstat('bad','가입 실패: ' + s.error.message); return; }
-    if (!s.data.session){ mstat('off','가입은 됐습니다. 메일함에서 인증을 마친 뒤 다시 로그인해 주세요.'); return; }
+    if (s.error){ const e = sbErr(s.error.message); mstat('bad', e.html); showResend(!!e.resend); return; }
+    if (!s.data.session){
+      mstat('bad','<b>가입은 완료됐습니다. 이제 메일 인증만 하면 됩니다.</b><br>' +
+        '메일함(스팸함 포함)에서 인증 링크를 누른 뒤 다시 [로그인 / 가입] 을 눌러 주세요.');
+      showResend(true); return;
+    }
     r = s;
-  } else if (r.error){ mstat('bad','로그인 실패: ' + r.error.message); return; }
+  } else if (r.error){
+    const e = sbErr(r.error.message); mstat('bad', e.html); showResend(!!e.resend); return;
+  }
+
   SB_USER = r.data.user;
   $('#sbAuth').style.display = 'none'; $('#sbOut').style.display = '';
+  showResend(false);
   mstat('on','<b>' + SB_USER.email + '</b> 로 연결됨 — 이 기기의 입력이 자동으로 동기화됩니다.');
   await pullAll();
   if (confirm('이 기기에 있는 기록을 서버로 올릴까요?\n(처음 연결하는 기기라면 [확인]을 눌러주세요)')) await pushAll();
 };
+
+$('#sbResend').onclick = async () => {
+  const email = $('#sbEmail').value.trim();
+  if (!SB || !email) { toast('이메일을 입력해 주세요', true); return; }
+  const { error } = await SB.auth.resend({ type:'signup', email });
+  if (error) mstat('bad', sbErr(error.message).html);
+  else { mstat('off','<b>인증 메일을 다시 보냈습니다.</b><br>메일함(스팸함 포함) 확인 후 링크를 누르고, 다시 [로그인 / 가입] 을 눌러 주세요.'); toast('인증 메일 발송'); }
+};
+
 $('#sbOutBtn').onclick = async () => {
   if (SB) await SB.auth.signOut();
   SB_USER = null;
