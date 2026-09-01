@@ -194,6 +194,13 @@
     엑박·파일크기·본문도배는 자동 판별되지만, <b>사진이 제품과 맞는지</b>는 사람이나 AI가 실제로 봐야 합니다.
     그래서 수집 → 판정 → 적용을 나눠 둡니다.</div>
 
+  <h3 class="sec">04 · 수정요청 템플릿</h3>
+  <p style="font-size:12.8px;color:var(--mid);margin:0 0 12px">
+    수정요청/발색샷 안내 문구입니다. <code style="font-family:var(--mono);font-size:11.5px">templates.json</code>에 저장되며, <b>적용기(자동 처리)가 이 문구를 그대로 가져다 씁니다.</b>
+    <code style="font-family:var(--mono);font-size:11.5px">{상품명}</code>은 실제 상품명으로 자동 치환됩니다.</p>
+  <div id="tplWrap"><div class="note safe">불러오는 중…</div></div>
+  <div class="note warn" style="margin-top:12px">문구를 바꾸려면 건무에게 새 문구를 알려주세요 — <code style="font-family:var(--mono)">templates.json</code>에 반영하면 적용기까지 자동으로 같이 바뀝니다.</div>
+
   <footer>
     이 도구들은 조회와 관측만 합니다. 승인·미노출 같은 실제 처리는 아직 사람이 직접 누릅니다.<br>
     스크립트 원본: <code style="font-family:var(--mono)">cms-collect.js</code> · <code style="font-family:var(--mono)">cms-recon.js</code> · <code style="font-family:var(--mono)">cms-brands.js</code> · <code style="font-family:var(--mono)">cms-products.js</code>
@@ -224,6 +231,31 @@
       } catch (e) { b.textContent = '복사 실패'; }
     });
   });
+
+  /* ── 템플릿 로드 ── */
+  function esc(s){ return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];}); }
+  fetch(BASE + 'templates.json?t=' + Date.now()).then(function(r){ return r.json(); }).then(function(d){
+    var wrap = document.getElementById('tplWrap');
+    var placeholder = /제공 예정|건무 제공/;
+    wrap.innerHTML = (d.templates||[]).map(function(t,i){
+      var pend = placeholder.test(t.body);
+      return '<div class="tool" style="padding:16px 18px">'
+        + '<h2 style="font-size:14px">' + esc(t.title)
+        + (pend ? ' <span class="tag warn">문구 대기</span>' : ' <span class="tag safe">사용중</span>') + '</h2>'
+        + '<p style="font-size:12.3px;margin-bottom:8px">' + esc(t.when||'') + '</p>'
+        + '<div class="note ' + (pend?'warn':'safe') + '" style="margin-top:0;font-size:12.8px;white-space:pre-wrap">' + esc(t.body) + '</div>'
+        + (pend ? '' : '<div class="copyrow"><button class="btn" data-tpl="' + i + '">문구 복사</button></div>')
+        + '</div>';
+    }).join('') + '<div class="note safe" style="font-size:12px">문의처: <b>' + esc(d.contact||'') + '</b></div>';
+    wrap.querySelectorAll('[data-tpl]').forEach(function(b){
+      b.addEventListener('click', async function(){
+        try { await navigator.clipboard.writeText(d.templates[b.dataset.tpl].body);
+          b.textContent='✓ 복사됨'; b.classList.add('done');
+          setTimeout(function(){ b.textContent='문구 복사'; b.classList.remove('done'); },2500);
+        } catch(e){ b.textContent='복사 실패'; }
+      });
+    });
+  }).catch(function(){ document.getElementById('tplWrap').innerHTML='<div class="note danger">templates.json 로드 실패</div>'; });
 </script>
 </body>
 </html>
