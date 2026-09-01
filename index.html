@@ -811,6 +811,7 @@ function sbErr(msg){
       '가입은 되었지만 아직 인증 전이라 로그인이 막혀 있습니다.<br>' +
       '① 메일함(스팸함 포함)에서 인증 링크를 누르거나<br>' +
       '② 아래 <b>[인증 메일 다시 보내기]</b> 를 눌러 주세요.<br>' +
+      '<span style="font-weight:400">링크를 눌렀는데 다른 사이트로 넘어갔다면, 인증은 이미 끝난 것입니다. 그대로 다시 로그인해 보세요.</span><br>' +
       '<span style="font-weight:400">인증 자체를 끄려면 Supabase → Authentication → Sign In / Providers → Email → <b>Confirm email</b> 을 off 하시면 됩니다.</span>',
       resend:true };
   if (/user already registered/i.test(m))
@@ -836,7 +837,8 @@ $('#sbIn').onclick = async () => {
   let r = await SB.auth.signInWithPassword({ email, password: pw });
 
   if (r.error && /invalid login/i.test(r.error.message)){
-    const s = await SB.auth.signUp({ email, password: pw });
+    const back = location.origin + location.pathname;
+    const s = await SB.auth.signUp({ email, password: pw, options:{ emailRedirectTo: back } });
     if (s.error){ const e = sbErr(s.error.message); mstat('bad', e.html); showResend(!!e.resend); return; }
     if (!s.data.session){
       mstat('bad','<b>가입은 완료됐습니다. 이제 메일 인증만 하면 됩니다.</b><br>' +
@@ -859,7 +861,8 @@ $('#sbIn').onclick = async () => {
 $('#sbResend').onclick = async () => {
   const email = $('#sbEmail').value.trim();
   if (!SB || !email) { toast('이메일을 입력해 주세요', true); return; }
-  const { error } = await SB.auth.resend({ type:'signup', email });
+  const back = location.origin + location.pathname;
+  const { error } = await SB.auth.resend({ type:'signup', email, options:{ emailRedirectTo: back } });
   if (error) mstat('bad', sbErr(error.message).html);
   else { mstat('off','<b>인증 메일을 다시 보냈습니다.</b><br>메일함(스팸함 포함) 확인 후 링크를 누르고, 다시 [로그인 / 가입] 을 눌러 주세요.'); toast('인증 메일 발송'); }
 };
@@ -878,8 +881,19 @@ $('#sbSql').onclick = async () => {
   catch { toast('복사 실패 — 직접 선택해 주세요', true); }
 };
 
+/* 인증 링크로 돌아온 경우 감지 */
+const backFromVerify = /access_token=|type=signup|error_code=/.test(location.hash || '');
+
 /* 앱 시작 시 자동 연결 시도 */
-setTimeout(() => { if (cfgGet()) sbInit(); }, 400);
+setTimeout(async () => {
+  if (!cfgGet()) return;
+  const ok = await sbInit();
+  if (backFromVerify){
+    history.replaceState(null, '', location.origin + location.pathname);
+    $('#sbMask').hidden = false;
+    if (!ok) mstat('off','<b>메일 인증이 처리되었습니다.</b><br>아래에서 이메일·비밀번호로 로그인해 주세요.');
+  }
+}, 400);
 
 </script>
 </body>
