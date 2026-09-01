@@ -169,7 +169,7 @@
         <tr><td><b>검수 완료</b></td><td><code>POST /admin/reviews/{id}/approve</code></td><td><code>{}</code></td><td class="ok">확보</td></tr>
         <tr><td>미노출 처리</td><td><code>PUT /admin/reviews/{id}</code></td><td><code>{"visible":false}</code></td><td class="ok">확보</td></tr>
         <tr><td>노출 처리</td><td><code>PUT /admin/reviews/{id}</code></td><td><code>{"visible":true}</code></td><td class="ok">확보</td></tr>
-        <tr><td>수정 요청</td><td>—</td><td>—</td><td class="no">미확보</td></tr>
+        <tr><td><b>수정 요청</b></td><td><code>POST /admin/reviews/{id}/revise</code></td><td><code>{"content":["문구"]}</code></td><td class="ok">확보</td></tr>
       </tbody>
     </table>
   </div>
@@ -201,9 +201,27 @@
   <div id="tplWrap"><div class="note safe">불러오는 중…</div></div>
   <div class="note warn" style="margin-top:12px">문구를 바꾸려면 건무에게 새 문구를 알려주세요 — <code style="font-family:var(--mono)">templates.json</code>에 반영하면 적용기까지 자동으로 같이 바뀝니다.</div>
 
+  <h3 class="sec">05 · 실제 처리 (적용기)</h3>
+
+  <div class="tool" style="border-color:#e0b483;border-width:2px">
+    <h2>⚙️ 리뷰 검수 적용기 <span class="tag danger">상태 변경</span></h2>
+    <p>지금까지의 판정을 <b>실제로 실행</b>합니다 — 수정요청 전송 / 미노출 / 검수완료. 다른 도구와 달리 <b>이건 CMS를 바꿉니다.</b></p>
+    <div class="when"><b>대상은 스크립트 안에 명시된 목록만</b> 처리합니다(화면을 임의로 훑지 않음). 현재 대상: <b>2026-08-24 제품있음 2건</b>(466814 아이보들 로션 · 466780 너리싱 베리어 크림). 466786은 건무가 수동 완료라 제외.</div>
+    <div class="drag" style="background:#fbf1e2;border-color:#e0b483">
+      <p class="h" style="color:#8a5a12">↓ 즐겨찾기 바로 드래그 ↓</p>
+      <a class="bm" id="bm5" href="#" style="background:#c9821f;box-shadow:0 4px 14px rgba(201,130,31,.3)">⚙️ 적용기</a>
+      <p class="a">클릭 말고 <b>끌어다 놓기</b></p>
+      <div class="copyrow" style="justify-content:center">
+        <button class="btn" data-copy="5">주소 복사 (드래그 안 될 때)</button>
+      </div>
+    </div>
+    <div class="note danger"><b>안전장치</b> — ①켜면 <b>미리보기만</b>(전송 0). ②<b>[1건만]</b> 또는 <b>[전체]</b> 버튼 + <b>확인창</b> 2중 승인해야 전송. ③건별 로그·에러 시 즉시 중단. ④개수 상한 20건. ⑤끝나면 처리 로그 JSON 자동 내려받음.
+      문구는 <code style="font-family:var(--mono);font-size:11.5px">templates.json</code>에서 가져와 <code style="font-family:var(--mono);font-size:11.5px">[{제품명}]</code>을 실제 제품명으로 치환해 보냅니다.</div>
+  </div>
+
   <footer>
-    이 도구들은 조회와 관측만 합니다. 승인·미노출 같은 실제 처리는 아직 사람이 직접 누릅니다.<br>
-    스크립트 원본: <code style="font-family:var(--mono)">cms-collect.js</code> · <code style="font-family:var(--mono)">cms-recon.js</code> · <code style="font-family:var(--mono)">cms-brands.js</code> · <code style="font-family:var(--mono)">cms-products.js</code>
+    01~04는 조회·관측·문구 저장이고, <b>05 적용기만 실제 상태를 바꿉니다</b>(미리보기·2중 승인 필수).<br>
+    스크립트 원본: <code style="font-family:var(--mono)">cms-collect.js</code> · <code style="font-family:var(--mono)">cms-recon.js</code> · <code style="font-family:var(--mono)">cms-brands.js</code> · <code style="font-family:var(--mono)">cms-products.js</code> · <code style="font-family:var(--mono)">cms-apply.js</code>
   </footer>
 </div>
 
@@ -213,8 +231,9 @@
     return "javascript:(function(){var s=document.createElement('script');s.src='"
       + BASE + file + "?t='+Date.now();document.body.appendChild(s);})();";
   }
-  var URLS = { 1: loader('cms-collect.js'), 2: loader('cms-recon.js'), 3: loader('cms-brands.js'), 4: loader('cms-products.js') };
+  var URLS = { 1: loader('cms-collect.js'), 2: loader('cms-recon.js'), 3: loader('cms-brands.js'), 4: loader('cms-products.js'), 5: loader('cms-apply.js') };
   document.getElementById('bm1').href = URLS[1];
+  document.getElementById('bm5').href = URLS[5];
   document.getElementById('bm2').href = URLS[2];
   document.getElementById('bm3').href = URLS[3];
   document.getElementById('bm4').href = URLS[4];
