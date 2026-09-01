@@ -12,11 +12,11 @@
   if (!location.host.includes('cms.unpa.me')) { alert('cms.unpa.me 에서 실행해주세요.'); return; }
   if (window.__RECON) { var b = document.getElementById('rcDl'); if (b) b.click(); return; }
 
-  var L = window.__RECON = { url: location.href, at: new Date().toISOString(), calls: [], dom: {} };
+  var L = window.__RECON = { url: location.href, at: new Date().toISOString(), calls: [], mutations: [], dom: {} };
 
   /* ── 네트워크 관찰 ── */
   function rec(method, url, status, body, reqBody) {
-    var top = [], keys = [], sample = null;
+    var top = [], keys = [], sample = null, items = null;
     try {
       var j = typeof body === 'string' ? JSON.parse(body) : body;
       if (j && typeof j === 'object') {
@@ -26,8 +26,11 @@
           : (j.content && j.content.length ? j.content
           : (j.list && j.list.length ? j.list
           : (j.items && j.items.length ? j.items : null))));
-        if (arr && arr.length) { keys = Object.keys(arr[0] || {}); sample = arr[0]; }
-        else sample = j;
+        if (arr && arr.length) {
+          keys = Object.keys(arr[0] || {});
+          sample = arr[0];
+          items = arr.slice(0, 200);            /* 전체 목록 보관 */
+        } else sample = j;
       }
     } catch (e) {}
     var trim = function (o) {
@@ -40,8 +43,16 @@
     L.calls.push({
       method: method, url: String(url).split('?')[0], query: String(url).split('?')[1] || '',
       status: status, topKeys: top, itemKeys: keys, sample: sample ? trim(sample) : null,
+      itemCount: items ? items.length : 0,
+      items: items ? trim(items) : null,
       reqBody: reqBody ? String(reqBody).slice(0, 500) : null
     });
+    if (method && !/^GET$/i.test(method) && method !== '(이미로드됨)') {
+      L.mutations.push({ method: method, url: String(url).split('?')[0],
+                         query: String(url).split('?')[1] || '', status: status,
+                         reqBody: reqBody ? String(reqBody).slice(0, 800) : null,
+                         response: typeof body === 'string' ? body.slice(0, 800) : null });
+    }
     draw();
   }
 
@@ -144,7 +155,7 @@
     box.innerHTML =
       '<b style="color:#3ddc97">🔍 CMS 정찰 중</b>'
       + '<div style="margin-top:7px;color:#9fb4ab">API 기록 <b style="color:#f5c451">' + L.calls.length + '</b>건'
-      + ' (구조 파악 ' + api + ')<br>페이지: '
+      + ' (구조 파악 ' + api + ')<br>상태변경 요청 <b style="color:#ff8f6b">' + L.mutations.length + '</b>건<br>페이지: '
       + (L.dom.isDetail ? '상세 #' + L.dom.reviewId : L.dom.isList ? '목록' : '기타')
       + '<br><span style="font-size:11.5px">목록 → 상세를 2~3개 열어보면 더 정확해집니다.</span></div>'
       + '<button id="rcDl" style="margin-top:10px;background:#3ddc97;color:#04130c;border:0;border-radius:8px;'
