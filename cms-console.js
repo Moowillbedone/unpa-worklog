@@ -27,6 +27,8 @@
 
   var API = 'https://api-v2.unpa.me';
   var TPL_URL = 'https://moowillbedone.github.io/unpa-worklog/templates.json';
+  var WORKLOG_URL = 'https://moowillbedone.github.io/unpa-worklog/';
+  var SCAN_DATE = null;
   var MAX_EXEC = 100;
   var AUTH = window.__COLLECT_AUTH || window.__BRAND_AUTH || window.__PROD_AUTH || window.__APPLY_AUTH || window.__CONSOLE_AUTH || null;
 
@@ -209,6 +211,7 @@
   function listUrl(sd,page,size){ return API+'/admin/reviews?pageSize='+size+'&startDate='+sd+'&endDate='+sd+'&beforeApproval=true&page='+page+'&field=CREATED_AT&direction=desc'; }
 
   async function scan(sd){
+    SCAN_DATE=sd;
     box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">인증 확인 중…</div>');
     var chk=await get(listUrl(sd,1,1));
     if(chk.status!==200||!chk.json){ box.innerHTML=head('<div style="margin-top:9px;color:#ff8f6b">인증/조회 실패 (HTTP '+chk.status+')<br>관리 화면에서 목록을 한 번 불러온 뒤 다시 실행해주세요.</div>'); return; }
@@ -314,6 +317,20 @@
     var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='cms-console-log-'+Date.now()+'.json'; document.body.appendChild(a); a.click(); a.remove();
     var okN=logs.filter(function(x){return x.ok;}).length;
     log('<b style="color:'+(okN===logs.length?'#3ddc97':'#ff8f6b')+'">완료 '+okN+'/'+logs.length+' · 로그 저장</b>');
+
+    /* 업무일지 반영 — 오리진이 달라 직접 못 쓰므로 링크로 넘긴다 */
+    var done=logs.filter(function(x){return x.ok;});
+    var nRev=done.filter(function(x){return x.action==='revise';}).length;
+    var nHide=done.filter(function(x){return x.action==='hide';}).length;
+    var payload={ d:SCAN_DATE, r:done.length, p:0,
+                  note:'콘솔 처리 · 수정요청 '+nRev+' · 미노출 '+nHide };
+    var wl=WORKLOG_URL+'#sync='+encodeURIComponent(JSON.stringify(payload));
+    var el=document.getElementById('csLog');
+    if(el){ var b=document.createElement('button');
+      b.textContent='📒 업무일지에 반영 ('+done.length+'건)';
+      b.style.cssText='margin-top:10px;width:100%;background:#2c4a3c;color:#cfe;border:1px solid #3ddc97;border-radius:8px;padding:9px;font:inherit;font-weight:800;cursor:pointer';
+      b.onclick=function(){ window.open(wl,'_blank'); };
+      el.parentNode.insertBefore(b, el.nextSibling); }
     window.__CONSOLE_RUNNING=false;
   }
 

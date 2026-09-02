@@ -771,6 +771,59 @@ $('#file').onchange = e => {
   r.readAsText(f); e.target.value = '';
 };
 
+/* ── CMS 콘솔 → 업무일지 반영 (#sync=...) ──
+   검수 콘솔이 처리를 끝내면 이 페이지를 #sync= 로 연다.
+   자동으로 쓰지 않고, 확인 카드를 띄워 사람이 승인해야 반영된다. */
+function applyHashSync(){
+  const hm = (location.hash || '').match(/[#&]sync=([^&]+)/);
+  if (!hm) return;
+  let pl; try { pl = JSON.parse(decodeURIComponent(hm[1])); } catch(e){ return; }
+  if (!pl || !/^\d{4}-\d{2}-\d{2}$/.test(pl.d || '')) return;
+  history.replaceState(null, '', location.pathname + location.search);
+
+  const mm = pl.d.slice(0,7), dd = pl.d.slice(8,10);
+  const now = month(mm).days[dd] || { r:0, p:0 };
+  const inR = Math.max(0, parseInt(pl.r,10) || 0), inP = Math.max(0, parseInt(pl.p,10) || 0);
+  const safe = s => String(s == null ? '' : s).replace(/[<>&]/g, '');
+
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(16,26,22,.45);display:flex;align-items:center;justify-content:center;padding:20px';
+  wrap.innerHTML =
+    '<div style="background:#fff;border:1px solid #dde3e1;border-radius:16px;padding:24px 26px;max-width:420px;width:100%;box-shadow:0 20px 60px rgba(20,40,32,.25);font-size:13.5px;line-height:1.65">'
+    + '<div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;letter-spacing:.12em;color:#0d9668;font-weight:700">CMS 검수 결과 반영</div>'
+    + '<div style="font-size:19px;font-weight:800;margin-top:6px">' + safe(pl.d) + '</div>'
+    + (pl.note ? '<div style="color:#5a6b65;margin-top:5px;font-size:12.5px">' + safe(pl.note) + '</div>' : '')
+    + '<div style="background:#f1f4f3;border:1px solid #dde3e1;border-radius:10px;padding:13px 15px;margin-top:14px">'
+    +   '<div style="display:flex;align-items:center;gap:9px"><span style="width:76px;color:#5a6b65">리뷰 검수</span>'
+    +     '<input id="hsR" type="number" min="0" value="' + inR + '" style="width:84px;padding:6px 9px;border:1.5px solid #c6d0cc;border-radius:7px;font:inherit;text-align:right">'
+    +     '<span style="color:#8b9a94;font-size:12px">건 · 현재 ' + (now.r||0) + '</span></div>'
+    +   '<div style="display:flex;align-items:center;gap:9px;margin-top:9px"><span style="width:76px;color:#5a6b65">제품 등록</span>'
+    +     '<input id="hsP" type="number" min="0" value="' + inP + '" style="width:84px;padding:6px 9px;border:1.5px solid #c6d0cc;border-radius:7px;font:inherit;text-align:right">'
+    +     '<span style="color:#8b9a94;font-size:12px">건 · 현재 ' + (now.p||0) + '</span></div>'
+    + '</div>'
+    + '<div style="color:#8b9a94;font-size:12px;margin-top:10px">콘솔이 처리한 건수입니다. 수동으로 한 승인·상품등록이 있으면 숫자를 고쳐서 반영하세요.</div>'
+    + '<div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">'
+    +   '<button id="hsCancel" style="flex:1;padding:10px;border:1.5px solid #c6d0cc;background:#fff;border-radius:9px;font:inherit;font-weight:700;color:#5a6b65;cursor:pointer">취소</button>'
+    +   '<button id="hsSet" style="flex:1;padding:10px;border:1.5px solid #c6d0cc;background:#fff;border-radius:9px;font:inherit;font-weight:700;color:#5a6b65;cursor:pointer">덮어쓰기</button>'
+    +   '<button id="hsAdd" style="flex:1.4;padding:10px;border:0;background:#0d9668;color:#fff;border-radius:9px;font:inherit;font-weight:800;cursor:pointer">기존에 더하기</button>'
+    + '</div></div>';
+  document.body.appendChild(wrap);
+
+  const close = () => wrap.remove();
+  const apply = (mode) => {
+    const r = Math.max(0, parseInt(document.getElementById('hsR').value,10) || 0);
+    const p = Math.max(0, parseInt(document.getElementById('hsP').value,10) || 0);
+    const day = month(mm).days[dd];
+    if (mode === 'add'){ day.r = (day.r||0) + r; day.p = (day.p||0) + p; }
+    else { day.r = r; day.p = p; }
+    save(mm); cur = mm; renderAll(); close();
+    toast(pl.d + ' 반영됨 · 리뷰 ' + day.r + ' · 제품 ' + day.p);
+  };
+  document.getElementById('hsCancel').onclick = close;
+  document.getElementById('hsSet').onclick = () => apply('set');
+  document.getElementById('hsAdd').onclick = () => apply('add');
+}
+
 /* ── 초기화 ── */
 cur = TODAY_M;
 $('#cs').value = dKey(today); $('#ce').value = dKey(today);
@@ -808,6 +861,7 @@ renderAll(); renderCms();
   if (!loaded) sync('● 기록 없음 — 우측 상단 [가져오기]', true);
   if (!ST[cur]) month(cur);
   renderAll();
+  applyHashSync();     /* 콘솔에서 넘어온 건수가 있으면 확인 카드 */
 })();
 
 </script>
