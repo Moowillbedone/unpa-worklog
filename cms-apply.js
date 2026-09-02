@@ -54,12 +54,15 @@
 
   function H() { var h = { 'Accept': 'application/json', 'Content-Type': 'application/json' }; if (AUTH) h['Authorization'] = AUTH; return h; }
 
-  /* GET (읽기) — 대상 리뷰 현재 상태 확인용 */
+  /* GET (읽기) — 접근 가능 여부 확인용.
+     쿠키만으로 통과되는 환경이 있으므로 Authorization 은 있을 때만 붙인다. */
   function getJson(url) {
-    return oF.call(window, url, { headers: { 'Accept': 'application/json', 'Authorization': AUTH || '' }, credentials: 'include' })
+    var h = { 'Accept': 'application/json' }; if (AUTH) h['Authorization'] = AUTH;
+    return oF.call(window, url, { headers: h, credentials: 'include' })
       .then(function (r) { return r.text().then(function (t) { var j = null; try { j = JSON.parse(t); } catch (e) {} return { status: r.status, json: j }; }); })
       .catch(function (e) { return { status: 0, json: null }; });
   }
+  var ACCESS = null;   /* null=확인중, true=조회됨, false=실패 */
   /* 실제 상태변경 요청 */
   function send(method, url, body) {
     return oF.call(window, url, { method: method, headers: H(), credentials: 'include', body: body ? JSON.stringify(body) : undefined })
@@ -105,7 +108,9 @@
     box.innerHTML =
       '<b style="color:#f0b429">⚙️ 리뷰 검수 적용기</b>'
       + '<div style="margin-top:6px;color:#d99b2b;font-weight:700;font-size:11.5px">⚠️ 실제 CMS를 변경합니다 · 지금은 미리보기(전송 0)</div>'
-      + '<div style="margin-top:4px;color:#c7bda6;font-size:11.5px">대상 <b style="color:#fff">' + plan.length + '</b>건 · 인증 ' + (AUTH ? '<span style="color:#3ddc97">확보</span>' : '<span style="color:#ff8f6b">없음</span>') + '</div>'
+      + '<div style="margin-top:4px;color:#c7bda6;font-size:11.5px">대상 <b style="color:#fff">' + plan.length + '</b>건 · 접근 '
+      + (ACCESS === true ? '<span style="color:#3ddc97">확인됨' + (AUTH ? ' (헤더)' : ' (쿠키)') + '</span>'
+         : ACCESS === false ? '<span style="color:#ff8f6b">실패</span>' : '<span style="color:#c7bda6">확인 중…</span>') + '</div>'
       + rows
       + '<div style="display:flex;gap:7px;margin-top:12px;flex-wrap:wrap">'
       + '<button id="ap1" style="flex:1;background:#2b2410;color:#f5c451;border:1px solid #d99b2b;border-radius:8px;padding:9px;font-weight:800;cursor:pointer">1건만 전송</button>'
@@ -121,7 +126,7 @@
 
   async function runGuarded(n) {
     if (window.__APPLY_RUNNING) return;
-    if (!AUTH) { alert('인증 정보가 없습니다. 관리 화면에서 목록을 한 번 불러온 뒤 다시 실행해주세요.'); return; }
+    if (ACCESS !== true) { alert('CMS 조회에 실패했습니다(로그인 상태를 확인해주세요). 관리 화면에서 목록을 한 번 불러온 뒤 다시 실행해주세요.'); return; }
     if (plan.length > MAX) { alert('대상이 상한(' + MAX + ')을 초과했습니다. 실행을 거부합니다.'); return; }
     var slice = plan.slice(0, n);
     var summary = slice.map(function (p) { return '#' + p.t.reviewId + ' ' + p.req.human; }).join('\n');
@@ -164,6 +169,13 @@
     var bad = plan.filter(function (p) { return p.t.action === 'revise' && (!p.req.body || !p.req.body.content[0]); });
     if (bad.length) { box.innerHTML = '<b style="color:#ff8f6b">템플릿 매칭 실패</b><div style="color:#c7bda6;margin-top:6px">템플릿 키가 templates.json과 맞지 않습니다.</div>'; return; }
     renderPreview();
+    /* 접근 가능 여부 확인 — 쿠키만으로 되는 경우가 많다 */
+    if (plan.length) {
+      getJson(API + '/admin/reviews/' + plan[0].t.reviewId).then(function (r) {
+        ACCESS = (r.status === 200 && !!r.json);
+        renderPreview();
+      });
+    }
   }).catch(function (e) {
     box.innerHTML = '<b style="color:#ff8f6b">템플릿 로드 실패</b><div style="color:#c7bda6;margin-top:6px">' + esc(String(e && e.message || e)) + '</div>';
   });
