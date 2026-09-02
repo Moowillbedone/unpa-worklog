@@ -266,6 +266,7 @@
     var nExec = (groups.revise.length+groups.hide.length);
     html+='<div style="display:flex;gap:7px;margin-top:14px;flex-wrap:wrap">'
       +'<button id="csRescan" style="flex:1;background:#132019;color:#9fb4ab;border:1px solid #2c4a3c;border-radius:8px;padding:9px;font-weight:700;cursor:pointer">다시</button>'
+      +'<button id="csDl" style="flex:1;background:#132019;color:#9fb4ab;border:1px solid #2c4a3c;border-radius:8px;padding:9px;font-weight:700;cursor:pointer">판정 JSON</button>'
       +'<button id="csRun" style="flex:2;background:'+(nExec?'#3ddc97':'#22392e')+';color:'+(nExec?'#04130c':'#6b7f77')+';border:0;border-radius:8px;padding:9px;font-weight:800;cursor:'+(nExec?'pointer':'default')+'">체크한 것 실행 ('+nExec+')</button>'
       +'</div>'
       +'<div id="csLog" style="margin-top:10px;font-size:11.5px;color:#9fb4ab"></div>'
@@ -273,6 +274,14 @@
 
     box.innerHTML=head(html);
     document.getElementById('csRescan').onclick=function(){ renderStart(sd); };
+    document.getElementById('csDl').onclick=function(){
+      var out={ at:new Date().toISOString(), date:sd, total:results.length,
+                summary:{revise:groups.revise.length,hide:groups.hide.length,register:groups.register.length,hold:groups.hold.length},
+                items:results };
+      var blob=new Blob([JSON.stringify(out,null,1)],{type:'application/json'});
+      var a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+      a.download='cms-verdict-'+sd+'.json'; document.body.appendChild(a); a.click(); a.remove();
+    };
     if(nExec) document.getElementById('csRun').onclick=function(){ runExec(); };
   }
 
