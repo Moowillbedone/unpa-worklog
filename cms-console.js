@@ -1,26 +1,29 @@
 /* ============================================================
  * 리뷰 검수 콘솔 — cms-console.js   (수집→자동판정→실행 통합)
  *
- *  하나의 도구로: 그날 리뷰를 모으고, 각 건을 자동 판정하고,
- *  대기열을 보여준 뒤, 골라서 실제 처리(승인/수정요청/미노출)까지.
+ *  검수 대상 규칙
+ *   1) 브랜드 안에 CMS 에 존재하는 상품이 매칭돼 있어야 한다
+ *   2) 상세 좌상단 제품 이미지가 엑박이 아니어야 한다
+ *   3) 무의미한 본문("ㅁㄴㅇㄹ", "가가가거거")만 있으면 검수 대상이 아니다 → 미노출
+ *   4) 발색 있는 제품인데 발색샷이 없으면 → 발색샷 요청
  *
- *  자동으로 판정하는 것
- *   - 엑박 판별(productPrice 없음)
- *   - 브랜드 유무(/admin/brands?q=) · 제품 유무(/admin/products)
- *   - 본문 도배 · 비화장품 의심(키워드)
- *   - 사진 포렌식: 해상도·비율로 화면캡처/도용/직접촬영 구분
- *     (파일 크기는 보지 않는다 — naturalWidth/Height 만 읽는다)
+ *  판정 결과 7종
+ *   approve          검수완료          그리드에서 사진 보고 일괄 실행
+ *   revise_swatch    발색샷 요청        그리드에서 💄 눌러 선택 후 실행
+ *   revise_product   제품 재선택 요청    상품명 정확일치 시 일괄 실행
+ *   hide             미노출            무의미 본문 / 사진 전량 캡처·저해상
+ *   register_product 상품등록 필요      브랜드○ 제품✗ — 사람이 직접 (실행 없음)
+ *   register_brand   브랜드+상품 등록   브랜드✗       — 사람이 직접 (실행 없음)
+ *   hold             확인 필요         비화장품·애매  — 사람이 직접 (실행 없음)
  *
- *  실행 (전부 사람이 승인해야 나간다)
- *   - 미노출(hide)    : 사진이 "전량" 캡처·저해상일 때만 후보. 상한 30
- *   - 수정요청(revise) : 상품명이 정확히 일치할 때만 후보. 상한 60
- *   - 승인(approve)   : 썸네일 그리드에서 눈으로 훑어 일괄. 상한 300
- *  사람이 CMS에서 직접
- *   - 상품등록(register) : 데이터 입력이 필요해 자동화 대상이 아님
+ *  기계가 못 하는 것
+ *   - 사진이 그 제품이 맞는지, 발색샷이 실제로 있는지는 픽셀을 봐야 안다.
+ *     그래서 그리드에 깔아 사람이 눈으로 고른다.
+ *   - 사진 판별은 해상도만 본다. 파일 크기는 보지 않는다.
  *
- *  안전장치: 로드 시 아무것도 안 보냄. 대기열/그리드에서 골라 [실행]+확인창.
+ *  안전장치: 로드 시 아무것도 안 보냄. 그리드/대기열에서 골라 [실행]+확인창.
  *            건별 로그 · 에러 시 즉시 중단 · 액션별 상한 · 처리 로그 저장.
- *            이미 처리된 건은 체크박스가 잠겨 재전송되지 않는다.
+ *            이미 처리된 건은 다시 대상이 되지 않는다.
  *
  *  업무일지 연동
  *   - [검수기록 JSON] → 업무일지 [검수 기록] 탭에서 불러오기
@@ -126,6 +129,83 @@
   }
   function nonCosmetic(name){ var n=String(name||''); for(var i=0;i<NONCOSMETIC.length;i++){ if(n.indexOf(NONCOSMETIC[i])>=0) return NONCOSMETIC[i]; } return null; }
 
+  /* ── 무의미한 언어 판별 ────────────────────────────────
+     "ㅁㄴㅇㅁ냗ㅂㅈㄷ", "가가가가거거거" 처럼 내용이 없는 리뷰를 잡는다.
+     isSpam() 은 "같은 문장 반복"만 봐서 이런 건 통과시켰다.
+     "ㅋㅋㅋ 잘 쓸게요" 같은 정상 리뷰는 걸리지 않도록 실질 음절 수를 함께 본다. */
+  function gibberish(text){
+    var t=String(text||'').trim();
+    if(!t) return '본문 없음';
+    var syll=t.match(/[가-힣]/g)||[];            /* 완성형 한글 */
+    var jamo=t.match(/[ㄱ-ㅎㅏ-ㅣ]/g)||[];        /* 자모만 (ㅁㄴㅇㄹ) */
+    var alnum=t.match(/[a-zA-Z0-9]/g)||[];
+    var body=syll.length+alnum.length;           /* 실질 내용 분량 */
+
+    if(jamo.length>=4 && jamo.length>body) return '자모 나열 («'+jamo.slice(0,8).join('')+'»)';
+    var rep=t.match(/(.)\1{2,}/g);
+    if(rep){
+      /* 반복 덩어리를 걷어내고도 실질 내용이 남으면 정상 리뷰다 ("ㅋㅋㅋ 진짜 좋아요") */
+      var left=(t.replace(/(.)\1{2,}/g,'').match(/[가-힣a-zA-Z0-9]/g)||[]).length;
+      if(left<6) return '같은 글자 반복 («'+rep[0].slice(0,6)+'»)';
+    }
+    if(syll.length>=8){
+      var u={}; syll.forEach(function(c){ u[c]=1; });
+      if(Object.keys(u).length/syll.length<=0.3) return '동일 음절 반복';
+    }
+    if(syll.length===0 && alnum.length<=2 && t.length<=6) return '내용 없음 («'+t.slice(0,8)+'»)';
+    return null;
+  }
+
+  /* ── 발색 제품 판별 ────────────────────────────────────
+     색조 제품인데 발색샷이 없으면 "발색샷 요청" 대상이다.
+     사진에 발색샷이 있는지는 기계가 알 수 없으므로,
+     여기서는 "발색이 있는 제품인가"까지만 가리고 판단은 그리드에서 사람이 한다. */
+  var SWATCH_KW = ['립스틱','틴트','립글로스','글로스','립라이너','립펜슬',
+                   '섀도우','쉐도우','아이섀도','아이쉐도','팔레트',
+                   '블러셔','블러쉬','치크','하이라이터','쉐딩','셰딩','컨투어',
+                   '쿠션','파운데이션','파데','컨실러','비비크림','씨씨크림','톤업',
+                   '아이라이너','마스카라','네일','매니큐어','틴트밤','립틴트','립스테인'];
+  /* 립밤·오일처럼 무색이 많은 품목은 색상명이 함께 있을 때만 색조로 본다 */
+  var COLOR_KW  = ['핑크','레드','코랄','베이지','브라운','오렌지','퍼플','누드','로즈','피치',
+                   '버건디','플럼','살구','자몽','체리','와인','모브','글리터','펄','실버','골드',
+                   '레드빛','토프','카키','마젠타','라벤더','apricot','pink','red','coral'];
+  /* 색조 키워드가 걸려도 발색과 무관한 품목은 뺀다 (네일 "크림"·"에센스" 등) */
+  var SWATCH_EXCLUDE = /네일\s*(크림|에센스|오일|영양|강화|리무버|케어|트리트먼트)|핸드\s*앤\s*네일|핸드앤네일/;
+  function isSwatch(productName){
+    var n=String(productName||'');
+    if(SWATCH_EXCLUDE.test(n)) return null;
+    for(var i=0;i<SWATCH_KW.length;i++) if(n.indexOf(SWATCH_KW[i])>=0) return SWATCH_KW[i];
+    /* 립밤 등 애매한 품목 + 색상명 조합 */
+    if(/립밤|립케어|립세럼|립에센스/.test(n)){
+      for(var j=0;j<COLOR_KW.length;j++) if(n.toLowerCase().indexOf(COLOR_KW[j].toLowerCase())>=0) return '립밤+'+COLOR_KW[j];
+    }
+    return null;
+  }
+
+  /* ── 엑박(제품 매칭 실패) 판별 ─────────────────────────
+     좌상단 제품 이미지가 안 뜨는 상태. 응답 필드명이 환경마다 다를 수 있어
+     productImageUrl / productPrice / productId 를 모두 보되,
+     응답에 없는 필드는 검사에서 제외해 오탐을 막는다. */
+  function exbakOf(detail){
+    var why=[];
+    var pid = detail.productId;
+    if(!pid) why.push('productId 없음');
+
+    var priceKey = ('productPrice' in detail) ? 'productPrice' : null;
+    if(priceKey){
+      var pr=detail[priceKey];
+      if(pr===null||pr===''||pr===0||pr===undefined) why.push('productPrice 비어 있음');
+    }
+
+    var imgKey = ('productImageUrl' in detail) ? 'productImageUrl'
+               : ('productImage' in detail)    ? 'productImage' : null;
+    if(imgKey){
+      var iu=String(detail[imgKey]||'');
+      if(!iu || /\/?null\/?$/.test(iu)) why.push('제품 이미지 없음');
+    }
+    return why.length ? why : null;
+  }
+
   /* ── 브랜드/제품 검색 ── */
   var brandCache={};
   async function findBrand(name){
@@ -178,56 +258,88 @@
   }
 
   /* ── 판정 ── */
+  /* 응답 스키마를 한 번 기록해 둔다 — 필드명이 바뀌면 판정이 조용히 틀어지므로 */
+  var SCHEMA=null;
+
   async function classify(item, detail){
-    var pid=detail.productId, price=detail.productPrice, content=detail.contentText||detail.content||'';
+    if(!SCHEMA) SCHEMA={ detailKeys:Object.keys(detail||{}).sort(),
+                         sampleId:item.id,
+                         hasImageField:('productImageUrl' in (detail||{}))||('productImage' in (detail||{})),
+                         hasPriceField:('productPrice' in (detail||{})) };
+
+    var content = detail.contentText||detail.content||'';
     var atts=(detail.attachments||[]).filter(Boolean);
-    var exbak = !!pid && (price===null||price===''||price===0||price===undefined);
+    var exWhy = exbakOf(detail);
+
     var out={ id:item.id, brand:item.brandName, product:item.productName, user:item.userNickname,
-              visible:item.visible, exbak:exbak, reasons:[], photo:null, action:null, exec:false, msg:null,
-              product_exact:null, product_id:null,
-              attachments:atts.slice(0,6),   /* 썸네일 그리드에서 눈으로 볼 사진 */
-              approvable:false };            /* 그리드에서 일괄 승인해도 되는 건인지 */
+              visible:item.visible, exbak:!!exWhy, reasons:[], photo:null, action:null, exec:false, msg:null,
+              product_exact:null, product_id:null, swatch:null, warn:null,
+              attachments:atts.slice(0,6),
+              approvable:false };   /* 그리드에서 승인/발색샷요청을 고를 수 있는 건인지 */
 
     /* 사진 포렌식 (첨부 최대 4장) */
     var cls=[]; for(var i=0;i<Math.min(atts.length,4);i++){ var d=await imgDims(atts[i]); cls.push(classifyImg(d.w,d.h)); }
     out.photo=photoVerdict(cls); out.photoCls=cls;
 
-    /* 1) 본문 도배 */
+    /* ── 규칙 3: 무의미한 언어만 있으면 검수 대상이 아니다 → 미노출 ── */
+    var gb=gibberish(content);
+    if(gb){ out.action='hide'; out.exec=true; out.reasons.push('무의미한 본문 — '+gb); return out; }
     if(isSpam(content)){ out.action='hide'; out.exec=true; out.reasons.push('본문 도배'); return out; }
-    /* 2) 비화장품 의심 → 확인(hold) */
-    var nc=nonCosmetic(item.productName+' '+item.brandName);
-    if(nc){ out.action='hold'; out.reasons.push('화장품 아님 의심('+nc+')'); return out; }   /* 품목 판단이라 일괄승인 제외 */
 
-    if(exbak){
+    /* 화장품이 아닌 품목은 사람이 판단 */
+    var nc=nonCosmetic(item.productName+' '+item.brandName);
+    if(nc){ out.action='hold'; out.reasons.push('화장품 아님 의심('+nc+')'); return out; }
+
+    /* ── 규칙 1·2: 브랜드 안에 매칭된 상품이 있고 좌상단 이미지가 떠야 검수 대상 ── */
+    if(exWhy){
+      out.reasons.push('엑박 — '+exWhy.join(' · '));
       var b=await findBrand(item.brandName);
-      if(b.approvedBrand){
-        var pr=await findProduct(b.approvedBrand.id, item.productName);
-        if(pr.pick && pr.confident){
-          out.action='revise'; out.exec=true;
-          out.product_exact=pr.pick.name; out.product_id=pr.pick.id;
-          out.reasons.push('브랜드○ 제품○ → 재선택 요청');
-        } else if(pr.pick){
-          out.action='hold';
-          out.product_exact=pr.pick.name; out.product_id=pr.pick.id;
-          out.reasons.push(pr.why+' → 제품명 확인 후 수정요청');
-        } else {
-          out.action='register'; out.reasons.push('브랜드○ · '+pr.why);
-        }
+      if(!b.approvedBrand){
+        /* 6번: 브랜드부터 새로 등록해야 함 */
+        out.action='register_brand';
+        out.reasons.push(b.anyExact?'브랜드가 미검수 상태':'브랜드가 CMS에 없음');
+        return out;
+      }
+      var pr=await findProduct(b.approvedBrand.id, item.productName);
+      if(pr.pick && pr.confident){
+        /* 4번: 브랜드○ 제품○ → 템플릿 수정요청 (일괄 실행 대상) */
+        out.action='revise_product'; out.exec=true;
+        out.product_exact=pr.pick.name; out.product_id=pr.pick.id;
+        out.reasons.push('브랜드○ 제품○ → 재선택 요청');
+      } else if(pr.pick){
+        out.action='hold';
+        out.product_exact=pr.pick.name; out.product_id=pr.pick.id;
+        out.reasons.push(pr.why+' → 사람이 제품명 확인');
       } else {
-        out.action='register';
-        out.reasons.push(b.anyExact?'브랜드 미검수만 → 등록 필요':'브랜드 미등록 → 브랜드+상품 등록');
+        /* 5번: 브랜드는 있는데 그 안에 제품이 없음 */
+        out.action='register_product';
+        out.reasons.push('브랜드○ · '+pr.why);
       }
       return out;
     }
 
-    /* 3) 정상 매칭 리뷰 → 사진으로 판단.
-          approvable 인 것들만 썸네일 그리드에서 눈으로 훑어 일괄 승인한다. */
+    /* 여기부터는 규칙 1·2 를 통과한 정상 매칭 리뷰 */
+
+    /* 사진이 전량 캡처·저해상이면 어뷰징 */
     if(out.photo.v==='suspect'){ out.action='hide'; out.exec=true; out.reasons.push('사진 '+out.photo.label); return out; }
-    out.action='hold'; out.approvable=true;
+
+    /* 브랜드가 CMS에 조회되는지 확인 — 액션은 바꾸지 않고 경고만 남긴다
+       (브랜드 표기 차이로 조회가 빗나갈 수 있어 오탐을 만들지 않는다) */
+    try {
+      var nb=await findBrand(item.brandName);
+      if(!nb.approvedBrand && !nb.anyExact) out.warn='브랜드 조회 안 됨';
+    } catch(e){}
+
+    /* ── 규칙 4: 발색 있는 제품이면 발색샷 유무를 사람이 보고 고른다 ── */
+    out.swatch = isSwatch(item.productName);
+
+    out.action='approve'; out.approvable=true;
     if(out.photo.v==='mixed')       out.reasons.push('사진 '+out.photo.label+' → 눈으로 확인');
-    else if(out.photo.v==='camera') out.reasons.push('직접촬영 → 사진 의미확인 후 승인');
-    else if(out.photo.v==='none')   out.reasons.push('첨부 없음 → 확인');
+    else if(out.photo.v==='camera') out.reasons.push('직접촬영 · 매칭 정상');
+    else if(out.photo.v==='none')   out.reasons.push('첨부 사진 없음 → 확인');
     else                            out.reasons.push('사진 판별 애매 → 확인');
+    if(out.swatch) out.reasons.push('발색 제품('+out.swatch+') — 발색샷 확인');
+    if(out.warn)   out.reasons.push(out.warn);
     return out;
   }
 
@@ -242,8 +354,17 @@
   var tplMap={}, results=[], logLines=[];
   function log(h){ logLines.push(h); var el=document.getElementById('csLog'); if(el) el.innerHTML=logLines.join('<br>'); }
 
-  var ACT={ revise:{t:'수정요청',c:'#3ddc97'}, hide:{t:'미노출',c:'#ff8f6b'}, register:{t:'상품등록 필요',c:'#f5c451'},
-            hold:{t:'👀 확인',c:'#8fb8ff'}, approve:{t:'승인',c:'#3ddc97'} };
+  var ACT={
+    approve:          {t:'검수완료',              c:'#3ddc97'},
+    revise_swatch:    {t:'발색샷 요청',            c:'#f0a35e'},
+    revise_product:   {t:'제품 재선택 요청',        c:'#3ddc97'},
+    hide:             {t:'미노출',                c:'#ff8f6b'},
+    register_product: {t:'상품등록 필요 (브랜드○)', c:'#f5c451'},
+    register_brand:   {t:'브랜드+상품 등록 필요',   c:'#f5c451'},
+    hold:             {t:'👀 확인',               c:'#8fb8ff'}
+  };
+  /* 사람이 직접 해야 하는 것 — 실행 버튼을 붙이지 않는다 */
+  var MANUAL={ register_product:1, register_brand:1, hold:1 };
 
   function head(html){ return '<b style="color:#3ddc97">🧭 리뷰 검수 콘솔</b>'+html; }
 
@@ -287,7 +408,7 @@
   function renderQueue(sd){
     var groups={revise:[],hide:[],register:[],hold:[]};
     results.forEach(function(r){ (groups[r.action]||(groups[r.action]=[])).push(r); });
-    var order=['revise','hide','register','hold','approve'];
+    var order=['revise_product','hide','register_product','register_brand','hold','revise_swatch','approve'];
 
     var html='<div style="margin-top:8px;color:#9fb4ab">'+esc(sd)+' · 총 <b style="color:#fff">'+results.length+'</b>건 판정 완료</div>';
     html+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">';
@@ -296,10 +417,12 @@
     html+='</div>';
 
     order.forEach(function(k){ var g=groups[k]; if(!g||!g.length) return;
-      var exec = (k==='revise'||k==='hide');
+      var exec = (k==='revise_product'||k==='hide');
       html+='<div style="margin-top:12px;border-top:1px solid #22392e;padding-top:9px">'
         +'<div style="font-weight:800;color:'+ACT[k].c+'">'+ACT[k].t+' · '+g.length+'건'
-        +(exec?' <span style="font-size:10.5px;color:#6b7f77">(자동 실행 가능)</span>':' <span style="font-size:10.5px;color:#6b7f77">(사람 확인)</span>')+'</div>';
+        +' <span style="font-size:10.5px;color:#6b7f77">('
+        + (exec ? '체크 후 실행' : (k==='approve'||k==='revise_swatch') ? '👀 그리드에서 처리' : '사람이 직접')
+        +')</span></div>';
       g.forEach(function(r,idx){
         var gid=k+'_'+idx;
         html+='<div style="margin-top:7px;background:#111d18;border:1px solid #22392e;border-radius:8px;padding:8px 10px">'
@@ -315,12 +438,12 @@
       html+='</div>';
     });
 
-    var nExec = results.filter(function(r){ return !r.applied && (r.action==='revise'||r.action==='hide'); }).length;
-    var nGrid = results.filter(function(r){ return r.action==='hold' && r.approvable; }).length;
+    var nExec = results.filter(function(r){ return !r.applied && (r.action==='revise_product'||r.action==='hide'); }).length;
+    var nGrid = results.filter(function(r){ return r.approvable && !r.applied; }).length;
 
     if(nGrid) html+='<button id="csGridBtn" style="width:100%;margin-top:14px;background:#8fb8ff;color:#06121f;'
       +'border:0;border-radius:9px;padding:11px;font:inherit;font-weight:800;cursor:pointer">'
-      +'👀 사진 보고 일괄 승인 ('+nGrid+'건)</button>';
+      +'👀 사진 보고 검수 진행 ('+nGrid+'건)</button>';
 
     html+='<div style="display:flex;gap:7px;margin-top:9px;flex-wrap:wrap">'
       +'<button id="csRescan" style="flex:1;background:#132019;color:#9fb4ab;border:1px solid #2c4a3c;border-radius:8px;padding:9px;font-weight:700;cursor:pointer">다시</button>'
@@ -328,7 +451,7 @@
       +'<button id="csRun" style="flex:2;background:'+(nExec?'#3ddc97':'#22392e')+';color:'+(nExec?'#04130c':'#6b7f77')+';border:0;border-radius:8px;padding:9px;font-weight:800;cursor:'+(nExec?'pointer':'default')+'">체크한 것 실행 ('+nExec+')</button>'
       +'</div>'
       +'<div id="csLog" style="margin-top:10px;font-size:11.5px;color:#9fb4ab"></div>'
-      +'<div style="margin-top:7px;font-size:10.5px;color:#6b7f77">미노출 상한 '+CAP.hide+' · 수정요청 '+CAP.revise+' · 승인 '+CAP.approve+' · 에러 시 즉시 중단.</div>';
+      +'<div style="margin-top:7px;font-size:10.5px;color:#6b7f77">상한 — 미노출 '+CAP.hide+' · 제품재선택 '+CAP.revise_product+' · 발색샷 '+CAP.revise_swatch+' · 검수완료 '+CAP.approve+'. 에러 시 즉시 중단.</div>';
 
     box.innerHTML=head(html);
     document.getElementById('csRescan').onclick=function(){ renderStart(sd); };
@@ -348,13 +471,17 @@
      대기열의 [실행]과 썸네일 그리드의 [승인]이 같은 경로를 쓴다.
      상한은 액션별로 다르다 — 되돌리기 어려운 미노출은 좁게,
      되돌리기 쉬운 승인은 넓게. */
-  var CAP={ hide:30, revise:60, approve:300 };
+  var CAP={ hide:30, revise_product:60, revise_swatch:120, approve:300 };
 
   function buildReq(r){
-    if(r.action==='revise'){
+    if(r.action==='revise_product'){                 /* 제품 재선택 요청 — 정확한 상품명을 넣어 보낸다 */
       var tpl=tplMap['product_match'];
       var body=tpl?tpl.body.replace(/\{제품명\}/g, r.product_exact||r.product):null;
       return body ? {method:'POST',url:API+'/admin/reviews/'+r.id+'/revise',body:{content:[body]}} : null;
+    }
+    if(r.action==='revise_swatch'){                  /* 발색샷 요청 — 변수 없는 고정 문구 */
+      var t2=tplMap['swatch'];
+      return t2 ? {method:'POST',url:API+'/admin/reviews/'+r.id+'/revise',body:{content:[t2.body]}} : null;
     }
     if(r.action==='hide')    return {method:'PUT', url:API+'/admin/reviews/'+r.id, body:{visible:false}};
     if(r.action==='approve') return {method:'POST',url:API+'/admin/reviews/'+r.id+'/approve', body:{}};
@@ -406,22 +533,26 @@
   function runExec(){
     var ids={};
     [].slice.call(document.querySelectorAll('.csChk')).forEach(function(c){ if(c.checked) ids[c.dataset.id]=1; });
-    runJobs(results.filter(function(r){ return ids[r.id] && (r.action==='revise'||r.action==='hide'); }));
+    runJobs(results.filter(function(r){ return ids[r.id] && (r.action==='revise_product'||r.action==='hide'); }));
   }
 
   /* ── 업무일지 연동 ────────────────────────────────────
      검수 기록 탭은 verdict / reason / applied 를 읽는데
      콘솔 내부는 action / reasons 를 쓴다. 여기서 맞춰 내보낸다. */
-  var VMAP={ approve:'approve', hide:'hide', revise:'revise_product', register:'register', hold:'hold' };
+  /* 업무일지 검수 기록 탭 어휘로 대응시킨다 (탭은 revise_color 를 "발색샷 요청" 컬럼으로 쓴다) */
+  var VMAP={ approve:'approve', hide:'hide',
+             revise_swatch:'revise_color', revise_product:'revise_product',
+             register_product:'register', register_brand:'register', hold:'hold' };
   function auditPayload(){
     var summary={}; results.forEach(function(r){ summary[r.action]=(summary[r.action]||0)+1; });
     return {
       v:1, date:SCAN_DATE, at:new Date().toISOString(), total:results.length, summary:summary,
+      schema: SCHEMA,          /* 상세 응답 필드 — 판정이 어긋나면 여기부터 본다 */
       items: results.map(function(r){
         return { id:r.id, brand:r.brand, product:r.product, user:r.user,
                  verdict: VMAP[r.action]||'hold', action:r.action,
                  reason: r.reasons.join(' · '), reasons:r.reasons,
-                 applied: !!r.applied,
+                 applied: !!r.applied, exbak:!!r.exbak, swatch:r.swatch||null, warn:r.warn||null,
                  photo: r.photo?r.photo.label:'', photoCls:r.photoCls||[],
                  product_exact:r.product_exact, attachments:r.attachments||[] };
       })
@@ -433,7 +564,8 @@
     if(!done.length) return;
     var n=function(a){ return done.filter(function(r){return r.action===a;}).length; };
     var payload={ d:SCAN_DATE, r:done.length, p:0,
-                  note:'콘솔 처리 · 승인 '+n('approve')+' · 수정요청 '+n('revise')+' · 미노출 '+n('hide') };
+                  note:'콘솔 처리 · 검수완료 '+n('approve')+' · 제품재선택 '+n('revise_product')
+                       +' · 발색샷 '+n('revise_swatch')+' · 미노출 '+n('hide') };
     var wl=WORKLOG_URL+'#sync='+encodeURIComponent(JSON.stringify(payload));
     var el=document.getElementById('csLog'); if(!el) return;
     var wrap=document.createElement('div');
@@ -455,10 +587,13 @@
      눈으로 봐야 한다. 한 화면에 깔아놓고 이상한 것만 체크를 풀어
      나머지를 한 번에 승인한다. */
   function openGrid(){
-    var pool=results.filter(function(r){ return r.action==='hold' && r.approvable; });
-    if(!pool.length){ alert('일괄 승인 대상이 없습니다.'); return; }
-    var pick={}, node={};
-    pool.forEach(function(r){ pick[r.id]=true; });
+    var pool=results.filter(function(r){ return r.approvable && !r.applied; });
+    if(!pool.length){ alert('검수 진행할 대상이 없습니다.'); return; }
+    /* 발색 제품을 앞으로 — 발색샷 유무는 주의해서 봐야 하므로 */
+    pool.sort(function(a,b){ return (b.swatch?1:0)-(a.swatch?1:0); });
+
+    var st={}, node={};
+    pool.forEach(function(r){ st[r.id]='approve'; });   /* 기본은 검수완료 */
 
     var ov=document.createElement('div'); ov.id='csGrid';
     ov.style.cssText='position:fixed;inset:0;z-index:2147483646;background:#0a1310;color:#e8f1ed;'
@@ -471,53 +606,86 @@
     var scroll=document.createElement('div');
     scroll.style.cssText='flex:1 1 0;overflow:auto;padding:14px 18px';
     var grid=document.createElement('div');
-    grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));'
+    grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(176px,1fr));'
       +'gap:12px;align-content:start';
     scroll.appendChild(grid);
     ov.appendChild(bar); ov.appendChild(scroll);
     document.body.appendChild(ov);
-    box.style.display='none';                       /* 그리드를 보는 동안 콘솔 패널은 접어둔다 */
+    box.style.display='none';
     var closeGrid=function(){ ov.remove(); box.style.display=''; };
 
-    function nSel(){ var k=0; for(var i=0;i<pool.length;i++) if(pick[pool[i].id]) k++; return k; }
-    function syncGo(){ var g=document.getElementById('gGo'); if(g) g.textContent='선택 '+nSel()+'건 승인'; }
-    function paintOne(r){
+    function tally(){
+      var a=0,w=0,s0=0;
+      pool.forEach(function(r){ var v=st[r.id]; if(v==='approve')a++; else if(v==='swatch')w++; else s0++; });
+      return {a:a,w:w,skip:s0};
+    }
+    function syncBar(){
+      var t=tally();
+      var g=document.getElementById('gGo');
+      if(g){
+        g.textContent='실행 — 검수완료 '+t.a+' · 발색샷 '+t.w;
+        g.disabled=(t.a+t.w===0);
+        g.style.opacity=(t.a+t.w===0)?'.45':'1';
+      }
+      var c=document.getElementById('gCnt');
+      if(c) c.textContent='건너뜀 '+t.skip;
+    }
+    function paint(r){
       var el=node[r.id]; if(!el) return;
-      var sel=pick[r.id];
-      el.style.borderColor=sel?'#3ddc97':'#22392e';
-      el.style.opacity=sel?'1':'.4';
-      var c=el.querySelector('.gchk'); if(c) c.style.display=sel?'flex':'none';
+      var v=st[r.id];
+      var col = v==='approve' ? '#3ddc97' : v==='swatch' ? '#f0a35e' : '#22392e';
+      el.style.borderColor=col;
+      el.style.opacity = v==='skip' ? '.4' : '1';
+      var badge=el.querySelector('.gchk');
+      if(badge){
+        badge.style.display = v==='skip' ? 'none' : 'flex';
+        badge.style.background = col;
+        badge.textContent = v==='swatch' ? '💄' : '✓';
+      }
+      var sw=el.querySelector('.gsw');
+      if(sw) sw.style.background = v==='swatch' ? '#f0a35e' : 'rgba(0,0,0,.7)';
     }
 
     var BTN='background:#132019;color:#9fb4ab;border:1px solid #2c4a3c;border-radius:8px;padding:8px 13px;font:inherit;cursor:pointer';
-    bar.innerHTML='<b style="color:#3ddc97;font-size:14px">👀 사진 확인 후 일괄 승인</b>'
-      +'<span style="color:#9fb4ab">제품과 <b>무관한 사진</b>만 눌러서 해제 · 🔍로 전체 사진 보기</span>'
+    bar.innerHTML='<b style="color:#3ddc97;font-size:14px">👀 사진 확인 후 검수</b>'
+      +'<span style="color:#9fb4ab">카드=<b>건너뛰기</b> 토글 · <b style="color:#f0a35e">💄</b>=발색샷 요청 · <b>🔍</b>=사진 크게</span>'
+      +'<span id="gCnt" style="color:#6b7f77">건너뜀 0</span>'
       +'<span style="flex:1"></span>'
-      +'<button id="gAll" style="'+BTN+'">전체 선택</button>'
-      +'<button id="gNone" style="'+BTN+'">전체 해제</button>'
-      +'<button id="gGo" style="background:#3ddc97;color:#04130c;border:0;border-radius:8px;padding:8px 17px;font:inherit;font-weight:800;cursor:pointer">선택 '+nSel()+'건 승인</button>'
+      +'<button id="gAll" style="'+BTN+'">전체 검수완료</button>'
+      +'<button id="gNone" style="'+BTN+'">전체 건너뛰기</button>'
+      +'<button id="gGo" style="background:#3ddc97;color:#04130c;border:0;border-radius:8px;padding:8px 17px;font:inherit;font-weight:800;cursor:pointer">실행</button>'
       +'<button id="gX" style="'+BTN+'">닫기</button>';
 
     pool.forEach(function(r){
       var src=(r.attachments&&r.attachments[0])||'';
-      var extra=(r.attachments||[]).length;
+      var n=(r.attachments||[]).length;
       var el=document.createElement('div');
       el.style.cssText='cursor:pointer;border:2px solid #3ddc97;border-radius:10px;overflow:hidden;background:#111d18';
       el.innerHTML='<div style="position:relative;aspect-ratio:1/1;background:#0a1310">'
         +(src?'<img src="'+esc(src)+'" loading="lazy" style="width:100%;height:100%;object-fit:cover">'
              :'<div style="display:flex;height:100%;align-items:center;justify-content:center;color:#4d6158;font-size:11px">사진 없음</div>')
-        +(extra>1?'<span style="position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,.7);border-radius:11px;padding:1px 7px;font-size:11px">+'+(extra-1)+'</span>':'')
-        +'<span class="gchk" style="position:absolute;left:6px;top:6px;background:#3ddc97;color:#04130c;border-radius:50%;width:21px;height:21px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px">✓</span>'
-        +(extra?'<span class="gzoom" style="position:absolute;right:6px;top:6px;background:rgba(0,0,0,.7);border-radius:50%;width:23px;height:23px;display:flex;align-items:center;justify-content:center;font-size:12px">🔍</span>':'')
+        +(n>1?'<span style="position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,.7);border-radius:11px;padding:1px 7px;font-size:11px">+'+(n-1)+'</span>':'')
+        +'<span class="gchk" style="position:absolute;left:6px;top:6px;background:#3ddc97;color:#04130c;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px">✓</span>'
+        +'<span class="gsw" title="발색샷 요청" style="position:absolute;right:6px;top:6px;background:rgba(0,0,0,.7);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:13px">💄</span>'
+        +(n?'<span class="gzoom" title="사진 크게" style="position:absolute;right:36px;top:6px;background:rgba(0,0,0,.7);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px">🔍</span>':'')
         +'</div>'
         +'<div style="padding:7px 8px">'
         +'<div style="font-size:11px;color:#9fb4ab;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(r.brand||'')+'</div>'
         +'<div style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(r.product||'')+'</div>'
+        +(r.swatch?'<div style="font-size:10px;color:#f0a35e;margin-top:2px">💄 발색 제품 — 발색샷 확인</div>':'')
         +(r.photo&&r.photo.v==='mixed'?'<div style="font-size:10px;color:#f5c451;margin-top:2px">⚠ '+esc(r.photo.label)+'</div>':'')
+        +(r.warn?'<div style="font-size:10px;color:#f5c451;margin-top:2px">⚠ '+esc(r.warn)+'</div>':'')
         +'</div>';
       el.onclick=function(ev){
-        if(ev.target && ev.target.classList.contains('gzoom')){ ev.stopPropagation(); lightbox(r); return; }
-        pick[r.id]=!pick[r.id]; paintOne(r); syncGo();
+        var t=ev.target;
+        if(t && t.classList.contains('gzoom')){ ev.stopPropagation(); lightbox(r); return; }
+        if(t && t.classList.contains('gsw')){
+          ev.stopPropagation();
+          st[r.id] = (st[r.id]==='swatch') ? 'approve' : 'swatch';
+        } else {
+          st[r.id] = (st[r.id]==='skip') ? 'approve' : 'skip';
+        }
+        paint(r); syncBar();
       };
       node[r.id]=el; grid.appendChild(el);
     });
@@ -528,6 +696,7 @@
         +'display:flex;flex-wrap:wrap;gap:14px;align-content:center;justify-content:center';
       lb.innerHTML='<div style="width:100%;text-align:center;color:#9fb4ab;font:13px -apple-system,sans-serif">'
         +'<b style="color:#cfe">#'+r.id+'</b> '+esc(r.brand||'')+' / '+esc(r.product||'')
+        +(r.swatch?' <span style="color:#f0a35e">· 발색 제품</span>':'')
         +' <span style="color:#6b7f77">— 아무 곳이나 클릭하면 닫힙니다</span></div>'
         +(r.attachments||[]).map(function(u){
           return '<img src="'+esc(u)+'" style="max-width:44%;max-height:74vh;object-fit:contain;border-radius:10px">'; }).join('');
@@ -535,16 +704,21 @@
       document.body.appendChild(lb);
     }
 
-    document.getElementById('gAll').onclick =function(){ pool.forEach(function(r){pick[r.id]=true; paintOne(r);}); syncGo(); };
-    document.getElementById('gNone').onclick=function(){ pool.forEach(function(r){pick[r.id]=false;paintOne(r);}); syncGo(); };
+    document.getElementById('gAll').onclick =function(){ pool.forEach(function(r){ st[r.id]='approve'; paint(r); }); syncBar(); };
+    document.getElementById('gNone').onclick=function(){ pool.forEach(function(r){ st[r.id]='skip';    paint(r); }); syncBar(); };
     document.getElementById('gX').onclick   =function(){ closeGrid(); };
     document.getElementById('gGo').onclick  =function(){
-      var jobs=pool.filter(function(r){ return pick[r.id]; });
+      var jobs=[];
+      pool.forEach(function(r){
+        var v=st[r.id];
+        if(v==='approve'){ r.action='approve';       jobs.push(r); }
+        else if(v==='swatch'){ r.action='revise_swatch'; jobs.push(r); }
+      });
       if(!jobs.length){ alert('선택된 건이 없습니다.'); return; }
-      jobs.forEach(function(r){ r.action='approve'; });
       closeGrid();
       runJobs(jobs);
     };
+    pool.forEach(paint); syncBar();
   }
 
   /* ── 시작 ── */
