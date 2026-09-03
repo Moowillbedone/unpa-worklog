@@ -1089,13 +1089,18 @@ setTimeout(async () => {
     hold:          { cls:'hold',     label:'보류' }
   };
 
+  /* 콘솔이 내보내는 action/reasons 와 예전 verdict/reason 을 모두 받아준다 */
+  var AMAP={ approve:'approve', hide:'hide', revise:'revise_product', register:'register', hold:'hold' };
+  function vOf(it){ return it.verdict || AMAP[it.action] || 'hold'; }
+  function rOf(it){ return it.reason || (Array.isArray(it.reasons) ? it.reasons.join(' · ') : ''); }
+
   function aLoad(){ try{ var r=localStorage.getItem(AKEY); if(r){ var o=JSON.parse(r); if(o&&o.days) AU=o.days; } }catch(e){} }
   function aSave(){ try{ localStorage.setItem(AKEY, JSON.stringify({v:1,savedAt:new Date().toISOString(),days:AU})); return true; }catch(e){ return false; } }
 
   function count(day){
     var c={approve:0,hide:0,revise_color:0,revise_product:0,register:0,hold:0,applied:0};
     (day.items||[]).forEach(function(it){
-      if(c[it.verdict]!==undefined) c[it.verdict]++;
+      var v=vOf(it); if(c[v]!==undefined) c[v]++;
       if(it.applied) c.applied++;
     });
     c.total=(day.items||[]).length;
@@ -1120,10 +1125,10 @@ setTimeout(async () => {
     var days=Object.keys(AU).sort().reverse();
     document.getElementById('aEmpty').hidden = days.length>0;
     document.getElementById('aDaysWrap').hidden = days.length===0;
-    var tot={total:0,approve:0,hide:0,revise_color:0,revise_product:0,hold:0,applied:0};
+    var tot={total:0,approve:0,hide:0,revise_color:0,revise_product:0,register:0,hold:0,applied:0};
     document.getElementById('aDays').innerHTML = days.map(function(d){
       var c=count(AU[d]);
-      ['total','approve','hide','revise_color','revise_product','hold','applied'].forEach(function(k){ tot[k]+=c[k]; });
+      ['total','approve','hide','revise_color','revise_product','register','hold','applied'].forEach(function(k){ tot[k]+=c[k]; });
       return '<tr data-d="'+d+'" class="'+(d===aCur?'on':'')+'" style="cursor:pointer">'
         +'<td class="m">'+d+'</td>'
         +'<td style="text-align:right">'+c.total+'</td>'
@@ -1139,7 +1144,7 @@ setTimeout(async () => {
       +'<td style="text-align:right;color:#076e4c">'+tot.approve+'</td>'
       +'<td style="text-align:right;color:#c8443c">'+tot.hide+'</td>'
       +'<td style="text-align:right;color:#b57611">'+tot.revise_color+'</td>'
-      +'<td style="text-align:right">'+tot.revise_product+'</td>'
+      +'<td style="text-align:right">'+(tot.revise_product+tot.register)+'</td>'
       +'<td style="text-align:right">'+tot.hold+'</td>'
       +'<td style="text-align:right">'+tot.applied+'</td></tr>';
     document.getElementById('aDays').querySelectorAll('tr').forEach(function(tr){
@@ -1155,15 +1160,15 @@ setTimeout(async () => {
     if(!aCur||!AU[aCur]){ card.hidden=true; return; }
     card.hidden=false;
     document.getElementById('aDetailTitle').textContent = aCur + ' 건별 판정';
-    var items=(AU[aCur].items||[]).filter(function(it){ return !aFilterV || it.verdict===aFilterV; });
+    var items=(AU[aCur].items||[]).filter(function(it){ return !aFilterV || vOf(it)===aFilterV; });
     document.getElementById('aItems').innerHTML = items.map(function(it){
-      var v=VD[it.verdict]||VD.hold;
+      var v=VD[vOf(it)]||VD.hold;
       return '<tr class="aRow">'
         +'<td class="pid">'+esc(it.id)+'</td>'
         +'<td><b>'+esc(it.brand||'')+'</b><br><span class="why">'+esc(it.product||'')+'</span></td>'
         +'<td class="why">'+esc(it.user||'')+'</td>'
         +'<td><span class="vd '+v.cls+'">'+v.label+'</span></td>'
-        +'<td class="why">'+esc(it.reason||'')+'</td>'
+        +'<td class="why">'+esc(rOf(it))+'</td>'
         +'<td>'+(it.applied?'<span class="aDone">✓ 처리</span>':'<span class="aWait">대기</span>')+'</td></tr>';
     }).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--dim);padding:22px">해당 판정이 없습니다.</td></tr>';
   }
