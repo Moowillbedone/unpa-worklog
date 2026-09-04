@@ -73,6 +73,7 @@
   td code{font-family:var(--mono);font-size:11.5px;background:var(--sunk);padding:2px 6px;
           border-radius:4px;color:var(--mint-dk);word-break:break-all}
   .ok{color:var(--mint-dk);font-weight:700}
+  .bad{color:var(--red);font-weight:700}
   .no{color:var(--red);font-weight:700}
   footer{margin-top:26px;padding-top:16px;border-top:1px solid var(--line);font-size:11.5px;color:var(--dim)}
   kbd{font-family:var(--mono);font-size:11.5px;background:var(--sunk);border:1px solid var(--line2);
@@ -95,7 +96,7 @@
   <div class="tool" style="border-color:#a8ddc7;border-width:2px">
     <h2>🧭 리뷰 검수 콘솔 <span class="tag warn">자동판정+처리</span></h2>
     <p>날짜만 넣으면 그날 리뷰를 <b>모으고 · 자동 판정하고 · 대기열로 정리</b>합니다. 골라서 <b>승인·수정요청·미노출까지 한 번에</b>. 아래 개별 도구 5종을 이거 하나로 합친 거예요.</p>
-    <div class="when"><b>자동 판정</b> — 엑박·브랜드/제품 유무·본문도배·비화장품·<b>사진 포렌식(화면캡처/도용/직접촬영)</b>.
+    <div class="when"><b>자동 판정</b> — 엑박·브랜드/제품 유무·무의미 본문·취급 품목·<b>사진 포렌식(화면캡처/도용/직접촬영)</b>.
       <b>승인</b>은 <b>썸네일 그리드</b>에서 사진을 눈으로 훑어 일괄 처리하고, <b>상품등록만 CMS에서 직접</b> 합니다.</div>
     <div class="drag">
       <p class="h">↓ 즐겨찾기 바로 드래그 ↓</p>
@@ -220,6 +221,7 @@
         <tr><td><b>화면캡처 / 저해상</b></td><td>알려진 폰 해상도 ±4px · 가장 긴 변 1000px 이하</td><td><b>전량</b>이 그럴 때만 미노출</td></tr>
         <tr><td><b>의심 사진 혼재</b></td><td>직접촬영과 저해상·캡처가 <b>섞여 있음</b></td><td>자동 처리 안 함 · 그리드에서 판단</td></tr>
         <tr><td><b>발색 제품</b></td><td>제품명에 립·아이·베이스·네일 색조 키워드</td><td>그리드에서 <b>💄</b> 눌러 <b>발색샷 요청</b></td></tr>
+        <tr><td><b>취급 품목 아님</b></td><td>콤부차 · 세제 · 락스 · 섬유유연제 · 뷰티용 아닌 물티슈 · 관절약 등</td><td>👀 확인 — 사람이 미노출 검토</td></tr>
         <tr><td><b>사진 무관</b></td><td>제품과 상관없는 사진 <b>(기계가 못 걸러냄)</b></td><td>그리드에서 눈으로 판단</td></tr>
       </tbody>
     </table>
@@ -232,6 +234,24 @@
     사진 판별은 <b>해상도만</b> 봅니다(파일 크기는 보지 않습니다).
     <b>사진이 제품과 맞는지</b>, <b>발색샷이 실제로 있는지</b>는 픽셀을 봐야 알 수 있어 그리드에서 사람이 판단합니다.
     되돌리기 어려운 <b>미노출은 좁게(상한 30)</b>, 되돌리기 쉬운 <b>검수완료는 넓게(상한 300)</b> 잡아 두었습니다.</div>
+
+  <h3 class="sec">03-1 · 취급 품목</h3>
+
+  <div class="note safe"><b>화장품·뷰티 제품은 당연히 검수 대상</b>이고, 여기에 더해 아래도 취급합니다.</div>
+  <div class="tw" style="margin-top:10px">
+    <table>
+      <thead><tr><th>구분</th><th>예시</th><th>검수</th></tr></thead>
+      <tbody>
+        <tr><td><b>이너뷰티 — 다이어트</b></td><td>효소, 다이어트 젤리·부스터샷, 식이섬유, 가르시니아</td><td class="ok">대상</td></tr>
+        <tr><td><b>이너뷰티 — 영양제</b></td><td>콜라겐, 글루타치온, 비타민(B·C·D·종합), 유산균·프로바이오틱스,<br>이노시톨, 오메가3, 마그네슘, 루테인, 밀크씨슬</td><td class="ok">대상</td></tr>
+        <tr><td><b>뷰티 관련 도구</b></td><td>뷰러, 드라이기, 고데기, 에어랩, 괄사, 마사지기, 면도기, 브러시</td><td class="ok">대상</td></tr>
+        <tr><td><b>취급 안 함</b></td><td>콤부차·꼼부차, 세제·락스·섬유유연제,<br>뷰티용이 아닌 일반 물티슈, 관절약 등 의약품</td><td class="bad">대상 아님</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="note warn" style="margin-top:10px"><b>허용 목록이 차단 목록보다 먼저입니다.</b>
+    그래야 "콜라겐 젤리", "라로슈포제 비타민 C12 세럼"처럼 차단어와 겹쳐 보이는 제품이 살아납니다.
+    물티슈는 <b>클렌징·메이크업·화장용</b>일 때만 대상입니다.</div>
 
   <h3 class="sec">04 · 수정요청 템플릿</h3>
   <p style="font-size:12.8px;color:var(--mid);margin:0 0 12px">

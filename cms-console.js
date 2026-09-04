@@ -45,9 +45,30 @@
   /* 화면캡처 판별용 알려진 폰 해상도 */
   var SCREENS = [[1170,2532],[1179,2556],[1290,2796],[1284,2778],[1125,2436],[1206,2622],[1320,2868],
                  [750,1334],[828,1792],[1080,2340],[1080,2400],[1080,1920],[1440,3040],[1440,3200],[1080,2280],[720,1280]];
-  /* 비화장품 의심 키워드 */
-  var NONCOSMETIC = ['오메가','프로바이오틱','유산균','낙산균','식이섬유','영양제','비타민','루테인','밀크씨슬',
-                     '락스','세제','섬유유연','청결티슈','물티슈','칫솔','치약','건강기능','다이어트','효소','콜라겐젤리','젤리스틱'];
+  /* ── 언니의파우치 취급 품목 ──────────────────────────
+     화장품·뷰티 제품은 당연히 대상이고, 여기에 더해
+     이너뷰티(다이어트·영양제)와 뷰티 관련 도구까지 취급한다.
+     예전 목록은 오메가3·유산균·비타민·콜라겐 같은 이너뷰티를 전부
+     "화장품 아님"으로 막고 있었다. */
+  var BEAUTY_OK = [
+    /* 이너뷰티 — 다이어트 */
+    '다이어트','효소','부스터샷','체지방','슬리밍','식이섬유','가르시니아','카르니틴',
+    /* 이너뷰티 — 영양제 */
+    '콜라겐','글루타치온','글루타티온','비타민','종합비타민','멀티비타민',
+    '유산균','프로바이오틱','프리바이오틱','락토','낙산균','이노시톨',
+    '오메가','마그네슘','루테인','밀크씨슬','비오틴','엽산','아연','철분',
+    '히알루론','세라마이드','플라센타','이너뷰티','건강기능','영양제',
+    /* 뷰티 관련 도구 */
+    '뷰러','드라이기','고데기','에어랩','헤어롤','헤어아이론','미용기기','괄사','마사지기',
+    '클렌징기','클렌징브러시','눈썹칼','면도기','제모기','네일기','퍼프','브러시','스펀지',
+    '헤어핀','헤어밴드','샤워기','족욕기','마스크기기'
+  ];
+  /* 취급하지 않는 품목 — 리뷰 검수 대상이 아니다 */
+  var NOT_BEAUTY = [
+    '콤부차','꼼부차',
+    '세제','락스','섬유유연','표백','세탁','주방세제','살균소독',
+    '관절','혈압','혈당','소화제','진통제','감기약','파스'
+  ];
 
   /* ── 인증 가로채기 ── */
   function grab(h){ try{ if(!h) return; var o={};
@@ -127,7 +148,17 @@
       if(Object.keys(us).length/sents.length<=0.5) return true; }
     return false;
   }
-  function nonCosmetic(name){ var n=String(name||''); for(var i=0;i<NONCOSMETIC.length;i++){ if(n.indexOf(NONCOSMETIC[i])>=0) return NONCOSMETIC[i]; } return null; }
+  /* 취급 품목이면 null, 아니면 걸린 키워드를 돌려준다.
+     허용 목록이 먼저다 — "콜라겐 젤리"처럼 차단어와 겹쳐 보이는 이너뷰티를 살린다. */
+  function notBeauty(name){
+    var n=String(name||'');
+    for(var i=0;i<BEAUTY_OK.length;i++) if(n.indexOf(BEAUTY_OK[i])>=0) return null;
+    /* 물티슈는 화장·클렌징용만 취급한다 */
+    if(n.indexOf('물티슈')>=0)
+      return /클렌징|메이크업|화장|리무버|페이셜|아이|립|선케어/.test(n) ? null : '뷰티용 아닌 물티슈';
+    for(var j=0;j<NOT_BEAUTY.length;j++) if(n.indexOf(NOT_BEAUTY[j])>=0) return NOT_BEAUTY[j];
+    return null;
+  }
 
   /* ── 리뷰 본문 모으기 ──────────────────────────────────
      자유 서술형은 contentText 에 들어오지만, 간편 리뷰(easy review)는
@@ -318,9 +349,9 @@
     if(gb){ out.action='hide'; out.exec=true; out.reasons.push('무의미한 본문 — '+gb); return out; }
     if(isSpam(content)){ out.action='hide'; out.exec=true; out.reasons.push('본문 도배'); return out; }
 
-    /* 화장품이 아닌 품목은 사람이 판단 */
-    var nc=nonCosmetic(item.productName+' '+item.brandName);
-    if(nc){ out.action='hold'; out.reasons.push('화장품 아님 의심('+nc+')'); return out; }
+    /* 취급하지 않는 품목은 검수 대상이 아니다 — 사람이 보고 미노출 여부를 정한다 */
+    var nb2=notBeauty(item.productName+' '+item.brandName);
+    if(nb2){ out.action='hold'; out.reasons.push('취급 품목 아님('+nb2+') → 미노출 검토'); return out; }
 
     /* ── 규칙 1·2: 브랜드 안에 매칭된 상품이 있고 좌상단 이미지가 떠야 검수 대상 ── */
     if(exWhy){
