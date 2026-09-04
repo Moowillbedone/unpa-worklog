@@ -398,9 +398,14 @@
     }
     if(prefixed.length){
       var f=prefixed[0], fr=residueOf(target, norm(f.name));
-      return { pick:f, confident:false,
-               why:'「'+f.name+'」 + 남은 «'+fr+'»'+(prodCache[f.id]===null?' (옵션 조회 실패)':' (옵션에 없음)')
-                   +' — 사람이 확인', candidates:cand };
+      var fo=prodCache[f.id];
+      /* 왜 확정 못 했는지 구분해서 보여 준다 — 조회 실패와 "옵션에 없음"은 다른 문제다 */
+      var note = (fo===null)          ? '옵션 조회 실패'
+               : (!fo || !fo.length)  ? '옵션 목록 비어 있음'
+               : '옵션 '+fo.length+'개와 불일치 ['+fo.slice(0,8).join(' / ')+(fo.length>8?' …':'')+']';
+      return { pick:f, confident:false, options:(fo||null), residue:fr,
+               why:'「'+f.name+'」 + 남은 «'+fr+'» · '+note+' → 수정요청인지 상품등록인지 사람이 판단',
+               candidates:cand };
     }
 
     /* 3) 길이가 비슷한 포함 관계 */
@@ -431,7 +436,8 @@
 
     var out={ id:item.id, brand:item.brandName, product:item.productName, user:item.userNickname,
               visible:item.visible, exbak:!!exWhy, reasons:[], photo:null, action:null, exec:false, msg:null,
-              product_exact:null, product_id:null, product_option:null, swatch:null, warn:null,
+              product_exact:null, product_id:null, product_option:null,
+              product_options:null, residue:null, swatch:null, warn:null,
               attachments:atts.slice(0,6),
               approvable:false };   /* 그리드에서 승인/발색샷요청을 고를 수 있는 건인지 */
 
@@ -474,7 +480,8 @@
       } else if(pr.pick){
         out.action='hold';
         out.product_exact=pr.pick.name; out.product_id=pr.pick.id;
-        out.reasons.push(pr.why+' → 사람이 제품명 확인');
+        out.product_options=pr.options||null; out.residue=pr.residue||null;
+        out.reasons.push(pr.why);
       } else {
         /* 5번: 브랜드는 있는데 그 안에 제품이 없음 */
         out.action='register_product';
@@ -731,6 +738,7 @@
                  text: r.text||'',
                  photo: r.photo?r.photo.label:'', photoCls:r.photoCls||[],
                  product_exact:r.product_exact, product_option:r.product_option||null,
+                 product_options:r.product_options||null, residue:r.residue||null,
                  attachments:r.attachments||[] };
       })
     };
