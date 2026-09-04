@@ -104,6 +104,8 @@
     return Array.isArray(j.results)?j.results:Array.isArray(j.result)?j.result:Array.isArray(j.data)?j.data:Array.isArray(j.content)?j.content:Array.isArray(j)?j:null; }
   function totalOf(j){ return (j&&(j.totalCount||j.total||j.count))||0; }
   function esc(s){ return String(s==null?'':s).replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];}); }
+  /* CMS 리뷰 상세 — 목록 페이지네이션을 넘기지 않고 바로 열기 위한 주소 */
+  function reviewUrl(id){ return location.origin+'/review/detail/'+id; }
   function norm(s){ return String(s||'').replace(/[\s()\[\]/·.,-]/g,'').toLowerCase(); }
   function delay(ms){ return new Promise(function(r){setTimeout(r,ms);}); }
 
@@ -497,7 +499,10 @@
         var gid=k+'_'+idx;
         html+='<div style="margin-top:7px;background:#111d18;border:1px solid #22392e;border-radius:8px;padding:8px 10px">'
           +(exec?'<label style="display:flex;gap:7px;align-items:flex-start;cursor:pointer"><input type="checkbox" class="csChk" data-id="'+r.id+'" '+(r.applied?'disabled':'checked')+' style="margin-top:3px">':'<div>')
-          +'<div><b style="color:#cfe">#'+r.id+'</b> '+(r.applied?'<span style="color:#3ddc97;font-weight:800">✓ 처리됨</span> ':'')
+          +'<div><a class="csLink" href="'+reviewUrl(r.id)+'" target="_blank" rel="noopener" '
+          +'title="CMS 리뷰 상세를 새 탭에서 열기" '
+          +'style="color:#8fd8ff;font-weight:800;text-decoration:none;border-bottom:1px dotted rgba(143,216,255,.5)">#'+r.id+' ↗</a> '
+          +(r.applied?'<span style="color:#3ddc97;font-weight:800">✓ 처리됨</span> ':'')
           +'<span style="color:#9fb4ab">'+esc(r.brand||'')+' / '+esc(r.product||'')+'</span>'
           +'<div style="font-size:11px;color:#7f948b;margin-top:2px">'+esc(r.reasons.join(' · '))
           + (r.photo&&r.photo.v!=='none'?' · 사진:'+esc(r.photo.label):'')
@@ -524,6 +529,10 @@
       +'<div style="margin-top:7px;font-size:10.5px;color:#6b7f77">상한 — 미노출 '+CAP.hide+' · 제품재선택 '+CAP.revise_product+' · 발색샷 '+CAP.revise_swatch+' · 검수완료 '+CAP.approve+'. 에러 시 즉시 중단.</div>';
 
     box.innerHTML=head(html);
+    /* 링크는 label 안에 있어 클릭이 체크박스까지 토글한다 — 막는다 */
+    [].slice.call(box.querySelectorAll('.csLink')).forEach(function(a){
+      a.onclick=function(ev){ ev.stopPropagation(); };
+    });
     document.getElementById('csRescan').onclick=function(){ renderStart(sd); };
     document.getElementById('csDl').onclick=function(){ dl(auditPayload(),'unpa-audit-'+sd+'.json'); };
     if(nGrid) document.getElementById('csGridBtn').onclick=function(){ openGrid(); };
@@ -719,7 +728,7 @@
 
     var BTN='background:#132019;color:#9fb4ab;border:1px solid #2c4a3c;border-radius:8px;padding:8px 13px;font:inherit;cursor:pointer';
     bar.innerHTML='<b style="color:#3ddc97;font-size:14px">👀 사진 확인 후 검수</b>'
-      +'<span style="color:#9fb4ab">카드=<b>건너뛰기</b> 토글 · <b style="color:#f0a35e">💄</b>=발색샷 요청 · <b>🔍</b>=사진 크게</span>'
+      +'<span style="color:#9fb4ab">카드=<b>건너뛰기</b> 토글 · <b style="color:#f0a35e">💄</b>=발색샷 요청 · <b>🔍</b>=사진 크게 · <b>↗</b>=CMS 상세</span>'
       +'<span id="gCnt" style="color:#6b7f77">건너뜀 0</span>'
       +'<span style="flex:1"></span>'
       +'<button id="gAll" style="'+BTN+'">전체 검수완료</button>'
@@ -739,6 +748,7 @@
         +'<span class="gchk" style="position:absolute;left:6px;top:6px;background:#3ddc97;color:#04130c;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px">✓</span>'
         +'<span class="gsw" title="발색샷 요청" style="position:absolute;right:6px;top:6px;background:rgba(0,0,0,.7);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:13px">💄</span>'
         +(n?'<span class="gzoom" title="사진 크게" style="position:absolute;right:36px;top:6px;background:rgba(0,0,0,.7);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px">🔍</span>':'')
+        +'<span class="gopen" title="CMS 상세 열기" style="position:absolute;right:66px;top:6px;background:rgba(0,0,0,.7);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px">↗</span>'
         +'</div>'
         +'<div style="padding:7px 8px">'
         +'<div style="font-size:11px;color:#9fb4ab;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(r.brand||'')+'</div>'
@@ -750,6 +760,7 @@
       el.onclick=function(ev){
         var t=ev.target;
         if(t && t.classList.contains('gzoom')){ ev.stopPropagation(); lightbox(r); return; }
+        if(t && t.classList.contains('gopen')){ ev.stopPropagation(); window.open(reviewUrl(r.id),'_blank','noopener'); return; }
         if(t && t.classList.contains('gsw')){
           ev.stopPropagation();
           st[r.id] = (st[r.id]==='swatch') ? 'approve' : 'swatch';
@@ -766,7 +777,8 @@
       lb.style.cssText='position:fixed;inset:0;z-index:2147483647;background:rgba(4,10,8,.94);overflow:auto;padding:24px;'
         +'display:flex;flex-wrap:wrap;gap:14px;align-content:center;justify-content:center';
       lb.innerHTML='<div style="width:100%;text-align:center;color:#9fb4ab;font:13px -apple-system,sans-serif">'
-        +'<b style="color:#cfe">#'+r.id+'</b> '+esc(r.brand||'')+' / '+esc(r.product||'')
+        +'<a href="'+reviewUrl(r.id)+'" target="_blank" rel="noopener" style="color:#8fd8ff;font-weight:800;text-decoration:none">#'+r.id+' ↗</a> '
+        +esc(r.brand||'')+' / '+esc(r.product||'')
         +(r.swatch?' <span style="color:#f0a35e">· 발색 제품</span>':'')
         +' <span style="color:#6b7f77">— 아무 곳이나 클릭하면 닫힙니다</span></div>'
         +(r.attachments||[]).map(function(u){
