@@ -129,13 +129,41 @@
   }
   function nonCosmetic(name){ var n=String(name||''); for(var i=0;i<NONCOSMETIC.length;i++){ if(n.indexOf(NONCOSMETIC[i])>=0) return NONCOSMETIC[i]; } return null; }
 
+  /* ── 리뷰 본문 모으기 ──────────────────────────────────
+     자유 서술형은 contentText 에 들어오지만, 간편 리뷰(easy review)는
+     비어 있고 내용이 easyReview* / reviewAnswers 에 흩어져 있다.
+     contentText 만 읽으면 간편 리뷰가 통째로 "본문 없음"이 된다. */
+  var EASY_KEYS=['easyReviewFeedback','easyReviewReason','easyReviewReuse','easyReviewTiming','easyReviewTip'];
+  function reviewText(detail){
+    var parts=[];
+    function push(v, depth){
+      if(v==null || depth>4) return;
+      if(typeof v==='string'){ var t=v.replace(/<[^>]*>/g,' ').trim(); if(t) parts.push(t); return; }
+      if(typeof v==='number'){ return; }                 /* 별점 등 숫자는 본문이 아니다 */
+      if(Array.isArray(v)){ v.forEach(function(x){ push(x,depth+1); }); return; }
+      if(typeof v==='object'){
+        /* 답변 객체는 질문이 아니라 답변만 본문으로 친다 */
+        var keys=Object.keys(v).filter(function(k){ return /answer|content|text|value|body/i.test(k); });
+        (keys.length?keys:Object.keys(v)).forEach(function(k){
+          if(/question|title|label|type|id$/i.test(k)) return;
+          push(v[k], depth+1);
+        });
+      }
+    }
+    push(detail&&detail.contentText, 0);
+    if(!parts.length) push(detail&&detail.content, 0);
+    EASY_KEYS.forEach(function(k){ push(detail&&detail[k], 0); });
+    push(detail&&detail.reviewAnswers, 0);
+    return parts.join('\n');
+  }
+
   /* ── 무의미한 언어 판별 ────────────────────────────────
      "ㅁㄴㅇㅁ냗ㅂㅈㄷ", "가가가가거거거" 처럼 내용이 없는 리뷰를 잡는다.
      isSpam() 은 "같은 문장 반복"만 봐서 이런 건 통과시켰다.
      "ㅋㅋㅋ 잘 쓸게요" 같은 정상 리뷰는 걸리지 않도록 실질 음절 수를 함께 본다. */
   function gibberish(text){
     var t=String(text||'').trim();
-    if(!t) return '본문 없음';
+    if(!t) return null;        /* 빈 본문은 미노출 사유가 아니다 — 뒤에서 따로 다룬다 */
     var syll=t.match(/[가-힣]/g)||[];            /* 완성형 한글 */
     var jamo=t.match(/[ㄱ-ㅎㅏ-ㅣ]/g)||[];        /* 자모만 (ㅁㄴㅇㄹ) */
     var alnum=t.match(/[a-zA-Z0-9]/g)||[];
@@ -267,7 +295,7 @@
                          hasImageField:('productImageUrl' in (detail||{}))||('productImage' in (detail||{})),
                          hasPriceField:('productPrice' in (detail||{})) };
 
-    var content = detail.contentText||detail.content||'';
+    var content = reviewText(detail);
     var atts=(detail.attachments||[]).filter(Boolean);
     var exWhy = exbakOf(detail);
 
@@ -281,7 +309,11 @@
     var cls=[]; for(var i=0;i<Math.min(atts.length,4);i++){ var d=await imgDims(atts[i]); cls.push(classifyImg(d.w,d.h)); }
     out.photo=photoVerdict(cls); out.photoCls=cls;
 
-    /* ── 규칙 3: 무의미한 언어만 있으면 검수 대상이 아니다 → 미노출 ── */
+    out.text = content.slice(0,120);   /* 무엇을 읽고 판정했는지 남긴다 */
+
+    /* ── 규칙 3: 무의미한 언어만 있으면 검수 대상이 아니다 → 미노출 ──
+       단 "본문이 비어 있음"은 무의미한 언어가 아니다. 간편 리뷰일 수도 있고
+       엑박 처리가 먼저일 수도 있어, 미노출로 바로 보내지 않는다. */
     var gb=gibberish(content);
     if(gb){ out.action='hide'; out.exec=true; out.reasons.push('무의미한 본문 — '+gb); return out; }
     if(isSpam(content)){ out.action='hide'; out.exec=true; out.reasons.push('본문 도배'); return out; }
@@ -329,6 +361,9 @@
       var nb=await findBrand(item.brandName);
       if(!nb.approvedBrand && !nb.anyExact) out.warn='브랜드 조회 안 됨';
     } catch(e){}
+
+    /* 본문이 정말 비어 있으면 자동 승인하지 않고 사람에게 보낸다 */
+    if(!content){ out.action='hold'; out.reasons.push('본문 없음 → 확인'); return out; }
 
     /* ── 규칙 4: 발색 있는 제품이면 발색샷 유무를 사람이 보고 고른다 ── */
     out.swatch = isSwatch(item.productName);
@@ -553,6 +588,7 @@
                  verdict: VMAP[r.action]||'hold', action:r.action,
                  reason: r.reasons.join(' · '), reasons:r.reasons,
                  applied: !!r.applied, exbak:!!r.exbak, swatch:r.swatch||null, warn:r.warn||null,
+                 text: r.text||'',
                  photo: r.photo?r.photo.label:'', photoCls:r.photoCls||[],
                  product_exact:r.product_exact, attachments:r.attachments||[] };
       })
