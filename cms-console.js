@@ -296,6 +296,74 @@
      그 문구를 유저에게 보내면 검색해도 본인 제품이 안 나와 수정요청이 무한 반복된다.
      이제 정확히 일치할 때만 자동 발송하고, 유사할 뿐이면 사람 확인으로 보낸다. */
   var SIM_MIN = 0.8;
+
+  /* ── 제품 옵션(호수·색상) 조회 ────────────────────────
+     CMS 는 제품명과 옵션을 나눠 저장한다.
+       CMS 제품 : "에센셜 스킨 누더 쿠션"
+       CMS 옵션 : 페어 / 페어핑크 / … / 엔라이트 / …
+     그런데 유저는 "에센셜 스킨 누더 쿠션 엔라이트" 처럼 붙여서 쓴다.
+     그래서 제품명이 안 맞아 보여도, 남는 부분이 옵션이면 같은 제품이다. */
+  var PROD_EP=null, prodCache={}, prodProbeFail=0;
+  function optionNames(o){
+    var out=[];
+    (function walk(v, key, depth){
+      if(v==null || depth>5) return;
+      if(typeof v==='string'){
+        if(/option|variant|호수|색상|추가정보|additional/i.test(key||'')){
+          /* "페어 (14g*2ea), 페어핑크 (14g*2ea)" 같은 한 줄 문자열도 받는다 */
+          v.split(/[,\n·/|]/).forEach(function(t){
+            t=t.replace(/\([^)]*\)/g,'').trim();
+            if(t && t.length<=20) out.push(t);
+          });
+        }
+        return;
+      }
+      if(Array.isArray(v)){ v.forEach(function(x){ walk(x, key, depth+1); }); return; }
+      if(typeof v==='object'){
+        Object.keys(v).forEach(function(k){
+          var inOpt = /option|variant|호수|색상/i.test(k) || /option|variant/i.test(key||'');
+          if(inOpt && /^(name|optionName|title|label|value|text)$/i.test(k) && typeof v[k]==='string'){
+            var t=v[k].replace(/\([^)]*\)/g,'').trim();
+            if(t && t.length<=20) out.push(t);
+            return;
+          }
+          walk(v[k], inOpt ? (key||k) : k, depth+1);
+        });
+      }
+    })(o, '', 0);
+    var seen={}, uniq=[];
+    out.forEach(function(t){ var n=norm(t); if(n && !seen[n]){ seen[n]=1; uniq.push(t); } });
+    return uniq;
+  }
+  async function productOptions(pid){
+    if(prodCache[pid]!==undefined) return prodCache[pid];
+    /* 엔드포인트를 못 찾는 환경이면 매 건마다 헛되이 3번씩 찌르지 않는다 */
+    if(!PROD_EP && prodProbeFail>=3){ prodCache[pid]=null; return null; }
+    var eps = PROD_EP ? [PROD_EP] :
+      [API+'/admin/products/{id}', API+'/admin/product/{id}', API+'/admin/products/{id}/options'];
+    for(var i=0;i<eps.length;i++){
+      var r=await get(eps[i].replace('{id}', pid));
+      if(r.status===200 && r.json){
+        PROD_EP=eps[i];
+        if(!SCHEMA.productKeys) SCHEMA.productKeys=Object.keys(r.json).sort();
+        if(!SCHEMA.productEndpoint) SCHEMA.productEndpoint=eps[i];
+        var opts=optionNames(r.json);
+        prodCache[pid]=opts; return opts;
+      }
+      await delay(60);
+    }
+    if(!PROD_EP) prodProbeFail++;
+    prodCache[pid]=null; return null;   /* 조회 실패 — 옵션 확인 불가 */
+  }
+
+  /* 유저 입력에서 CMS 제품명을 뺀 나머지를 돌려준다 (옵션 후보) */
+  function residueOf(userNorm, cmsNorm){
+    if(!cmsNorm || cmsNorm.length>=userNorm.length) return null;
+    if(userNorm.indexOf(cmsNorm)!==0 && userNorm.lastIndexOf(cmsNorm)!==userNorm.length-cmsNorm.length
+       && userNorm.indexOf(cmsNorm)<0) return null;
+    return userNorm.split(cmsNorm).join('');
+  }
+
   async function findProduct(brandId, productName){
     var toks=tokenize(productName); var seen={}, cand=[];
     for(var i=0;i<toks.length;i++){
@@ -304,13 +372,38 @@
       rows.forEach(function(p){ if(p&&p.id!=null&&!seen[p.id]){seen[p.id]=1;cand.push({id:p.id,name:p.name||p.productName||''});} });
       await delay(80);
     }
-    var target=norm(productName.replace(/\[[^\]]*\]/g,''));
+    var raw=productName.replace(/\[[^\]]*\]/g,'');
+    var target=norm(raw);
 
+    /* 1) 상품명이 그대로 일치 */
     var exact=cand.filter(function(p){ return norm(p.name)===target; });
     if(exact.length===1) return { pick:exact[0], confident:true,  why:'상품명 정확히 일치', candidates:cand };
     if(exact.length>1)   return { pick:null,     confident:false, why:'동일 상품명 '+exact.length+'건 — 사람이 선택', candidates:cand };
 
-    /* 포함 관계이되 길이가 충분히 비슷할 때만 후보로 본다 */
+    /* 2) 제품명 + 옵션(호수·색상) 조합인지 확인.
+          남는 부분이 실제 옵션이면 같은 제품으로 본다. */
+    var prefixed=cand.filter(function(p){ return residueOf(target, norm(p.name)); })
+                     .sort(function(a,b){ return norm(b.name).length-norm(a.name).length; });  /* 긴 이름 우선 */
+    for(var k=0;k<Math.min(prefixed.length,3);k++){
+      var p=prefixed[k];
+      var res=residueOf(target, norm(p.name));
+      var opts=await productOptions(p.id);
+      if(opts && opts.length){
+        var hit=null;
+        for(var j=0;j<opts.length;j++){ if(norm(opts[j])===res){ hit=opts[j]; break; } }
+        if(hit) return { pick:p, confident:true, option:hit,
+                         why:'제품명 일치 · 남은 «'+hit+'» 는 옵션', candidates:cand };
+      }
+      /* 옵션을 못 받았거나 안 맞으면 아래에서 사람 확인으로 넘긴다 */
+    }
+    if(prefixed.length){
+      var f=prefixed[0], fr=residueOf(target, norm(f.name));
+      return { pick:f, confident:false,
+               why:'「'+f.name+'」 + 남은 «'+fr+'»'+(prodCache[f.id]===null?' (옵션 조회 실패)':' (옵션에 없음)')
+                   +' — 사람이 확인', candidates:cand };
+    }
+
+    /* 3) 길이가 비슷한 포함 관계 */
     var near=cand.filter(function(p){
       var pn=norm(p.name); if(!pn) return false;
       if(target.indexOf(pn)<0 && pn.indexOf(target)<0) return false;
@@ -338,7 +431,7 @@
 
     var out={ id:item.id, brand:item.brandName, product:item.productName, user:item.userNickname,
               visible:item.visible, exbak:!!exWhy, reasons:[], photo:null, action:null, exec:false, msg:null,
-              product_exact:null, product_id:null, swatch:null, warn:null,
+              product_exact:null, product_id:null, product_option:null, swatch:null, warn:null,
               attachments:atts.slice(0,6),
               approvable:false };   /* 그리드에서 승인/발색샷요청을 고를 수 있는 건인지 */
 
@@ -371,10 +464,13 @@
       }
       var pr=await findProduct(b.approvedBrand.id, item.productName);
       if(pr.pick && pr.confident){
-        /* 4번: 브랜드○ 제품○ → 템플릿 수정요청 (일괄 실행 대상) */
+        /* 4번: 브랜드○ 제품○ → 템플릿 수정요청 (일괄 실행 대상).
+           옵션까지 확인된 건이면 유저에게는 옵션을 뺀 "제품명"으로 검색하라고 안내한다. */
         out.action='revise_product'; out.exec=true;
         out.product_exact=pr.pick.name; out.product_id=pr.pick.id;
-        out.reasons.push('브랜드○ 제품○ → 재선택 요청');
+        out.product_option=pr.option||null;
+        out.reasons.push(pr.option ? '브랜드○ 제품○ (옵션 «'+pr.option+'») → 재선택 요청'
+                                   : '브랜드○ 제품○ → 재선택 요청');
       } else if(pr.pick){
         out.action='hold';
         out.product_exact=pr.pick.name; out.product_id=pr.pick.id;
@@ -634,7 +730,8 @@
                  applied: !!r.applied, exbak:!!r.exbak, swatch:r.swatch||null, warn:r.warn||null,
                  text: r.text||'',
                  photo: r.photo?r.photo.label:'', photoCls:r.photoCls||[],
-                 product_exact:r.product_exact, attachments:r.attachments||[] };
+                 product_exact:r.product_exact, product_option:r.product_option||null,
+                 attachments:r.attachments||[] };
       })
     };
   }
