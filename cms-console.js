@@ -356,6 +356,28 @@
     prodCache[pid]=null; return null;   /* 조회 실패 — 옵션 확인 불가 */
   }
 
+  /* ── 토큰 단위 비교 ────────────────────────────────────
+     유저는 제품명을 마음대로 쓴다. 단어를 빠뜨리기도 하고 덧붙이기도 한다.
+       유저 "코쿤 드 세레니떼 필로우 미스트"
+       CMS  "코쿤 드 세레니떼 릴랙싱 필로우 미스트"   ← 중간에 단어가 더 있다
+     문자열 포함으로는 안 잡히므로 단어 집합으로 비교한다.
+     어느 쪽이 더 완전한지에 따라 뜻이 달라진다.
+       유저 ⊂ CMS : 유저가 단어를 빠뜨림 → 같은 제품일 가능성이 높다
+       CMS ⊂ 유저 : 유저가 옵션·에디션을 덧붙임 → 옵션인지 별개 제품인지 확인 필요 */
+  function tokensOf(name){
+    return String(name||'')
+      .replace(/\[[^\]]*\]/g,' ').replace(/\([^)]*\)/g,' ')
+      .split(/[\s·/,+&]+/)
+      .map(function(t){ return t.replace(/[^0-9a-zA-Z가-힣]/g,'').toLowerCase(); })
+      .filter(Boolean);
+  }
+  function tokenCover(a, b){          /* a 의 단어가 b 에 얼마나 들어 있나 (0~1) */
+    if(!a.length) return 0;
+    var set={}; b.forEach(function(t){ set[t]=1; });
+    var hit=0; a.forEach(function(t){ if(set[t]) hit++; });
+    return hit/a.length;
+  }
+
   /* 유저 입력에서 CMS 제품명을 뺀 나머지를 돌려준다 (옵션 후보) */
   function residueOf(userNorm, cmsNorm){
     if(!cmsNorm || cmsNorm.length>=userNorm.length) return null;
@@ -380,7 +402,32 @@
     if(exact.length===1) return { pick:exact[0], confident:true,  why:'상품명 정확히 일치', candidates:cand };
     if(exact.length>1)   return { pick:null,     confident:false, why:'동일 상품명 '+exact.length+'건 — 사람이 선택', candidates:cand };
 
-    /* 2) 제품명 + 옵션(호수·색상) 조합인지 확인.
+    /* 2) 유저가 단어를 빠뜨린 경우 — CMS 이름이 더 완전하다.
+          유저의 단어가 전부 CMS 이름에 있고, CMS 이름도 충분히 덮이면 같은 제품으로 본다.
+          ("쿠션" 하나로 "에센셜 스킨 누더 쿠션"에 붙는 것은 덮는 비율이 낮아 걸러진다) */
+    var uT=tokensOf(raw);
+    var subset=cand.map(function(p){
+      var cT=tokensOf(p.name);
+      return { p:p, cT:cT, uInC:tokenCover(uT,cT), cInU:tokenCover(cT,uT) };
+    }).filter(function(x){
+      return uT.length>=2 && x.uInC>=0.999 && x.cT.length>=uT.length && x.cInU>=0.6;
+    }).sort(function(a,b){ return b.cInU-a.cInU; });
+
+    if(subset.length===1 || (subset.length>1 && subset[0].cInU>subset[1].cInU)){
+      var w=subset[0];
+      var missing=w.cT.filter(function(t){ return uT.indexOf(t)<0; });
+      return { pick:w.p, confident:true,
+               why: missing.length ? '유저가 «'+missing.join(' ')+'» 를 빠뜨림 — CMS 이름이 더 완전'
+                                   : '단어는 같고 괄호·기호 표기만 다름',
+               candidates:cand };
+    }
+    if(subset.length>1){
+      return { pick:subset[0].p, confident:false,
+               why:'단어를 빠뜨린 후보 '+subset.length+'건 ['+subset.slice(0,4).map(function(x){return x.p.name;}).join(' / ')+'] — 사람이 선택',
+               candidates:cand };
+    }
+
+    /* 3) 제품명 + 옵션(호수·색상) 조합인지 확인.
           남는 부분이 실제 옵션이면 같은 제품으로 본다. */
     var prefixed=cand.filter(function(p){ return residueOf(target, norm(p.name)); })
                      .sort(function(a,b){ return norm(b.name).length-norm(a.name).length; });  /* 긴 이름 우선 */
@@ -408,7 +455,7 @@
                candidates:cand };
     }
 
-    /* 3) 길이가 비슷한 포함 관계 */
+    /* 4) 길이가 비슷한 포함 관계 */
     var near=cand.filter(function(p){
       var pn=norm(p.name); if(!pn) return false;
       if(target.indexOf(pn)<0 && pn.indexOf(target)<0) return false;
@@ -610,6 +657,12 @@
           +'<div style="font-size:11px;color:#7f948b;margin-top:2px">'+esc(r.reasons.join(' · '))
           + (r.photo&&r.photo.v!=='none'?' · 사진:'+esc(r.photo.label):'')
           + (r.product_exact?' · <span style="color:#3ddc97">→ '+esc(r.product_exact)+'</span>':'')+'</div>'
+          + (!exec && r.product_exact && !r.applied
+              ? '<button class="csFix" data-id="'+r.id+'" '
+                +'style="margin-top:7px;width:100%;background:#1b3329;color:#9fe3c4;border:1px solid #3ddc97;'
+                +'border-radius:7px;padding:7px 9px;font:inherit;font-size:11.5px;font-weight:700;cursor:pointer">'
+                +'「'+esc(r.product_exact)+'」로 수정요청</button>'
+              : '')
           +'</div>'+(exec?'</label>':'</div>')
           +'</div>';
       });
@@ -635,6 +688,16 @@
     /* 링크는 label 안에 있어 클릭이 체크박스까지 토글한다 — 막는다 */
     [].slice.call(box.querySelectorAll('.csLink')).forEach(function(a){
       a.onclick=function(ev){ ev.stopPropagation(); };
+    });
+    /* 확인 목록에서 한 번에 수정요청 — 확인창은 runJobs 가 띄운다 */
+    [].slice.call(box.querySelectorAll('.csFix')).forEach(function(b){
+      b.onclick=function(ev){
+        ev.stopPropagation(); ev.preventDefault();
+        var r=results.filter(function(x){ return String(x.id)===String(b.dataset.id); })[0];
+        if(!r || !r.product_exact) return;
+        r.action='revise_product';
+        runJobs([r]);
+      };
     });
     document.getElementById('csRescan').onclick=function(){ renderStart(sd); };
     document.getElementById('csDl').onclick=function(){ dl(auditPayload(),'unpa-audit-'+sd+'.json'); };
