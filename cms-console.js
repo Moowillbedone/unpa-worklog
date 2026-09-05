@@ -73,6 +73,15 @@
     '세제','락스','섬유유연','표백','세탁','주방세제','살균소독',
     '관절','혈압','혈당','소화제','진통제','감기약','파스'
   ];
+  /* 짧은 키워드는 다른 낱말 속에 우연히 들어간다.
+     "링링 파스텔 네일"의 «파스», "릴락스 크림"의 «락스» 처럼.
+     그 낱말이 보이면 해당 키워드 판정을 건너뛴다. */
+  var NB_EXCEPT = {
+    '파스': /파스텔|파스타|파스텔톤/,
+    '락스': /릴락스|릴렉스|블락스|플락스|락스타/,
+    '세제': /세제거|각질세제/,
+    '관절': /관절염크림|무릎관절보호대/
+  };
 
   /* ── 인증 가로채기 ── */
   function grab(h){ try{ if(!h) return; var o={};
@@ -162,7 +171,13 @@
     /* 물티슈는 화장·클렌징용만 취급한다 */
     if(n.indexOf('물티슈')>=0)
       return /클렌징|메이크업|화장|리무버|페이셜|아이|립|선케어/.test(n) ? null : '뷰티용 아닌 물티슈';
-    for(var j=0;j<NOT_BEAUTY.length;j++) if(n.indexOf(NOT_BEAUTY[j])>=0) return NOT_BEAUTY[j];
+    for(var j=0;j<NOT_BEAUTY.length;j++){
+      var kw=NOT_BEAUTY[j];
+      if(n.indexOf(kw)<0) continue;
+      var ex=NB_EXCEPT[kw];
+      if(ex && ex.test(n)) continue;      /* 다른 낱말의 일부다 — 차단하지 않는다 */
+      return kw;
+    }
     return null;
   }
 
@@ -364,8 +379,20 @@
      어느 쪽이 더 완전한지에 따라 뜻이 달라진다.
        유저 ⊂ CMS : 유저가 단어를 빠뜨림 → 같은 제품일 가능성이 높다
        CMS ⊂ 유저 : 유저가 옵션·에디션을 덧붙임 → 옵션인지 별개 제품인지 확인 필요 */
+  /* "10 ml", "50g", "14g*2ea", "30매" 같은 용량·수량 표기는 제품명이 아니다.
+     이게 남아 있으면 잔여 문자열이 «10ml라임민트» 가 되어 옵션 «라임민트» 와 안 맞는다.
+     숫자 뒤에 단위가 바로 오는 것만 지운다 ("1025 독도 토너"의 1025 는 남긴다). */
+  var SIZE_RE = /\d+(?:\.\d+)?\s*(?:ml|mL|ML|l|L|g|G|kg|KG|mg|MG|밀리리터|리터|매|장|개입|개|ea|EA|정|포|캡슐|스틱|호|팩|쿠션)(?![가-힣a-zA-Z0-9])/g;
+  var COMBO_RE = /\d+\s*[*x×]\s*\d+\s*(?:ea|EA|개|매)?/g;
+  function stripSize(str){
+    return String(str||'')
+      .replace(COMBO_RE,' ').replace(SIZE_RE,' ')
+      .replace(/[*×]/g,' ')          /* 용량을 걷어내고 남은 곱셈 기호 (콜라보 표기의 X 는 남긴다) */
+      .replace(/\s+/g,' ').trim();
+  }
+
   function tokensOf(name){
-    return String(name||'')
+    return stripSize(String(name||''))
       .replace(/\[[^\]]*\]/g,' ').replace(/\([^)]*\)/g,' ')
       .split(/[\s·/,+&]+/)
       .map(function(t){ return t.replace(/[^0-9a-zA-Z가-힣]/g,'').toLowerCase(); })
@@ -394,11 +421,13 @@
       rows.forEach(function(p){ if(p&&p.id!=null&&!seen[p.id]){seen[p.id]=1;cand.push({id:p.id,name:p.name||p.productName||''});} });
       await delay(80);
     }
-    var raw=productName.replace(/\[[^\]]*\]/g,'');
-    var target=norm(raw);
+    /* 유저 입력과 CMS 이름 모두 용량 표기를 뺀 뒤 비교한다 */
+    var nm = function(x){ return norm(stripSize(String(x||''))); };
+    var raw=stripSize(productName.replace(/\[[^\]]*\]/g,''));
+    var target=nm(raw);
 
     /* 1) 상품명이 그대로 일치 */
-    var exact=cand.filter(function(p){ return norm(p.name)===target; });
+    var exact=cand.filter(function(p){ return nm(p.name)===target; });
     if(exact.length===1) return { pick:exact[0], confident:true,  why:'상품명 정확히 일치', candidates:cand };
     if(exact.length>1)   return { pick:null,     confident:false, why:'동일 상품명 '+exact.length+'건 — 사람이 선택', candidates:cand };
 
@@ -429,11 +458,11 @@
 
     /* 3) 제품명 + 옵션(호수·색상) 조합인지 확인.
           남는 부분이 실제 옵션이면 같은 제품으로 본다. */
-    var prefixed=cand.filter(function(p){ return residueOf(target, norm(p.name)); })
+    var prefixed=cand.filter(function(p){ return residueOf(target, nm(p.name)); })
                      .sort(function(a,b){ return norm(b.name).length-norm(a.name).length; });  /* 긴 이름 우선 */
     for(var k=0;k<Math.min(prefixed.length,3);k++){
       var p=prefixed[k];
-      var res=residueOf(target, norm(p.name));
+      var res=residueOf(target, nm(p.name));
       var opts=await productOptions(p.id);
       if(opts && opts.length){
         var hit=null;
@@ -444,7 +473,7 @@
       /* 옵션을 못 받았거나 안 맞으면 아래에서 사람 확인으로 넘긴다 */
     }
     if(prefixed.length){
-      var f=prefixed[0], fr=residueOf(target, norm(f.name));
+      var f=prefixed[0], fr=residueOf(target, nm(f.name));
       var fo=prodCache[f.id];
       /* 왜 확정 못 했는지 구분해서 보여 준다 — 조회 실패와 "옵션에 없음"은 다른 문제다 */
       var note = (fo===null)          ? '옵션 조회 실패'
@@ -457,7 +486,7 @@
 
     /* 4) 길이가 비슷한 포함 관계 */
     var near=cand.filter(function(p){
-      var pn=norm(p.name); if(!pn) return false;
+      var pn=nm(p.name); if(!pn) return false;
       if(target.indexOf(pn)<0 && pn.indexOf(target)<0) return false;
       var mn=Math.min(pn.length,target.length), mx=Math.max(pn.length,target.length);
       return mx>0 && mn/mx>=SIM_MIN;
