@@ -9,19 +9,20 @@
  * ============================================================ */
 (function () {
   'use strict';
-  if (!location.host.includes('cms.unpa.me')) { alert('cms.unpa.me 에서 실행해주세요.'); return; }
+  if (location.hostname!=='cms.unpa.me') { alert('cms.unpa.me 에서 실행해주세요.'); return; }
   if (window.__RECON) { var b = document.getElementById('rcDl'); if (b) b.click(); return; }
 
   var L = window.__RECON = { url: location.href, at: new Date().toISOString(), calls: [], mutations: [], dom: {} };
 
   /* ── 네트워크 관찰 ── */
   function rec(method, url, status, body, reqBody) {
+    try{var parsed=new URL(url,location.origin);if(parsed.origin!=='https://api-v2.unpa.me'||!parsed.pathname.startsWith('/admin/'))return;}catch(e){return;}
     var top = [], keys = [], sample = null, items = null;
     try {
       var j = typeof body === 'string' ? JSON.parse(body) : body;
       if (j && typeof j === 'object') {
         top = Object.keys(j).slice(0, 30);
-        var arr = Array.isArray(j) ? j
+        var arr = Array.isArray(j.results)?j.results:Array.isArray(j.result)?j.result:Array.isArray(j) ? j
           : (j.data && j.data.length ? j.data
           : (j.content && j.content.length ? j.content
           : (j.list && j.list.length ? j.list
@@ -36,6 +37,7 @@
     var trim = function (o) {
       try {
         return JSON.parse(JSON.stringify(o, function (k, v) {
+          if(/token|authorization|password|cookie|secret/i.test(k))return '[redacted]';
           return typeof v === 'string' && v.length > 300 ? v.slice(0, 300) + '…' : v;
         }));
       } catch (e) { return null; }
@@ -47,11 +49,13 @@
       items: items ? trim(items) : null,
       reqBody: reqBody ? String(reqBody).slice(0, 500) : null
     });
+    if(L.calls.length>200)L.calls.shift();
     if (method && !/^GET$/i.test(method) && method !== '(이미로드됨)') {
       L.mutations.push({ method: method, url: String(url).split('?')[0],
                          query: String(url).split('?')[1] || '', status: status,
                          reqBody: reqBody ? String(reqBody).slice(0, 800) : null,
                          response: typeof body === 'string' ? body.slice(0, 800) : null });
+      if(L.mutations.length>100)L.mutations.shift();
     }
     draw();
   }
@@ -63,9 +67,9 @@
     try {
       p.then(function (r) {
         r.clone().text().then(function (t) {
-          rec((a[1] && a[1].method) || 'GET', u, r.status, t, a[1] && a[1].body);
+          rec((a[1] && a[1].method) || (a[0]&&a[0].method) || 'GET', u, r.status, t, a[1] && a[1].body);
         }).catch(function () {});
-      });
+      }).catch(function(){});
     } catch (e) {}
     return p;
   };
@@ -160,9 +164,16 @@
       + '<br><span style="font-size:11.5px">목록 → 상세를 2~3개 열어보면 더 정확해집니다.</span></div>'
       + '<button id="rcDl" style="margin-top:10px;background:#3ddc97;color:#04130c;border:0;border-radius:8px;'
       + 'padding:8px 14px;font-weight:800;cursor:pointer;width:100%">JSON 내려받기</button>'
-      + '<div style="margin-top:7px;font-size:11px;color:#6b7f77">읽기 전용 · 클릭/전송 없음</div>';
+      + '<button id="rcStop">관찰 중지</button>'
+      + '<div style="margin-top:7px;font-size:11px;color:#6b7f77">읽기 전용 · 클릭/전송 없음 · 최근 200요청 보관</div>';
     var btn = document.getElementById('rcDl');
     if (btn) btn.onclick = dl;
+    var stop=document.getElementById('rcStop');if(stop)stop.onclick=function(){
+      clearInterval(timer);if(window.fetch===hookFetch)window.fetch=oF;
+      if(XMLHttpRequest.prototype.open===hookOpen)XMLHttpRequest.prototype.open=OX;
+      if(XMLHttpRequest.prototype.send===hookSend)XMLHttpRequest.prototype.send=OS;
+      window.__RECON=null;box.remove();
+    };
   }
 
   function dl() {
@@ -171,9 +182,10 @@
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = 'cms-recon-' + (L.dom.reviewId || 'list') + '.json';
-    document.body.appendChild(a); a.click(); a.remove();
+    document.body.appendChild(a); a.click(); a.remove();setTimeout(function(){URL.revokeObjectURL(a.href);},1000);
   }
 
+  var hookFetch=window.fetch,hookOpen=XMLHttpRequest.prototype.open,hookSend=XMLHttpRequest.prototype.send;
   scanDom(); draw();
-  setInterval(scanDom, 3000);
+  var timer=setInterval(scanDom, 3000);
 })();

@@ -15,6 +15,7 @@
  * ============================================================ */
 (function () {
   'use strict';
+  alert('이전 고정 대상 적용기는 중단되었습니다. 리뷰검수콘솔에서 날짜를 스캔하고 대상을 선택하세요.');return;
   if (!location.host.includes('cms.unpa.me')) { alert('cms.unpa.me 에서 실행해주세요.'); return; }
 
   try { var old = document.getElementById('cmsApplyBox'); if (old) old.remove(); } catch (e) {}

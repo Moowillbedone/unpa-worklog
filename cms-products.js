@@ -11,6 +11,7 @@
  * ============================================================ */
 (function () {
   'use strict';
+  alert('이전 고정 12건 검색기는 중단되었습니다. 리뷰검수콘솔의 브랜드 전체 상품 검색을 사용하세요.');return;
   if (!location.host.includes('cms.unpa.me')) { alert('cms.unpa.me 에서 실행해주세요.'); return; }
 
   try { var old = document.getElementById('cmsProdBox'); if (old) old.remove(); } catch (e) {}

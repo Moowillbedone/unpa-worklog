@@ -1,0 +1,9 @@
+{
+  "name": "unpa-worklog",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.cjs",
+    "build": "node scripts/build-local.cjs",
+    "check": "npm test && npm run build"
+  }
+}

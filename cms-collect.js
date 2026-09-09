@@ -12,7 +12,9 @@
  * ============================================================ */
 (function () {
   'use strict';
-  if (!location.host.includes('cms.unpa.me')) { alert('cms.unpa.me 에서 실행해주세요.'); return; }
+  function isAdmin(u){try{var x=new URL(u,location.origin);return x.origin==='https://api-v2.unpa.me'&&x.pathname.startsWith('/admin/');}catch(e){return false;}}
+  if (location.hostname !== 'cms.unpa.me') { alert('cms.unpa.me 에서 실행해주세요.'); return; }
+  if (window.__COLLECT_RUNNING) {alert('수집 중입니다. 완료 후 다시 실행하세요.');return;}
 
   /* 재실행 허용 — 이전 실행 흔적 정리 */
   try { var old = document.getElementById('cmsCollectBox'); if (old) old.remove(); } catch (e) {}
@@ -53,7 +55,7 @@
   window.fetch = function () {
     var a = arguments, u = String((a[0] && a[0].url) || a[0] || '');
     try {
-      if (u.indexOf('/admin/') >= 0) { if (a[0] && a[0].headers) grab(a[0].headers); if (a[1] && a[1].headers) grab(a[1].headers); }
+      if (isAdmin(u)) { if (a[0] && a[0].headers) grab(a[0].headers); if (a[1] && a[1].headers) grab(a[1].headers); }
     } catch (e) {}
     return oF.apply(this, a);
   };
@@ -62,15 +64,15 @@
     var OX = XMLHttpRequest.prototype.open, OSH = XMLHttpRequest.prototype.setRequestHeader;
     XMLHttpRequest.prototype.open = function (m, u) { this.__u = u; return OX.apply(this, arguments); };
     XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
-      try { if (String(k).toLowerCase() === 'authorization' && String(this.__u).indexOf('/admin/') >= 0) {
+      try { if (String(k).toLowerCase() === 'authorization' && isAdmin(this.__u)) {
         AUTH = v; window.__COLLECT_AUTH = v; } } catch (e) {}
       return OSH.apply(this, arguments);
     };
   }
 
-  function H() { var h = { 'Accept': 'application/json' }; if (AUTH) h['Authorization'] = AUTH; return h; }
+  function H() { AUTH=window.__COLLECT_AUTH||AUTH; var h = { 'Accept': 'application/json' }; if (AUTH) h['Authorization'] = AUTH; return h; }
   function get(url) {
-    return oF.call(window, url, { headers: H(), credentials: 'include' })
+    return oF.call(window, url, { headers: H(), credentials: 'include',signal:AbortSignal.timeout(20000) })
       .then(function (r) { return r.text().then(function (t) {
         var j = null; try { j = JSON.parse(t); } catch (e) {}
         return { status: r.status, json: j, text: t.slice(0, 300) };
@@ -160,13 +162,17 @@
         say('<b style="color:#ff8f6b">목록 조회 실패 (HTTP ' + r.status + ')</b><br>' + r.text.slice(0, 150));
         window.__COLLECT_RUNNING = false; return;
       }
-      total = r.json.totalCount || 0;
-      var rows = r.json.result || [];
+      total = r.json.totalCount || r.json.total || r.json.totalElements || 0;
+      var rows = [r.json.results,r.json.result,r.json.data,r.json.content,r.json].find(Array.isArray);
+      if(!rows)throw Error('목록 응답 형식 변경');
+      if(rows.some(function(x){return all.some(function(y){return x.id===y.id;});}))throw Error('페이지 반복');
       all = all.concat(rows);
-      if (rows.length < 100 || all.length >= total) break;
+      if ((!rows.length&&!total) || (total>0&&all.length>=total)) break;
+      if(!rows.length)throw Error('목록 응답 불완전');
       page++;
     }
-    OUT.totalCount = total; OUT.list = all;
+    if(page>30)throw Error('조회 상한 초과 — 범위를 줄이세요');
+    OUT.totalCount = total||all.length; OUT.list = all;
 
     /* 2) 상세 엔드포인트 탐색 */
     if (all.length) {
@@ -204,5 +210,5 @@
       + '<br>상세 방식: ' + (OUT.detailEndpoint ? '찾음' : '<span style="color:#ff8f6b">못 찾음</span>')
       + '<br><br><b>cms-reviews-' + sd + '.json</b> 내려받음 → 건무에게 전달');
     window.__COLLECT_RUNNING = false;
-  })();
+  })().catch(function(){say('수집 중단 — 불완전 응답/오류. 완료 자료로 사용하지 마세요.');}).finally(function(){window.__COLLECT_RUNNING=false;});
 })();

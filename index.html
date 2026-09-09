@@ -7,6 +7,7 @@
 <meta name="color-scheme" content="light" />
 <meta name="theme-color" content="#eef1f0" />
 <title>리뷰·제품등록 업무일지</title>
+<script src="worklog-core.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <style>
@@ -323,16 +324,16 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
       </div>
       <div class="warn" id="aEmpty">
         아직 기록이 없습니다. 순서는 이렇습니다.<br><br>
-        <b>1.</b> <a href="tools.html" style="color:var(--mint-dk);font-weight:700">📥 리뷰 수집기</a>로 그날 검수대기 리뷰를 전부 받습니다<br>
-        <b>2.</b> 받은 JSON을 건무에게 전달하면 판정해서 <b>판정 결과 JSON</b>을 돌려줍니다<br>
-        <b>3.</b> 위 <b>[판정 결과 불러오기]</b>로 넣으면 여기에 날짜별로 쌓입니다
+        <b>1.</b> <a href="tools.html" style="color:var(--mint-dk);font-weight:700">🧭 리뷰 검수 콘솔</a>에서 날짜별로 스캔합니다<br>
+        <b>2.</b> 사진·본문과 후보를 확인하고 선택한 건만 실행합니다<br>
+        <b>3.</b> 콘솔의 <b>[업무일지 반영]</b>을 누르거나 <b>[검수기록 JSON]</b>을 여기서 불러오세요. 검수 상세는 이 브라우저/JSON에 보관됩니다
       </div>
       <div class="tw" id="aDaysWrap" hidden>
         <table class="mtable">
           <thead><tr>
             <th>날짜</th><th style="text-align:right">대상</th>
-            <th style="text-align:right">검수완료</th><th style="text-align:right">미노출</th>
-            <th style="text-align:right">발색샷 요청</th><th style="text-align:right">제품 매칭</th>
+            <th style="text-align:right">승인 판정</th><th style="text-align:right">미노출 판정</th>
+            <th style="text-align:right">발색샷 요청</th><th style="text-align:right">제품 매칭/수동등록</th>
             <th style="text-align:right">보류</th><th style="text-align:right">적용</th>
           </tr></thead>
           <tbody id="aDays"></tbody>
@@ -373,14 +374,14 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
           <tbody>
             <tr><td><span class="vd approve">검수완료</span></td>
                 <td>제품 매칭 ✓ · 직접 촬영 사진 · 본문 정상 · <b>컬러 제품이면 발색샷 있음</b></td>
-                <td><code>POST /approve</code></td><td>자동</td></tr>
+                <td><code>POST /approve</code></td><td>사람 확인 후 실행</td></tr>
             <tr><td><span class="vd hide">미노출</span></td>
-                <td>사진 도용(웹 이미지·스크린샷) · 제품과 무관한 사진 · 본문 도배</td>
-                <td><code>PUT {visible:false}</code></td><td>자동</td></tr>
+                <td>무의미한 본문 · 사람이 확인한 문제 사진/도배. 해상도만으로 도용 판정하지 않음</td>
+                <td><code>PUT {visible:false}</code></td><td>사람 확인 후 실행</td></tr>
             <tr><td><span class="vd revise">발색샷 요청</span></td>
                 <td>컬러 제품(립·틴트·파운데이션·팩트·네일 등)인데 <b>발색샷 없음</b><br>
                     <span style="color:var(--dim)">뚜껑만 닫힌 사진 / 컬러는 보이나 발색 없음</span></td>
-                <td>수정요청 · 발색샷 템플릿</td><td>자동</td></tr>
+                <td>수정요청 · 발색샷 템플릿</td><td>사람 확인 후 실행</td></tr>
             <tr><td><span class="vd revise2">제품 매칭 요청</span></td>
                 <td>엑박이지만 <b>CMS에 해당 제품이 이미 있음</b></td>
                 <td>수정요청 · 상품명 템플릿</td><td><b>사람</b></td></tr>
@@ -489,6 +490,7 @@ const pend = {};
 
 /* ── 유틸 ── */
 const $ = s => document.querySelector(s);
+const htmlEscape = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2, '0');
 const won = n => '₩' + Math.round(n).toLocaleString('ko-KR');
 const num = n => Number(n || 0).toLocaleString('ko-KR');
@@ -533,26 +535,32 @@ function sync(txt, warn){
 }
 
 /* ── 저장 (localStorage) ── */
-const LS = 'unpa-worklog-v1';
+let LS = 'unpa-worklog-v1';
+let STORAGE_CONFLICT=false;
+window.addEventListener('storage',e=>{if(e.key===LS){STORAGE_CONFLICT=true;sync('● 다른 탭에서 기록 변경됨 — 백업 후 새로고침하세요',true);}});
 function persist(){
+  if(STORAGE_CONFLICT)return false;
   try {
-    localStorage.setItem(LS, JSON.stringify({ v:1, savedAt:new Date().toISOString(), months:ST }));
+    localStorage.setItem(LS, JSON.stringify({ v:1, savedAt:new Date().toISOString(), months:ST, dirty:[...dirty] }));
     return true;
   } catch(e){ return false; }
 }
 const dirty = new Set();
 function save(m){
-  if (m) dirty.add(m);
+  if (m) {dirty.add(m);month(m)._u=new Date(Math.max(Date.now(),Date.parse(month(m)._u||0)+1||0)).toISOString();}
+  if(!persist()){sync('● 저장 실패 — 브라우저 저장공간 확인',true);return false;}
   clearTimeout(save._t);
   save._t = setTimeout(async () => {
     if (!persist()){ sync('● 저장 실패 — 브라우저 저장공간 확인', true); return; }
     const t = new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
     if (typeof SB !== 'undefined' && SB && SB_USER){
-      for (const mm of [...dirty]){ await pushMonth(mm); dirty.delete(mm); }
-    } else { dirty.clear(); sync('● 이 브라우저에 저장됨 <b>' + t + '</b>'); }
+      for (const mm of [...dirty]) await pushMonth(mm);
+    } else { sync('● 이 브라우저에 저장됨 <b>' + t + '</b>'); }
   }, 700);
+  return true;
 }
 function edit(m, d, field, val){
+  if((field==='r'||field==='p')&&!Number.isSafeInteger(Math.max(0,Number(val)||0))){toast('건수는 안전한 범위의 정수로 입력하세요',true);return;}
   const day = month(m).days[d];
   day[field] = (field === 'r' || field === 'p') ? Math.max(0, parseInt(val,10) || 0) : String(val || '');
   save(m); renderAll(false);
@@ -609,8 +617,8 @@ function renderDays(){
       `<td><input class="num" type="number" min="0" value="${d.r||''}" placeholder="0" data-d="${dd}" data-f="r" inputmode="numeric"></td>` +
       `<td><input class="num" type="number" min="0" value="${d.p||''}" placeholder="0" data-d="${dd}" data-f="p" inputmode="numeric"></td>` +
       `<td class="inc ${inc>0?'pos':'zero'}">${inc>0?won(inc):'—'}</td>` +
-      `<td><input class="memo" type="text" value="${(d.memo||'').replace(/"/g,'&quot;')}" placeholder="—" data-d="${dd}" data-f="memo"></td>` +
-      `<td><input class="memo" type="text" value="${(d.unreg||'').replace(/"/g,'&quot;')}" placeholder="—" data-d="${dd}" data-f="unreg"></td>` +
+      `<td><input class="memo" type="text" value="${htmlEscape(d.memo)}" placeholder="—" data-d="${dd}" data-f="memo"></td>` +
+      `<td><input class="memo" type="text" value="${htmlEscape(d.unreg)}" placeholder="—" data-d="${dd}" data-f="unreg"></td>` +
     `</tr>`;
   }
   $('#dayBody').innerHTML = rows;
@@ -625,6 +633,7 @@ function renderDays(){
 
 /* ── 렌더: 차트 ── */
 function renderCharts(){
+  if(typeof Chart==='undefined') return;
   const t = month(cur), n = daysIn(cur);
   const labels = [], inc = [], rv = [], pd = [];
   for (let i = 1; i <= n; i++){
@@ -721,6 +730,7 @@ $('#today').onclick = () => { cur = TODAY_M; renderAll();
 
 [['#tR','r'],['#tP','p'],['#tM','memo'],['#tU','unreg']].forEach(([sel,f]) => {
   $(sel).addEventListener('input', () => {
+    if((f==='r'||f==='p')&&!Number.isSafeInteger(Math.max(0,Number($(sel).value)||0))){toast('건수는 안전한 범위의 정수로 입력하세요',true);return;}
     const day = month(TODAY_M).days[TODAY_D];
     day[f] = (f==='r'||f==='p') ? Math.max(0, parseInt($(sel).value,10)||0) : $(sel).value;
     $('#tSum').textContent = won(income(day));
@@ -752,11 +762,11 @@ function exportJson(){
   toast('백업 파일을 내려받았습니다 — 레포 data/log.json 에 덮어쓰세요');
 }
 function adopt(obj, where){
-  const m = (obj && obj.months) ? obj.months : obj;
+  let m;try{m=WorklogCore.months((obj&&obj.months)?obj.months:obj);}catch(e){toast(e.message,true);return false;}
   if (!m || typeof m !== 'object') { toast('형식을 알 수 없는 파일입니다', true); return false; }
   const keys = Object.keys(m).filter(k => /^\d{4}-\d{2}$/.test(k) && m[k] && m[k].days);
   if (!keys.length) { toast('업무일지 데이터가 없습니다', true); return false; }
-  keys.forEach(k => ST[k] = m[k]);
+  keys.forEach(k => {ST[k] = m[k];save(k);});
   if (!ST[cur]) cur = keys[keys.length-1];
   persist(); renderAll();
   toast(keys.length + '개월을 ' + where + '에서 불러왔습니다');
@@ -774,16 +784,21 @@ $('#file').onchange = e => {
 /* ── CMS 콘솔 → 업무일지 반영 (#sync=...) ──
    검수 콘솔이 처리를 끝내면 이 페이지를 #sync= 로 연다.
    자동으로 쓰지 않고, 확인 카드를 띄워 사람이 승인해야 반영된다. */
-function applyHashSync(){
+function applyHashSync(incoming){
+  const syncAccount=LS;
   const hm = (location.hash || '').match(/[#&]sync=([^&]+)/);
-  if (!hm) return;
-  let pl; try { pl = JSON.parse(decodeURIComponent(hm[1])); } catch(e){ return; }
-  if (!pl || !/^\d{4}-\d{2}-\d{2}$/.test(pl.d || '')) return;
+  if (!hm&&!incoming) return;
+  let pl; try { pl = incoming||JSON.parse(decodeURIComponent(hm[1])); } catch(e){ return; }
+  if (!pl || !WorklogCore.date(pl.d)) return;
   history.replaceState(null, '', location.pathname + location.search);
 
   const mm = pl.d.slice(0,7), dd = pl.d.slice(8,10);
   const now = month(mm).days[dd] || { r:0, p:0 };
-  const inR = Math.max(0, parseInt(pl.r,10) || 0), inP = Math.max(0, parseInt(pl.p,10) || 0);
+  month(mm)._reviewLedger=month(mm)._reviewLedger||{};
+  const allLedger=()=>Object.assign({},...Object.values(ST).map(m=>m._reviewLedger||{}));
+  const ledger=allLedger();
+  let ids=null;try{if(pl.ids)ids=WorklogCore.unappliedIds(pl.ids,ledger);}catch(e){toast(e.message,true);return;}
+  const inR = ids?ids.length:Math.max(0, parseInt(pl.r,10) || 0), inP = ids?0:Math.max(0, parseInt(pl.p,10) || 0);
   const safe = s => String(s == null ? '' : s).replace(/[<>&]/g, '');
 
   const wrap = document.createElement('div');
@@ -811,9 +826,18 @@ function applyHashSync(){
 
   const close = () => wrap.remove();
   const apply = (mode) => {
+    if(LS!==syncAccount){close();toast('계정이 바뀌었습니다. 해당 계정에서 결과를 다시 전달하세요',true);return;}
     const r = Math.max(0, parseInt(document.getElementById('hsR').value,10) || 0);
     const p = Math.max(0, parseInt(document.getElementById('hsP').value,10) || 0);
+    if(!Number.isSafeInteger(r)||!Number.isSafeInteger(p)){toast('건수 범위를 확인하세요',true);return;}
     const day = month(mm).days[dd];
+    if(ids){
+      const fresh=WorklogCore.unappliedIds(pl.ids,allLedger());
+      day.r=(day.r||0)+fresh.length;
+      fresh.forEach(id=>{month(mm)._reviewLedger[id]=pl.d;});
+      if(!save(mm)){toast('저장 실패 — 화면 기록을 내보내기로 백업하세요',true);return;}cur=mm;renderAll();close();toast('신규 '+fresh.length+'건 반영 (중복 제외)');return;
+    }
+    if(!confirm('이전 형식은 리뷰 ID가 없어 중복을 확인할 수 없습니다. 수동 대조 후 반영하시겠습니까?'))return;
     if (mode === 'add'){ day.r = (day.r||0) + r; day.p = (day.p||0) + p; }
     else { day.r = r; day.p = p; }
     save(mm); cur = mm; renderAll(); close();
@@ -822,6 +846,7 @@ function applyHashSync(){
   document.getElementById('hsCancel').onclick = close;
   document.getElementById('hsSet').onclick = () => apply('set');
   document.getElementById('hsAdd').onclick = () => apply('add');
+  if(ids){document.getElementById('hsSet').hidden=true;document.getElementById('hsR').disabled=true;document.getElementById('hsP').disabled=true;document.getElementById('hsAdd').textContent='중복 제외 '+ids.length+'건 반영';}
 }
 
 /* ── 초기화 ── */
@@ -829,19 +854,19 @@ cur = TODAY_M;
 $('#cs').value = dKey(today); $('#ce').value = dKey(today);
 renderAll(); renderCms();
 
-(async () => {
+const BOOT_READY=(async () => {
   // 1순위: 이 브라우저에 저장된 기록
   let loaded = false;
   try {
     const raw = localStorage.getItem(LS);
     if (raw){
       const o = JSON.parse(raw);
-      if (o && o.months && Object.keys(o.months).length){
-        ST = o.months; loaded = true;
+      if (o && o.months){
+        ST = WorklogCore.months(o.months);(o.dirty||[]).filter(m=>ST[m]).forEach(m=>dirty.add(m)); loaded = true;
         sync('● 이 브라우저에 저장됨 <b>' + Object.keys(ST).length + '개월</b>');
-      }
+      } else throw Error('로컬 기록 형식 오류');
     }
-  } catch(e){}
+  } catch(e){STORAGE_CONFLICT=true;loaded=true;sync('● 로컬 기록 읽기 실패 — 원본은 보존됨. 백업 확인 필요',true);}
 
   // 2순위: 같은 주소에 data/log.json 이 함께 배포된 경우
   if (!loaded){
@@ -851,7 +876,7 @@ renderAll(); renderCms();
         const o = await res.json();
         const m = (o && o.months) ? o.months : o;
         if (m && Object.keys(m).length){
-          ST = m; persist(); loaded = true;
+          ST = WorklogCore.months(m); persist(); loaded = true;
           sync('● 레포 데이터 불러옴 <b>' + Object.keys(ST).length + '개월</b>');
         }
       }
@@ -861,7 +886,6 @@ renderAll(); renderCms();
   if (!loaded) sync('● 기록 없음 — 우측 상단 [가져오기]', true);
   if (!ST[cur]) month(cur);
   renderAll();
-  applyHashSync();     /* 콘솔에서 넘어온 건수가 있으면 확인 카드 */
 })();
 
 </script>
@@ -904,58 +928,103 @@ async function sbInit(){
     const { data } = await SB.auth.getSession();
     SB_USER = data && data.session ? data.session.user : null;
     if (SB_USER){
-      mstat('on','<b>' + SB_USER.email + '</b> 로 연결됨 — 이 기기의 입력이 자동으로 동기화됩니다.');
+      mstat('on','<b>' + htmlEscape(SB_USER.email) + '</b> 로 연결됨 — 이 기기의 입력이 자동으로 동기화됩니다.');
       $('#sbAuth').style.display = 'none'; $('#sbOut').style.display = '';
       await pullAll();
       return true;
     }
     mstat('off','서버는 연결됐습니다. 아래에서 로그인해 주세요.');
     $('#sbAuth').style.display = ''; $('#sbOut').style.display = 'none';
-  } catch(e){ mstat('bad','연결 실패: ' + e.message); }
+  } catch(e){ mstat('bad','연결 실패: ' + htmlEscape(e.message)); }
   return false;
 }
 
 async function pullAll(){
   if (!SB || !SB_USER) return;
+  await BOOT_READY;
+  await PUSH_QUEUE;
+  if(!SB_USER||SB_BUSY)return;
+  const account=SB_USER.id;
+  const accountKey='unpa-worklog-v2:'+SB_USER.id;
+  if(LS!==accountKey){
+    if(!persist()){toast('현재 기록 저장 실패 — 내보내기 후 계정을 전환하세요',true);return;}
+    LS=accountKey;dirty.clear();
+    try{const stored=JSON.parse(localStorage.getItem(LS)||'null');ST=stored?WorklogCore.months(stored.months):{};(stored&&stored.dirty||[]).forEach(m=>dirty.add(m));}
+    catch(e){ST={};toast('계정별 로컬 기록 읽기 실패. 백업을 확인하세요.',true);}
+    month(cur);renderAll();
+  }
   SB_BUSY = true;
   try {
-    const { data, error } = await SB.from('worklog_months').select('month,data,updated_at');
+    const { data, error } = await SB.from('worklog_months').select('month,data,updated_at').eq('user_id',account);
     if (error) throw error;
+    if(!SB_USER||SB_USER.id!==account)return;
     let n = 0;
+    const conflicts=[];
     (data || []).forEach(row => {
       if (row && row.data && row.data.days){
+        WorklogCore.months({[row.month]:row.data});
         const loc = ST[row.month];
         const locT = loc && loc._u ? Date.parse(loc._u) : 0;
         const remT = Date.parse(row.updated_at || 0) || 0;
-        if (!loc || remT >= locT){ ST[row.month] = Object.assign({}, row.data, {_u: row.updated_at}); n++; }
+        if(dirty.has(row.month)&&loc&&loc._remote!==row.updated_at)conflicts.push(row);
+        if (!dirty.has(row.month)&&(!loc || remT >= locT)){ ST[row.month] = Object.assign({}, row.data, {_u: row.updated_at,_remote:row.updated_at}); n++; }
       }
     });
     persist(); renderAll();
     sync('● 동기화됨 <b>' + n + '개월</b>');
+    if(conflicts.length){
+      sync('● '+conflicts.length+'개월 충돌 — 동기화 창에서 비교하세요',true);
+      mstat('bad','서로 다른 기록이 있습니다. 먼저 내보내기로 백업한 후 월별로 선택하세요. 자동 덮어쓰기는 하지 않습니다.');
+      conflicts.forEach(row=>{
+        const line=document.createElement('div');line.style.cssText='margin-top:12px;padding-top:8px;border-top:1px solid #ddd';
+        const sum=m=>Object.values(m.days).reduce((a,d)=>[a[0]+d.r,a[1]+d.p],[0,0]);
+        const local=sum(month(row.month)),remote=sum(row.data);
+        const label=document.createElement('p');label.textContent=row.month+' — 로컬 리뷰 '+local[0]+'/제품 '+local[1]+' · 서버 리뷰 '+remote[0]+'/제품 '+remote[1];line.appendChild(label);
+        const prepare=document.createElement('button');prepare.textContent='로컬 유지 · 업로드 준비';
+        prepare.onclick=()=>{if(!SB_USER||SB_USER.id!==account)return;if(!confirm(row.month+' 서버 기록 대신 로컬 기록을 사용할 준비를 합니다. 먼저 양쪽 기록을 백업했습니까? 실제 전송은 서버 올리기 버튼으로 진행합니다.'))return;month(row.month)._remote=row.updated_at;persist();line.remove();toast('준비됨 — 서버 올리기를 눌러 전송하세요');};
+        const keep=document.createElement('button');keep.textContent='서버 기록으로 로컬 교체';
+        keep.onclick=()=>{if(!SB_USER||SB_USER.id!==account)return;if(!confirm(row.month+' 로컬 기록을 서버 기록으로 교체합니다. 내보내기로 백업했습니까?'))return;ST[row.month]={...row.data,_u:row.updated_at,_remote:row.updated_at};dirty.delete(row.month);persist();renderAll();line.remove();};
+        const backup=document.createElement('button');backup.textContent='양쪽 충돌 기록 백업';backup.onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify({month:row.month,local:month(row.month),remote:row},null,2)],{type:'application/json'}));a.download='worklog-conflict-'+row.month+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
+        line.append(backup,prepare,keep);$('#sbStat').appendChild(line);
+      });
+    }
   } catch(e){
     sync('● 동기화 실패', true);
-    mstat('bad','불러오기 실패: ' + (e.message || e.code || '알 수 없음') +
+    mstat('bad','불러오기 실패: ' + htmlEscape(e.message || e.code || '알 수 없음') +
       '<br><span style="font-weight:400">표가 아직 없다면 아래 2단계 SQL을 실행해 주세요.</span>');
   } finally { SB_BUSY = false; }
 }
 
-async function pushMonth(m){
-  if (!SB || !SB_USER || SB_BUSY) return;
+let PUSH_QUEUE=Promise.resolve();
+function pushMonth(m){
+  const account=SB_USER&&SB_USER.id;
+  const task=PUSH_QUEUE.then(()=>pushMonthNow(m,account));PUSH_QUEUE=task.catch(()=>false);return task;
+}
+async function pushMonthNow(m,account){
+  if (STORAGE_CONFLICT||!SB || !SB_USER || SB_USER.id!==account || SB_BUSY) return false;
+  const revision=month(m)._u, storageKey=LS;
   try {
-    const body = JSON.parse(JSON.stringify(month(m))); delete body._u;
-    const { error } = await SB.from('worklog_months')
-      .upsert({ user_id: SB_USER.id, month: m, data: body, updated_at: new Date().toISOString() },
-              { onConflict: 'user_id,month' });
+    const body = JSON.parse(JSON.stringify(month(m)));const expected=body._remote;delete body._u;delete body._remote;
+    const at=new Date().toISOString();
+    const value={user_id:account,month:m,data:body,updated_at:at};
+    const query=expected?SB.from('worklog_months').update(value).eq('user_id',account).eq('month',m).eq('updated_at',expected):SB.from('worklog_months').insert(value);
+    const { data,error } = await query.select('month');
     if (error) throw error;
+    if(!data||data.length!==1)throw Error('다른 기기에서 수정됨 — 덮어쓰기 차단');
+    if(LS!==storageKey)return false;
+    month(m)._remote=at;
+    if(month(m)._u===revision)dirty.delete(m);
+    persist();
     sync('● 서버 저장됨 <b>' + new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}) + '</b>');
-  } catch(e){ sync('● 서버 저장 실패 (로컬은 보관됨)', true); }
+    return true;
+  } catch(e){ sync('● 서버 저장 실패/충돌 (로컬 보관 · 백업 후 비교 필요)', true);return false; }
 }
 
 async function pushAll(){
   if (!SB || !SB_USER) { toast('먼저 로그인해 주세요', true); return; }
   const ms = Object.keys(ST);
-  for (const m of ms) await pushMonth(m);
-  toast(ms.length + '개월을 서버에 올렸습니다');
+  let n=0;for (const m of ms) if(await pushMonth(m))n++;
+  toast(n+'/'+ms.length + '개월 서버 저장 성공',n!==ms.length);
 }
 
 /* ── 모달 ── */
@@ -998,7 +1067,7 @@ function sbErr(msg){
     return { html:'요청이 너무 잦습니다. 잠시 후 다시 시도해 주세요.' };
   if (/password/i.test(m) && /least|short/i.test(m))
     return { html:'비밀번호는 6자 이상이어야 합니다.' };
-  return { html:'로그인 실패: ' + m };
+  return { html:'로그인 실패: ' + htmlEscape(m) };
 }
 
 function showResend(on){ $('#sbResend').style.display = on ? '' : 'none'; }
@@ -1044,8 +1113,12 @@ $('#sbResend').onclick = async () => {
 };
 
 $('#sbOutBtn').onclick = async () => {
+  await PUSH_QUEUE;persist();
   if (SB) await SB.auth.signOut();
   SB_USER = null;
+  LS='unpa-worklog-v1';dirty.clear();STORAGE_CONFLICT=false;
+  try{const saved=JSON.parse(localStorage.getItem(LS)||'null');ST=saved?WorklogCore.months(saved.months):{};(saved&&saved.dirty||[]).forEach(m=>dirty.add(m));}catch(e){ST={};}
+  month(cur);renderAll();
   $('#sbAuth').style.display = ''; $('#sbOut').style.display = 'none';
   mstat('off','로그아웃했습니다. 기록은 이 브라우저에 그대로 있습니다.');
   sync('● 이 브라우저에만 저장 중', true);
@@ -1061,15 +1134,15 @@ $('#sbSql').onclick = async () => {
 const backFromVerify = /access_token=|type=signup|error_code=/.test(location.hash || '');
 
 /* 앱 시작 시 자동 연결 시도 */
-setTimeout(async () => {
-  if (!cfgGet()) return;
-  const ok = await sbInit();
+const ACCOUNT_READY=BOOT_READY.then(async () => {
+  const ok = cfgGet()?await sbInit():false;
   if (backFromVerify){
     history.replaceState(null, '', location.origin + location.pathname);
     $('#sbMask').hidden = false;
     if (!ok) mstat('off','<b>메일 인증이 처리되었습니다.</b><br>아래에서 이메일·비밀번호로 로그인해 주세요.');
   }
-}, 400);
+  applyHashSync();
+});
 
 </script>
 
@@ -1090,11 +1163,11 @@ setTimeout(async () => {
   };
 
   /* 콘솔이 내보내는 action/reasons 와 예전 verdict/reason 을 모두 받아준다 */
-  var AMAP={ approve:'approve', hide:'hide', revise:'revise_product', register:'register', hold:'hold' };
+  var AMAP={ approve:'approve', hide:'hide', revise:'revise_product',revise_product:'revise_product',revise_swatch:'revise_color',register_product:'register',register_brand:'register', register:'register', hold:'hold' };
   function vOf(it){ return it.verdict || AMAP[it.action] || 'hold'; }
   function rOf(it){ return it.reason || (Array.isArray(it.reasons) ? it.reasons.join(' · ') : ''); }
 
-  function aLoad(){ try{ var r=localStorage.getItem(AKEY); if(r){ var o=JSON.parse(r); if(o&&o.days) AU=o.days; } }catch(e){} }
+  function aLoad(){ try{ var r=localStorage.getItem(AKEY); if(r){ var o=JSON.parse(r); if(o&&o.days){var next={};Object.keys(o.days).forEach(function(d){next[d]=WorklogCore.mergeAudit(null,Object.assign({},o.days[d],{date:d}));});AU=next;} } }catch(e){toast('기존 검수 기록 형식 오류 — 원본 저장소는 유지됩니다',true);} }
   function aSave(){ try{ localStorage.setItem(AKEY, JSON.stringify({v:1,savedAt:new Date().toISOString(),days:AU})); return true; }catch(e){ return false; } }
 
   function count(day){
@@ -1109,6 +1182,7 @@ setTimeout(async () => {
 
   function aRenderKpi(){
     var days=Object.keys(AU), t={total:0,approve:0,hide:0,revise:0,hold:0,applied:0};
+    var approved=days.reduce(function(n,d){return n+(AU[d].items||[]).filter(function(x){return x.applied&&vOf(x)==='approve';}).length;},0);
     days.forEach(function(d){ var c=count(AU[d]);
       t.total+=c.total; t.approve+=c.approve; t.hide+=c.hide;
       t.revise+=c.revise_color+c.revise_product+c.register; t.hold+=c.hold; t.applied+=c.applied; });
@@ -1116,8 +1190,8 @@ setTimeout(async () => {
       '</div><div class="vl">'+vl+'</div><div class="sb">'+sb+'</div></div>'; };
     document.getElementById('aKpis').innerHTML =
       k('#0d9668','검수한 날', days.length+'<small>일</small>', '누적 대상 '+t.total.toLocaleString('ko-KR')+'건') +
-      k('#0d9668','검수완료', t.approve.toLocaleString('ko-KR')+'<small>건</small>', '적용됨 '+t.applied.toLocaleString('ko-KR')+'건') +
-      k('#c8443c','미노출', t.hide.toLocaleString('ko-KR')+'<small>건</small>', '어뷰징으로 판정') +
+      k('#0d9668','승인 실행 성공', approved.toLocaleString('ko-KR')+'<small>건</small>', '전체 액션 성공 '+t.applied.toLocaleString('ko-KR')+'건') +
+      k('#c8443c','미노출 판정 (대기 포함)', t.hide.toLocaleString('ko-KR')+'<small>건</small>', '실행 여부는 건별 처리 상태 확인') +
       k('#b57611','수정요청 / 보류', (t.revise+t.hold).toLocaleString('ko-KR')+'<small>건</small>', '수정요청 '+t.revise+' · 보류 '+t.hold);
   }
 
@@ -1162,9 +1236,9 @@ setTimeout(async () => {
     document.getElementById('aDetailTitle').textContent = aCur + ' 건별 판정';
     var items=(AU[aCur].items||[]).filter(function(it){ return !aFilterV || vOf(it)===aFilterV; });
     document.getElementById('aItems').innerHTML = items.map(function(it){
-      var v=VD[vOf(it)]||VD.hold;
+      var v=it.action==='register_brand'?{cls:'reg',label:'브랜드+상품 등록 (수동)'}:it.action==='register_product'?{cls:'reg',label:'상품 등록 (수동)'}:(VD[vOf(it)]||VD.hold);
       return '<tr class="aRow">'
-        +'<td class="pid">'+esc(it.id)+'</td>'
+        +'<td class="pid"><a href="https://cms.unpa.me/review/detail/'+encodeURIComponent(it.id)+'" target="_blank" rel="noopener">'+esc(it.id)+' ↗</a></td>'
         +'<td><b>'+esc(it.brand||'')+'</b><br><span class="why">'+esc(it.product||'')+'</span></td>'
         +'<td class="why">'+esc(it.user||'')+'</td>'
         +'<td><span class="vd '+v.cls+'">'+v.label+'</span></td>'
@@ -1179,14 +1253,15 @@ setTimeout(async () => {
   function adopt(o){
     var days = o && o.days ? o.days : (o && o.date ? (function(){ var d={}; d[o.date]=o; return d; })() : null);
     if(!days){ toast('판정 결과 형식이 아닙니다', true); return; }
-    var n=0;
+    var n=0,next=Object.assign({},AU);
     Object.keys(days).forEach(function(d){
-      if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
-      var day=days[d]; if(!day||!day.items) return;
-      AU[d]=day; n++;
+      if(!WorklogCore.date(d)) return;
+      var day=days[d]; if(!day||!Array.isArray(day.items)) return;
+      next[d]=WorklogCore.mergeAudit(AU[d],Object.assign({},day,{date:d})); n++;
     });
     if(!n){ toast('불러올 날짜가 없습니다', true); return; }
-    aSave();
+    AU=next;
+    if(!aSave()){toast('저장 실패 — 기록 JSON을 백업하세요',true);return;}
     aCur = Object.keys(days).sort().reverse()[0];
     aRenderAll();
     toast(n+'일치 판정 결과를 불러왔습니다');
@@ -1220,6 +1295,19 @@ setTimeout(async () => {
   });
 
   aLoad(); aRenderAll();
+  var handshake=(location.hash||'').match(/^#console=([a-zA-Z0-9-]+)$/);
+  if(handshake&&window.opener){
+    var nonce=handshake[1],source=window.opener;
+    var receive=async function(ev){
+      if(ev.origin!=='https://cms.unpa.me'||ev.source!==source||!ev.data||ev.data.type!=='unpa-console-result'||ev.data.nonce!==nonce)return;
+      window.removeEventListener('message',receive);await ACCOUNT_READY;
+      if(!confirm('CMS 검수 기록을 이 브라우저로 가져올까요? 업무일지 건수는 다음 화면에서 별도로 확인합니다.'))return;
+      try{adopt(ev.data.audit);applyHashSync(ev.data.payload);}catch(e){toast('검수 연동 형식 오류: '+e.message,true);}
+    };
+    window.addEventListener('message',receive);
+    source.postMessage({type:'unpa-console-ready',nonce:nonce},'https://cms.unpa.me');
+    setTimeout(function(){window.removeEventListener('message',receive);},120000);
+  }
 })();
 </script>
 </body>
