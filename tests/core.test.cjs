@@ -55,14 +55,33 @@ test('normal review remains human verification, broken attachments never approva
   const c=consoleRules();c.mock('get',async url=>({status:200,json:{total:1,results:url.includes('/brands?')?[{id:4,name:'브랜드',approved:true}]:[{id:1,name:'쿠션',brandId:4}]}}));
   c.mock('imgDims',async()=>({w:2500,h:2500}));
   const item={id:10,brandName:'브랜드',productName:'쿠션'};
-  const detail={productId:1,productImageUrl:'https://img.test/product',contentText:'촉촉해요!',attachments:['https://img.test/review']};
-  const r=await c.rules.classify(item,detail);assert.equal(r.action,'hold');assert.equal(r.approvable,true);
+  const detail={userBlocked:false,userBlockedCount:5,productId:1,productImageUrl:'https://img.test/product',contentText:'촉촉해요!',attachments:['https://img.test/review']};
+  const r=await c.rules.classify(item,detail);assert.equal(r.action,'hold');assert.equal(r.approvable,true);assert.equal(r.suspension.count,5);
   const empty=await c.rules.classify(item,{...detail,attachments:[]});assert.equal(empty.approvable,false);
 });
 test('dates, numeric types and import validation',()=>{
   assert.equal(W.date('2026-02-30'),false);assert.equal(W.date('2026-09-02'),true);
   assert.throws(()=>W.months({'2026-09':{target:1,days:{'02':{r:'3',p:0}}}}));
   W.months(JSON.parse(fs.readFileSync(path.join(root,'data/log.json'),'utf8')).months);
+});
+test('currently suspended user goes directly to hide without photo/product inspection',async()=>{
+  const c=consoleRules();c.mock('imgDims',async()=>{throw Error('Must not inspect photos');});
+  const r=await c.rules.classify({id:7,userBlocked:true,userBlockedCount:2},{userBlocked:true,contentText:'정상적인 리뷰입니다',attachments:['https://example.test/photo']});
+  assert.equal(r.action,'hide');assert.equal(r.exec,true);assert.equal(r.approvable,false);assert.equal(r.suspension.count,2);
+});
+test('released user with prior suspensions is still reviewed, not automatically approved',async()=>{
+  const c=consoleRules();
+  const r=await c.rules.classify({id:8,userBlocked:false,userBlockedCount:5},{userBlocked:false,contentText:'ㅁㄴㅇㅁ냗ㅂㅈㄷ'});
+  assert.equal(r.suspension.blocked,false);assert.equal(r.suspension.count,5);assert.equal(r.action,'hide');assert.match(r.reasons.join(' '),/무의미/);
+});
+test('listing suspension state is used when detail omits it',async()=>{
+  const c=consoleRules();const r=await c.rules.classify({id:9,userBlocked:true},{contentText:'좋아요'});
+  assert.equal(r.action,'hide');assert.equal(r.suspension.blocked,true);
+});
+test('missing or conflicting suspension status cannot enter approval grid',async()=>{
+  for(const [item,detail] of [[{id:1},{}],[{id:1,userBlocked:true},{userBlocked:false}],[{id:1,userBlocked:'false'},{}]]){
+    const c=consoleRules();const r=await c.rules.classify(item,detail);assert.equal(r.action,'hold');assert.equal(r.approvable,false);
+  }
 });
 test('audit merges same day, preserving previous success',()=>{
   const old={date:'2026-09-02',items:[{id:1,applied:true,action:'approve'}]};

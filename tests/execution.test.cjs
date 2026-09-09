@@ -16,7 +16,7 @@ function harness(){
   const ctx={location:{hostname:'cms.unpa.me',origin:'https://cms.unpa.me'},window:{fetch:()=>{throw Error('Network prohibited');}},document:{body:new Element(),createElement:()=>new Element(),getElementById:id=>ids[id]||null},localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},XMLHttpRequest:XHR,alert:x=>alerts.push(x),confirm:()=>false,URL,Blob,AbortController,setTimeout:()=>0,clearTimeout:()=>{},crypto:require('node:crypto').webcrypto};
   vm.createContext(ctx);const source=fs.readFileSync(require.resolve('../cms-console.js'),'utf8').split('  /* ── 시작 ── */')[0];
   vm.runInContext(source+`;globalThis.api={runJobs,openGrid,auditPayload,scan,renderQueue,set(rows){results=rows;SCAN_DATE='2026-09-02';},mock(g,s){get=g;send=s;delay=async()=>{};dl=()=>{};tplMap={swatch:{body:'발색샷 요청'},product_match:{body:'{제품명} 재선택'}};},get rows(){return results;}};})();`,ctx);
-  const detail={id:1,contentText:'촉촉해요',productId:2};
+  const detail={id:1,userBlocked:false,contentText:'촉촉해요',productId:2};
   ctx.api.mock(async()=>({status:200,json:detail}),async(...args)=>{sent.push(args);return {status:201,json:{id:1,status:'APPROVED'}};});
   const row={id:1,brand:'브랜드',product:'쿠션',action:'hold',approvable:true,attachments:[],reasons:[],snapshot:JSON.stringify(detail)};
   ctx.api.set([row]);return {ctx,ids,storage,sent,alerts,row,detail};
@@ -57,4 +57,16 @@ test('HTTP 200 without verified result is not counted as success',async()=>{
   h.ctx.api.mock(async()=>({status:200,json:h.detail}),async()=>({status:200,json:{ok:true}}));
   await h.ctx.api.runJobs([{...h.row,action:'approve',humanVerified:true}]);
   assert.equal(h.row.applied,false);assert.equal(JSON.parse(h.storage.get('unpa-console-journal-v2'))['1'].state,'uncertain');
+});
+test('suspended user cannot receive approval even with a previous human selection',async()=>{
+  const h=harness();h.ctx.confirm=()=>true;const detail={...h.detail,userBlocked:true};
+  h.ctx.api.mock(async()=>({status:200,json:detail}),async()=>{throw Error('must not send');});
+  await h.ctx.api.runJobs([{...h.row,snapshot:JSON.stringify(detail),action:'approve',humanVerified:true}]);
+  assert.equal(h.storage.has('unpa-console-journal-v2'),false);
+});
+test('list-only suspension is rechecked before hiding and release cancels the action',async()=>{
+  const h=harness();h.ctx.confirm=()=>true;const detail={id:1,contentText:'좋아요',productId:2};
+  h.ctx.api.mock(async url=>({status:200,json:url.includes('/admin/reviews?')?{total:1,results:[{id:1,userBlocked:false}]}:detail}),async()=>{throw Error('must not send');});
+  await h.ctx.api.runJobs([{...h.row,snapshot:JSON.stringify(detail),action:'hide',suspension:{blocked:true}}]);
+  assert.equal(h.storage.has('unpa-console-journal-v2'),false);
 });

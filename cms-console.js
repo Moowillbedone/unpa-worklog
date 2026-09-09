@@ -512,6 +512,14 @@
   /* ── 판정 ── */
   /* 응답 스키마를 한 번 기록해 둔다 — 필드명이 바뀌면 판정이 조용히 틀어지므로 */
   var SCHEMA=null;
+  function suspensionOf(item,detail){
+    var a=detail&&detail.userBlocked,b=item&&item.userBlocked;
+    if(typeof a==='boolean'&&typeof b==='boolean'&&a!==b)return {blocked:null,label:'정지 상태 불일치 — 재스캔 필요'};
+    var blocked=typeof a==='boolean'?a:typeof b==='boolean'?b:null;
+    var count=detail&&detail.userBlockedCount;
+    if(count==null)count=item&&item.userBlockedCount;
+    return {blocked:blocked,count:Number.isInteger(count)&&count>=0?count:null,label:blocked===true?'정지':blocked===false?'정지 아님 (해제 포함)':'정지 상태 확인 불가'};
+  }
 
   async function classify(item, detail){
     if(!SCHEMA) SCHEMA={ detailKeys:Object.keys(detail||{}).sort(),
@@ -520,7 +528,7 @@
                          hasPriceField:('productPrice' in (detail||{})) };
 
     var content = reviewText(detail);
-    var atts=(detail.attachments||[]).filter(Boolean);
+    var atts=Array.isArray(detail.attachments)?detail.attachments.filter(Boolean):[];
     var exWhy = exbakOf(detail);
 
     var out={ id:item.id, brand:item.brandName, product:item.productName, user:item.userNickname,
@@ -529,6 +537,15 @@
               product_options:null, residue:null, swatch:null, warn:null,
               attachments:atts,
               approvable:false };   /* 그리드에서 승인/발색샷요청을 고를 수 있는 건인지 */
+
+    out.suspension=suspensionOf(item,detail);
+    out.text=content;
+    if(out.suspension.blocked===true){
+      out.action='hide';out.exec=true;out.reasons.push('정지 사용자 — 일반 검수 제외, 미노출 대상');return out;
+    }
+    if(out.suspension.blocked===null){
+      out.action='hold';out.reasons.push(out.suspension.label+' — 승인/수정요청 보류');return out;
+    }
 
     /* 사진 포렌식 (첨부 최대 4장) */
     var cls=[]; for(var i=0;i<atts.length;i++){ var d=await imgDims(atts[i]); cls.push(classifyImg(d.w,d.h)); }
@@ -749,6 +766,7 @@
           +'style="color:#8fd8ff;font-weight:800;text-decoration:none;border-bottom:1px dotted rgba(143,216,255,.5)">#'+r.id+' ↗</a> '
           +(r.applied?'<span style="color:#3ddc97;font-weight:800">✓ 처리됨</span> ':'')
           +(r.execution&&!r.applied?'<span style="color:#ff8f6b">전송 결과 미확정 · CMS 확인 필요</span> ':'')
+          +(r.suspension?'<span style="color:'+(r.suspension.blocked===true?'#ff8f6b':'#9fb4ab')+'">['+esc(r.suspension.label)+(r.suspension.count!=null?' / '+r.suspension.count+'회':'')+']</span> ':'')
           +'<span style="color:#9fb4ab">'+esc(r.brand||'')+' / '+esc(r.product||'')+'</span>'
           +'<div style="font-size:11px;color:#7f948b;margin-top:2px">'+esc(r.reasons.join(' · '))
           + (r.photo&&r.photo.v!=='none'?' · 사진:'+esc(r.photo.label):'')
@@ -889,6 +907,14 @@
       log('▶ #'+r.id+' '+ACT[r.action].t+' <span style="color:#6b7f77">('+(i+1)+'/'+jobs.length+')</span>');
       var fresh=await get(API+'/admin/reviews/'+r.id);
       if(fresh.status!==200||JSON.stringify(fresh.json)!==r.snapshot){alert('#'+r.id+' 상세가 변경됐거나 재조회 실패했습니다. 재스캔하세요.');break;}
+      var currentSuspension=suspensionOf(null,fresh.json);
+      if(currentSuspension.blocked===null){
+        var currentRows=await pages('/admin/reviews?startDate='+SCAN_DATE+'&endDate='+SCAN_DATE+'&beforeApproval=true');
+        currentSuspension=suspensionOf(currentRows.find(function(x){return String(x.id)===String(r.id);}),fresh.json);
+      }
+      if((r.action!=='hide'&&currentSuspension.blocked!==false)||(r.suspension&&r.suspension.blocked===true&&currentSuspension.blocked!==true)){
+        alert('#'+r.id+' 정지 상태가 변경되었거나 확인되지 않습니다. 재스캔 후 처리하세요.');break;
+      }
       recordExecution(r,'pending'); // 먼저 영속화. 전송 이후 응답 유실 시 자동 재시도 금지.
       var res=await send(req.method,req.url,req.body);
       var ok=false;
@@ -949,6 +975,7 @@
                  product_exact:r.product_exact, product_option:r.product_option||null,
                  product_options:r.product_options||null, residue:r.residue||null,
                  execution:r.execution||null,candidates:r.candidates||[],selection:r.selection||'skip',
+                 suspension:r.suspension||null,
                  attachments:r.attachments||[] };
       })
     };
