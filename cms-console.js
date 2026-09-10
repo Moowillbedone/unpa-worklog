@@ -211,6 +211,9 @@
   /* ── 이용 정지 사용자 ──────────────────────────────────
      정지된 사용자의 리뷰는 검수 대상이 아니라 미노출 대상이다.
      목록과 상세가 어긋나면 확정하지 않고 사람에게 넘긴다. */
+  /* 경고는 덮어쓰지 않고 이어 붙인다 — 브랜드 경고와 정지 이력이 함께 뜰 수 있다 */
+  function addWarn(out, msg){ out.warn = out.warn ? (out.warn+' · '+msg) : msg; }
+
   function suspensionOf(item, detail){
     var a=detail&&detail.userBlocked, b=item&&item.userBlocked;
     if(typeof a==='boolean' && typeof b==='boolean' && a!==b)
@@ -649,7 +652,7 @@
        (브랜드 표기 차이로 조회가 빗나갈 수 있어 오탐을 만들지 않는다) */
     try {
       var nb=await findBrand(item.brandName);
-      if(!nb.approvedBrand && !nb.anyExact) out.warn='브랜드 조회 안 됨';
+      if(!nb.approvedBrand && !nb.anyExact) addWarn(out,'브랜드 조회 안 됨');
     } catch(e){}
 
     /* 본문이 정말 비어 있으면 자동 승인하지 않고 사람에게 보낸다 */
@@ -658,6 +661,7 @@
     /* ── 규칙 4: 발색 있는 제품이면 발색샷 유무를 사람이 보고 고른다 ── */
     out.swatch = isSwatch(item.productName);
 
+    if(out.suspension && out.suspension.count) addWarn(out,'정지 이력 '+out.suspension.count+'회');
     if(out.photo.v==='none'){
       /* 사진이 없으면 그리드에서 눈으로 볼 것이 없다 — 승인 후보로 두지 않는다 */
       out.action='hold'; out.reasons.push('첨부 사진 없음 → 확인');
@@ -668,7 +672,6 @@
     if(out.photo.v==='mixed')       out.reasons.push('사진 '+out.photo.label+' → 눈으로 확인');
     else if(out.photo.v==='camera') out.reasons.push('직접촬영 · 매칭 정상');
     else                            out.reasons.push('사진 판별 애매 → 확인');
-    if(out.suspension && out.suspension.count) out.warn='정지 이력 '+out.suspension.count+'회';
     if(out.swatch) out.reasons.push('발색 제품('+out.swatch+') — 발색샷 확인');
     if(out.warn)   out.reasons.push(out.warn);
     return out;
@@ -779,6 +782,13 @@
           +'style="color:#8fd8ff;font-weight:800;text-decoration:none;border-bottom:1px dotted rgba(143,216,255,.5)">#'+r.id+' ↗</a> '
           +(r.applied?'<span style="color:#3ddc97;font-weight:800">✓ 처리됨</span> ':'')
           +'<span style="color:#9fb4ab">'+esc(r.brand||'')+' / '+esc(r.product||'')+'</span>'
+          + (r.suspension && (r.suspension.blocked===true || r.suspension.count)
+              ? '<span style="display:inline-block;margin-left:5px;padding:1px 7px;border-radius:20px;font-size:10.5px;font-weight:800;'
+                + (r.suspension.blocked===true
+                    ? 'background:#4a1f1a;color:#ff8f6b;border:1px solid #ff8f6b">🚫 정지'
+                    : 'background:#3a3320;color:#f5c451;border:1px solid #f5c451">⚠ 정지이력')
+                + (r.suspension.count ? ' '+r.suspension.count+'회' : '') + '</span>'
+              : '')
           +'<div style="font-size:11px;color:#7f948b;margin-top:2px">'+esc(r.reasons.join(' · '))
           + (r.photo&&r.photo.v!=='none'?' · 사진:'+esc(r.photo.label):'')
           + (r.product_exact?' · <span style="color:#3ddc97">→ '+esc(r.product_exact)+'</span>':'')+'</div>'
