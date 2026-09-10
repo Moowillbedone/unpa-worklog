@@ -11,7 +11,7 @@
  *   approve          검수완료          그리드에서 사진 보고 일괄 실행
  *   revise_swatch    발색샷 요청        그리드에서 💄 눌러 선택 후 실행
  *   revise_product   제품 재선택 요청    상품명 정확일치 시 일괄 실행
- *   hide             미노출            무의미 본문 / 사람이 확인한 문제 리뷰
+ *   hide             미노출            무의미 본문 / 사진 전량 캡처·저해상
  *   register_product 상품등록 필요      브랜드○ 제품✗ — 사람이 직접 (실행 없음)
  *   register_brand   브랜드+상품 등록   브랜드✗       — 사람이 직접 (실행 없음)
  *   hold             확인 필요         비화장품·애매  — 사람이 직접 (실행 없음)
@@ -27,14 +27,13 @@
  *
  *  업무일지 연동
  *   - [검수기록 JSON] → 업무일지 [검수 기록] 탭에서 불러오기
- *   - [업무일지 반영] → 출처 검증 메시지로 기록과 처리 ID 전달, 중복 제외 확인
+ *   - [업무일지 반영] → 처리 건수를 해시로 넘겨 확인 카드 표시
  * ============================================================ */
 (function () {
   'use strict';
-  function isAdmin(u){try{var x=new URL(u,location.origin);return x.origin==='https://api-v2.unpa.me'&&x.pathname.startsWith('/admin/');}catch(e){return false;}}
   if (location.hostname !== 'cms.unpa.me') { alert('cms.unpa.me 에서 실행해주세요.'); return; }
+  try { var old = document.getElementById('cmsConsoleBox'); if (old) old.remove(); } catch (e) {}
   if (window.__CONSOLE_RUNNING) { alert('이미 실행 중입니다.'); return; }
-  if (document.getElementById('cmsConsoleBox')) { alert('열려 있는 콘솔을 사용해주세요. 새 버전은 새로고침 후 실행하세요.'); return; }
 
   var API = 'https://api-v2.unpa.me';
   var TPL_URL = 'https://moowillbedone.github.io/unpa-worklog/templates.json';
@@ -42,6 +41,12 @@
   var SCAN_DATE = null;
   var MAX_EXEC = 100;
   var AUTH = window.__COLLECT_AUTH || window.__BRAND_AUTH || window.__PROD_AUTH || window.__APPLY_AUTH || window.__CONSOLE_AUTH || null;
+  /* 토큰을 가로챌 대상을 오리진까지 확인한다 — '/admin/' 문자열만 보면 남의 주소도 걸린다 */
+  function isAdmin(u){
+    try { var x=new URL(u, location.origin);
+      return x.origin==='https://api-v2.unpa.me' && x.pathname.indexOf('/admin/')===0;
+    } catch(e){ return false; }
+  }
 
   /* 화면캡처 판별용 알려진 폰 해상도 */
   var SCREENS = [[1170,2532],[1179,2556],[1290,2796],[1284,2778],[1125,2436],[1206,2622],[1320,2868],
@@ -102,14 +107,19 @@
       try{ if(String(k).toLowerCase()==='authorization'&&isAdmin(this.__u)){AUTH=v;window.__CONSOLE_AUTH=v;window.__COLLECT_AUTH=v;} }catch(e){}
       return OSH.apply(this,arguments); }; }
 
-  function H(){ var h={'Accept':'application/json'}; AUTH=window.__COLLECT_AUTH||window.__CONSOLE_AUTH||AUTH; if(AUTH) h['Authorization']=AUTH; return h; }
-  function Hj(){ var h=H(); h['Content-Type']='application/json'; return h; }
-  async function timedFetch(url,init){
-    var ac=new AbortController(), timer=setTimeout(function(){ac.abort();},20000);
-    try { var r=await oF.call(window,url,Object.assign({},init,{signal:ac.signal}));
-      var t=await r.text(); return {status:r.status,text:function(){return Promise.resolve(t);}};
-    } finally {clearTimeout(timer);}
+  function H(){ var h={'Accept':'application/json'};
+    AUTH = window.__COLLECT_AUTH || window.__CONSOLE_AUTH || AUTH;   /* 다른 도구가 새로 잡은 토큰을 이어 쓴다 */
+    if(AUTH) h['Authorization']=AUTH; return h; }
+  /* 응답이 안 오면 20초에 끊는다. 없으면 스캔이 한 건에서 영원히 멈춘다 */
+  async function timedFetch(url, init){
+    var ac=new AbortController(), timer=setTimeout(function(){ ac.abort(); }, 20000);
+    try {
+      var r=await oF.call(window, url, Object.assign({}, init, {signal:ac.signal}));
+      var t=await r.text();
+      return { status:r.status, text:function(){ return Promise.resolve(t); } };
+    } finally { clearTimeout(timer); }
   }
+  function Hj(){ var h=H(); h['Content-Type']='application/json'; return h; }
   function get(url){ return timedFetch(url,{headers:H(),credentials:'include'})
     .then(function(r){return r.text().then(function(t){var j=null;try{j=JSON.parse(t);}catch(e){}return{status:r.status,json:j,text:t.slice(0,200)};});})
     .catch(function(e){return{status:0,json:null,text:String(e&&e.message||e)};}); }
@@ -120,29 +130,21 @@
     return Array.isArray(j.results)?j.results:Array.isArray(j.result)?j.result:Array.isArray(j.data)?j.data:Array.isArray(j.content)?j.content:Array.isArray(j)?j:null; }
   function totalOf(j){ return (j&&(j.totalCount||j.total||j.totalElements||j.count))||0; }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+  /* 2026-02-31 같은 없는 날짜를 걸러낸다 */
+  function validDate(d){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+    var t=Date.parse(d+'T00:00:00Z');
+    return isFinite(t) && new Date(t).toISOString().slice(0,10)===d;
+  }
   /* CMS 리뷰 상세 — 목록 페이지네이션을 넘기지 않고 바로 열기 위한 주소 */
   function reviewUrl(id){ return location.origin+'/review/detail/'+id; }
-  function validDate(d){return /^\d{4}-\d{2}-\d{2}$/.test(d)&&Number.isFinite(Date.parse(d+'T00:00:00Z'))&&new Date(d+'T00:00:00Z').toISOString().slice(0,10)===d;}
   function norm(s){ return String(s||'').replace(/[\s()\[\]/·.,-]/g,'').toLowerCase(); }
   function delay(ms){ return new Promise(function(r){setTimeout(r,ms);}); }
-  async function pages(path){
-    var out=[], seen=new Set();
-    for(var page=1;page<=200;page++){
-      var r=await get(API+path+'&pageSize=100&page='+page);
-      var rows=listOf(r.json);
-      if(r.status!==200||!rows) throw new Error('목록 조회 실패/응답 형식 변경: HTTP '+r.status);
-      var added=0;
-      rows.forEach(function(x){if(x&&x.id!=null&&!seen.has(String(x.id))){seen.add(String(x.id));out.push(x);added++;}});
-      var total=totalOf(r.json);
-      if((total>0&&out.length>=total)||(!total&&rows.length===0)) return out;
-      if(!added) throw new Error('목록 페이지 반복/불완전 응답 — 없음으로 판정하지 않음');
-    }
-    throw new Error('조회 상한 도달 — 등록 필요 여부 미확정');
-  }
 
   /* ── 사진 포렌식 ── */
-  function imgDims(url){ return new Promise(function(res){ var im=new Image();
-    if(typeof url!=='string'||!/^https?:\/\//i.test(url)){res({w:0,h:0});return;}
+  function imgDims(url){ return new Promise(function(res){
+    if(typeof url!=='string' || !/^https?:\/\//i.test(url)){ res({w:0,h:0}); return; }
+    var im=new Image();
     var done=false; var to=setTimeout(function(){if(!done){done=true;res({w:0,h:0});}},8000);
     im.onload=function(){if(!done){done=true;clearTimeout(to);res({w:im.naturalWidth,h:im.naturalHeight});}};
     im.onerror=function(){if(!done){done=true;clearTimeout(to);res({w:0,h:0});}};
@@ -157,16 +159,19 @@
     if(mx<=1000) return 'web';
     return 'unknown';
   }
-  /* 해상도 참고정보. 직접촬영/도용 여부와 발색샷은 판정하지 않는다. */
+  /* 사진 종합 판정.
+     예전에는 의심 사진이 한 장만 섞여도 리뷰 전체를 미노출로 보냈다.
+     공식컷 1장 + 본인 사진 2장 같은 정상 패턴이 통째로 날아가므로,
+     전량이 의심일 때만 미노출하고 직접촬영이 섞이면 사람이 보게 넘긴다. */
   function photoVerdict(cls){
     if(!cls.length) return {v:'none',label:'사진 없음'};
     var n=cls.length, cnt=function(x){ var k=0; for(var i=0;i<n;i++) if(cls[i]===x) k++; return k; };
     var cam=cnt('camera'), web=cnt('web'), shot=cnt('screenshot');
-    if(shot===n)            return {v:'suspect',label:'모두 화면 해상도와 유사 (내용 확인 필요)'};
-    if(web===n)             return {v:'suspect',label:'모두 저해상도 (도용 근거 아님)'};
-    if(web+shot===n)        return {v:'suspect',label:'저해상/화면 해상도 혼재 (내용 확인 필요)'};
-    if(cam>0 && web+shot>0) return {v:'mixed',  label:'사진 해상도 혼재 (내용 확인 필요)'};
-    if(cam>0)               return {v:'camera', label:'고해상도 (직접촬영 여부 미확정)'};
+    if(shot===n)            return {v:'suspect',label:'전부 화면캡처'};
+    if(web===n)             return {v:'suspect',label:'전부 저해상/도용 의심'};
+    if(web+shot===n)        return {v:'suspect',label:'전부 캡처·저해상'};
+    if(cam>0 && web+shot>0) return {v:'mixed',  label:'직접촬영 '+cam+'/'+n+' · 의심 '+(web+shot)+'장 혼재'};
+    if(cam>0)               return {v:'camera', label:'직접촬영'};
     return {v:'unknown',label:'판별 애매'};
   }
 
@@ -183,20 +188,39 @@
       if(Object.keys(us).length/sents.length<=0.5) return true; }
     return false;
   }
-  /* 불허 품목과 충돌하면 사람 확인. 허용 키워드가 불허 키워드를 무효화하지 않는다. */
+  /* 취급 품목이면 null, 아니면 걸린 키워드를 돌려준다.
+     불허 품목이 허용 키워드로 무력화되면 안 된다 — "다이어트 콤부차"는 콤부차다.
+     허용 목록이 앞서야 했던 이유(«비타민» 세럼이 막히던 것)는
+     그 낱말들을 불허 목록에서 빼면서 사라졌다. BEAUTY_OK 는 취급 범위 문서로 남긴다. */
   function notBeauty(name){
     var n=String(name||'');
-    /* 물티슈는 화장·클렌징용만 취급한다 */
+    /* 물티슈는 화장·클렌징·여성청결용만 취급한다 */
     if(n.indexOf('물티슈')>=0)
       return /클렌징|메이크업|화장|리무버|페이셜|아이리무버|립리무버|선케어|여성청결/.test(n) ? null : '뷰티용 아닌 물티슈';
     for(var j=0;j<NOT_BEAUTY.length;j++){
       var kw=NOT_BEAUTY[j];
       if(n.indexOf(kw)<0) continue;
       var ex=NB_EXCEPT[kw];
+      /* 예외 낱말을 지우고도 키워드가 남으면 진짜 차단 대상이다 ("파스텔 동전파스") */
       if(ex && n.replace(new RegExp(ex.source,'g'),'').indexOf(kw)<0) continue;
       return kw;
     }
     return null;
+  }
+
+  /* ── 이용 정지 사용자 ──────────────────────────────────
+     정지된 사용자의 리뷰는 검수 대상이 아니라 미노출 대상이다.
+     목록과 상세가 어긋나면 확정하지 않고 사람에게 넘긴다. */
+  function suspensionOf(item, detail){
+    var a=detail&&detail.userBlocked, b=item&&item.userBlocked;
+    if(typeof a==='boolean' && typeof b==='boolean' && a!==b)
+      return { blocked:null, count:null, label:'정지 상태 불일치 — 재스캔 필요' };
+    var blocked = typeof a==='boolean' ? a : typeof b==='boolean' ? b : null;
+    var count = (detail&&detail.userBlockedCount);
+    if(count==null) count = item&&item.userBlockedCount;
+    if(!(typeof count==='number' && count>=0 && count===Math.floor(count))) count=null;
+    return { blocked:blocked, count:count,
+             label: blocked===true ? '정지' : blocked===false ? '정지 아님' : '정지 상태 확인 불가' };
   }
 
   /* ── 리뷰 본문 모으기 ──────────────────────────────────
@@ -224,7 +248,11 @@
     if(!parts.length) push(detail&&detail.content, 0);
     EASY_KEYS.forEach(function(k){ push(detail&&detail[k], 0); });
     push(detail&&detail.reviewAnswers, 0);
-    return Array.from(new Set(parts)).join('\n');
+    /* 같은 문장이 contentText 와 easyReview* 에 중복돼 들어오면
+       "같은 줄 반복" 으로 보여 도배로 오판된다. 중복을 걷어낸다. */
+    var seen={}, uniq=[];
+    parts.forEach(function(t){ if(!seen[t]){ seen[t]=1; uniq.push(t); } });
+    return uniq.join('\n');
   }
 
   /* ── 무의미한 언어 판별 ────────────────────────────────
@@ -240,17 +268,19 @@
     var body=syll.length+alnum.length;           /* 실질 내용 분량 */
 
     if(jamo.length>=4 && jamo.length>body) return '자모 나열 («'+jamo.slice(0,8).join('')+'»)';
+    /* 문장부호·자모 연속("좋아요!!!", "촉촉해요ㅎㅎㅎ")은 반복으로 세지 않는다 */
     var rep=t.match(/([가-힣a-zA-Z0-9])\1{2,}/g);
     if(rep){
-      /* 반복 덩어리를 걷어내고도 실질 내용이 남으면 정상 리뷰다 ("ㅋㅋㅋ 진짜 좋아요") */
       var left=(t.replace(/([가-힣a-zA-Z0-9])\1{2,}/g,'').match(/[가-힣a-zA-Z0-9]/g)||[]).length;
       if(left===0) return '같은 글자 반복 («'+rep[0].slice(0,6)+'»)';
     }
+    /* 키보드 배열을 그대로 두드린 것 */
+    if(/^(?:asdf|qwer|zxcv|ㅁㄴㅇㄹ|1234){2,}$/i.test(t.replace(/\s/g,''))) return '키보드 배열 반복';
     if(syll.length>=8){
       var u={}; syll.forEach(function(c){ u[c]=1; });
       if(Object.keys(u).length/syll.length<=0.3) return '동일 음절 반복';
     }
-    if(/^(?:asdf|qwer|zxcv|ㅁㄴㅇㄹ){2,}$/i.test(t.replace(/\s/g,''))) return '키보드 배열 반복';
+    if(syll.length===0 && alnum.length<=2 && t.length<=6) return '내용 없음 («'+t.slice(0,8)+'»)';
     return null;
   }
 
@@ -289,6 +319,12 @@
     var pid = detail.productId;
     if(!pid) why.push('productId 없음');
 
+    var priceKey = ('productPrice' in detail) ? 'productPrice' : null;
+    if(priceKey){
+      var pr=detail[priceKey];
+      if(pr===null||pr===''||pr===0||pr===undefined) why.push('productPrice 비어 있음');
+    }
+
     var imgKey = ('productImageUrl' in detail) ? 'productImageUrl'
                : ('productImage' in detail)    ? 'productImage' : null;
     if(imgKey){
@@ -299,15 +335,15 @@
   }
 
   /* ── 브랜드/제품 검색 ── */
-  var brandCache={},allBrands=null;
+  var brandCache={};
   async function findBrand(name){
     var key=norm(name); if(brandCache[key]!==undefined) return brandCache[key];
-    var rows=allBrands||(allBrands=await pages('/admin/brands?'));
+    var r=await get(API+'/admin/brands?approved=true&page=1&pageSize=50&q='+encodeURIComponent(name));
+    var rows=listOf(r.json)||[];
     var exact=rows.filter(function(b){return norm(b.name)===key;});
-    var appr=exact.filter(function(b){return b.approved===true;});
-    var pick = appr.length===1?appr[0] : null;
-    var likely=rows.filter(function(b){var n=norm(b.name);return key.length>=2&&n.length>=2&&(key.includes(n)||n.includes(key));});
-    var res={ approvedBrand:pick, anyExact:exact.length>0, exact:exact,likely:likely };
+    var appr=exact.filter(function(b){return b.approved;});
+    var pick = appr.length?appr.sort(function(a,b){return a.id-b.id;})[0] : null;
+    var res={ approvedBrand:pick, anyExact:exact.length>0, exact:exact };
     brandCache[key]=res; return res;
   }
   function tokenize(name){
@@ -336,7 +372,7 @@
     (function walk(v, key, depth){
       if(v==null || depth>5) return;
       if(typeof v==='string'){
-        if(/option|variant|호수|색상/i.test(key||'')){
+        if(/option|variant|호수|색상|추가정보|additional/i.test(key||'')){
           /* "페어 (14g*2ea), 페어핑크 (14g*2ea)" 같은 한 줄 문자열도 받는다 */
           v.split(/[,\n·/|]/).forEach(function(t){
             t=t.replace(/\([^)]*\)/g,'').trim();
@@ -365,13 +401,20 @@
   async function productOptions(pid){
     if(prodCache[pid]!==undefined) return prodCache[pid];
     /* 엔드포인트를 못 찾는 환경이면 매 건마다 헛되이 3번씩 찌르지 않는다 */
-    var eps = [API+'/admin/products/{id}', API+'/admin/product/{id}', API+'/admin/products/{id}/options'];
+    if(!PROD_EP && prodProbeFail>=3){ prodCache[pid]=null; return null; }
+    var eps = PROD_EP ? [PROD_EP] :
+      [API+'/admin/products/{id}', API+'/admin/product/{id}', API+'/admin/products/{id}/options'];
     for(var i=0;i<eps.length;i++){
       var r=await get(eps[i].replace('{id}', pid));
       if(r.status===200 && r.json){
-        if(SCHEMA&&!SCHEMA.productKeys) SCHEMA.productKeys=Object.keys(r.json).sort();
-        var opts=optionNames(/\/options$/.test(eps[i])?{options:r.json}:r.json);
-        if(opts.length){prodCache[pid]=opts; return opts;}
+        if(SCHEMA && !SCHEMA.productKeys) SCHEMA.productKeys=Object.keys(r.json).sort();
+        /* /options 는 배열을 그대로 주기도 한다 */
+        var opts=optionNames(/\/options$/.test(eps[i]) ? {options:r.json} : r.json);
+        if(opts.length){                       /* 옵션을 실제로 읽어낸 주소만 채택한다 */
+          PROD_EP=eps[i];
+          if(SCHEMA && !SCHEMA.productEndpoint) SCHEMA.productEndpoint=eps[i];
+          prodCache[pid]=opts; return opts;
+        }
       }
       await delay(60);
     }
@@ -401,7 +444,7 @@
 
   function tokensOf(name){
     return stripSize(String(name||''))
-      .replace(/[\[\]()]/g,' ')
+      .replace(/\[[^\]]*\]/g,' ').replace(/\([^)]*\)/g,' ')
       .split(/[\s·/,+&]+/)
       .map(function(t){ return t.replace(/[^0-9a-zA-Z가-힣]/g,'').toLowerCase(); })
       .filter(Boolean);
@@ -422,16 +465,28 @@
   }
 
   async function findProduct(brandId, productName){
-    var cand=await brandProducts(brandId);
+    var toks=tokenize(productName); var seen={}, cand=[], okQueries=0;
+    for(var i=0;i<toks.length;i++){
+      var r=await get(API+'/admin/products?approved=true&brandApproved=true&page=1&pageSize=20&brandId='+brandId+'&q='+encodeURIComponent(toks[i]));
+      var rows=listOf(r.json);
+      if(r.status===200 && rows){ okQueries++;
+        rows.forEach(function(p){ if(p&&p.id!=null&&!seen[p.id]){seen[p.id]=1;cand.push({id:p.id,name:p.name||p.productName||''});} });
+      }
+      await delay(80);
+    }
+    /* 조회가 하나도 성공하지 못했으면 "제품 없음"이 아니라 "확인 불가"다 */
+    if(!okQueries && toks.length)
+      return { pick:null, confident:false, lookupFailed:true,
+               why:'제품 목록 조회 실패 — 없음으로 단정하지 않음', candidates:[] };
     /* 유저 입력과 CMS 이름 모두 용량 표기를 뺀 뒤 비교한다 */
     var nm = function(x){ return norm(stripSize(String(x||''))); };
-    var raw=stripSize(productName);
+    var raw=stripSize(productName.replace(/\[[^\]]*\]/g,''));
     var target=nm(raw);
 
     /* 1) 상품명이 그대로 일치 */
     var exact=cand.filter(function(p){ return nm(p.name)===target; });
     if(exact.length===1) return { pick:exact[0], confident:true,  why:'상품명 정확히 일치', candidates:cand };
-    if(exact.length>1)   return { pick:null,     confident:false, why:'동일 상품명 '+exact.length+'건 — 사람이 선택', candidates:exact };
+    if(exact.length>1)   return { pick:null,     confident:false, why:'동일 상품명 '+exact.length+'건 — 사람이 선택', candidates:cand };
 
     /* 2) 유저가 단어를 빠뜨린 경우 — CMS 이름이 더 완전하다.
           유저의 단어가 전부 CMS 이름에 있고, CMS 이름도 충분히 덮이면 같은 제품으로 본다.
@@ -447,7 +502,7 @@
     if(subset.length===1 || (subset.length>1 && subset[0].cInU>subset[1].cInU)){
       var w=subset[0];
       var missing=w.cT.filter(function(t){ return uT.indexOf(t)<0; });
-      return { pick:w.p, confident:false,
+      return { pick:w.p, confident:true,
                why: missing.length ? '유저가 «'+missing.join(' ')+'» 를 빠뜨림 — CMS 이름이 더 완전'
                                    : '단어는 같고 괄호·기호 표기만 다름',
                candidates:cand };
@@ -462,20 +517,18 @@
           남는 부분이 실제 옵션이면 같은 제품으로 본다. */
     var prefixed=cand.filter(function(p){ return residueOf(target, nm(p.name)); })
                      .sort(function(a,b){ return norm(b.name).length-norm(a.name).length; });  /* 긴 이름 우선 */
-    var optionHits=[];
-    for(var k=0;k<prefixed.length;k++){
+    for(var k=0;k<Math.min(prefixed.length,3);k++){
       var p=prefixed[k];
       var res=residueOf(target, nm(p.name));
       var opts=await productOptions(p.id);
       if(opts && opts.length){
         var hit=null;
         for(var j=0;j<opts.length;j++){ if(norm(opts[j])===res){ hit=opts[j]; break; } }
-        if(hit) optionHits.push({pick:p,option:hit});
+        if(hit) return { pick:p, confident:true, option:hit,
+                         why:'제품명 일치 · 남은 «'+hit+'» 는 옵션', candidates:cand };
       }
       /* 옵션을 못 받았거나 안 맞으면 아래에서 사람 확인으로 넘긴다 */
     }
-    if(optionHits.length===1)return {pick:optionHits[0].pick,option:optionHits[0].option,confident:true,why:'상품명 + 실제 옵션 일치',candidates:prefixed};
-    if(optionHits.length>1)return {pick:null,confident:false,why:'상품+옵션 일치 후보 여러 건 — 직접 선택',candidates:optionHits.map(function(x){return x.pick;})};
     if(prefixed.length){
       var f=prefixed[0], fr=residueOf(target, nm(f.name));
       var fo=prodCache[f.id];
@@ -497,29 +550,12 @@
     });
     if(near.length===1) return { pick:near[0], confident:false, why:'유사 상품명 「'+near[0].name+'」', candidates:cand };
     if(near.length>1)   return { pick:null,    confident:false, why:'유사 후보 '+near.length+'건', candidates:cand };
-    var similar=cand.filter(function(p){return tokenCover(tokensOf(productName),tokensOf(p.name))>=0.4;});
-    return { pick:similar[0]||null, confident:false, why:similar.length?'유사 후보 — 직접 확인 필요':'전체 목록 조회 완료 · 일치 후보 없음 (새 상품 등록 전 직접 확인)', candidates:similar };
-  }
-  var inventoryCache={};
-  async function brandProducts(id){
-    if(inventoryCache[id]) return inventoryCache[id];
-    var rows=await pages('/admin/products?brandId='+encodeURIComponent(id));
-    if(rows.some(function(p){return p.brandId!=null&&String(p.brandId)!==String(id);})) throw new Error('브랜드 필터 불일치');
-    inventoryCache[id]=rows.map(function(p){return {id:p.id,name:p.name||p.productName||'',approved:p.approved};});
-    return inventoryCache[id];
+    return { pick:null, confident:false, why:'브랜드 안에 해당 제품 없음', candidates:cand };
   }
 
   /* ── 판정 ── */
   /* 응답 스키마를 한 번 기록해 둔다 — 필드명이 바뀌면 판정이 조용히 틀어지므로 */
   var SCHEMA=null;
-  function suspensionOf(item,detail){
-    var a=detail&&detail.userBlocked,b=item&&item.userBlocked;
-    if(typeof a==='boolean'&&typeof b==='boolean'&&a!==b)return {blocked:null,label:'정지 상태 불일치 — 재스캔 필요'};
-    var blocked=typeof a==='boolean'?a:typeof b==='boolean'?b:null;
-    var count=detail&&detail.userBlockedCount;
-    if(count==null)count=item&&item.userBlockedCount;
-    return {blocked:blocked,count:Number.isInteger(count)&&count>=0?count:null,label:blocked===true?'정지':blocked===false?'정지 아님 (해제 포함)':'정지 상태 확인 불가'};
-  }
 
   async function classify(item, detail){
     if(!SCHEMA) SCHEMA={ detailKeys:Object.keys(detail||{}).sort(),
@@ -528,30 +564,34 @@
                          hasPriceField:('productPrice' in (detail||{})) };
 
     var content = reviewText(detail);
-    var atts=Array.isArray(detail.attachments)?detail.attachments.filter(Boolean):[];
+    var atts=(detail.attachments||[]).filter(Boolean);
     var exWhy = exbakOf(detail);
 
     var out={ id:item.id, brand:item.brandName, product:item.productName, user:item.userNickname,
               visible:item.visible, exbak:!!exWhy, reasons:[], photo:null, action:null, exec:false, msg:null,
               product_exact:null, product_id:null, product_option:null,
-              product_options:null, residue:null, swatch:null, warn:null,
-              attachments:atts,
+              product_options:null, residue:null, swatch:null, warn:null, suspension:null,
+              attachments:atts.slice(0,6),
               approvable:false };   /* 그리드에서 승인/발색샷요청을 고를 수 있는 건인지 */
 
-    out.suspension=suspensionOf(item,detail);
-    out.text=content;
+    /* 정지 사용자는 사진·제품을 볼 필요가 없다 — 먼저 가른다 */
+    out.suspension = suspensionOf(item, detail);
     if(out.suspension.blocked===true){
-      out.action='hide';out.exec=true;out.reasons.push('정지 사용자 — 일반 검수 제외, 미노출 대상');return out;
+      out.action='hide'; out.exec=true;
+      out.reasons.push('정지 사용자'+(out.suspension.count!=null?' (누적 '+out.suspension.count+'회)':'')+' — 검수 제외, 미노출');
+      return out;
     }
     if(out.suspension.blocked===null){
-      out.action='hold';out.reasons.push(out.suspension.label+' — 승인/수정요청 보류');return out;
+      out.action='hold';
+      out.reasons.push(out.suspension.label+' — 승인/수정요청 보류');
+      return out;
     }
 
     /* 사진 포렌식 (첨부 최대 4장) */
-    var cls=[]; for(var i=0;i<atts.length;i++){ var d=await imgDims(atts[i]); cls.push(classifyImg(d.w,d.h)); }
+    var cls=[]; for(var i=0;i<Math.min(atts.length,4);i++){ var d=await imgDims(atts[i]); cls.push(classifyImg(d.w,d.h)); }
     out.photo=photoVerdict(cls); out.photoCls=cls;
 
-    out.text = content;   /* 판단에 사용한 본문 전체 */
+    out.text = content.slice(0,120);   /* 무엇을 읽고 판정했는지 남긴다 */
 
     /* ── 규칙 3: 무의미한 언어만 있으면 검수 대상이 아니다 → 미노출 ──
        단 "본문이 비어 있음"은 무의미한 언어가 아니다. 간편 리뷰일 수도 있고
@@ -561,26 +601,21 @@
     if(isSpam(content)){ out.action='hide'; out.exec=true; out.reasons.push('본문 도배'); return out; }
 
     /* 취급하지 않는 품목은 검수 대상이 아니다 — 사람이 보고 미노출 여부를 정한다 */
-    var nb2=notBeauty(item.productName);
+    var nb2=notBeauty(item.productName+' '+item.brandName);
     if(nb2){ out.action='hold'; out.reasons.push('취급 품목 아님('+nb2+') → 미노출 검토'); return out; }
 
     /* ── 규칙 1·2: 브랜드 안에 매칭된 상품이 있고 좌상단 이미지가 떠야 검수 대상 ── */
-    var productImage=detail.productImageUrl||detail.productImage;
-    var pd=typeof productImage==='string'?await imgDims(productImage):{w:0,h:0};
-    out.product_image=typeof productImage==='string'?productImage:null;
-    if(!pd.w||!pd.h){exWhy=exWhy||[];exWhy.push('제품 이미지 로드 확인 실패');out.exbak=true;}
     if(exWhy){
       out.reasons.push('엑박 — '+exWhy.join(' · '));
       var b=await findBrand(item.brandName);
       if(!b.approvedBrand){
         /* 6번: 브랜드부터 새로 등록해야 함 */
-        out.action=b.anyExact||b.likely.length?'hold':'register_brand';
-        out.reasons.push(b.anyExact?'브랜드 미검수/동명이인 — 확인 필요':b.likely.length?'브랜드 유사 후보: '+b.likely.map(function(x){return x.name;}).join(' / '):'브랜드 정확/부분일치 없음 — 새 등록 전 사용자 오기 여부 직접 확인');
+        out.action='register_brand';
+        out.reasons.push(b.anyExact?'브랜드가 미검수 상태':'브랜드가 CMS에 없음');
         return out;
       }
       var pr=await findProduct(b.approvedBrand.id, item.productName);
-      out.candidates=pr.candidates||[];
-      if(pr.pick && pr.confident && pr.pick.approved!==false){
+      if(pr.pick && pr.confident){
         /* 4번: 브랜드○ 제품○ → 템플릿 수정요청 (일괄 실행 대상).
            옵션까지 확인된 건이면 유저에게는 옵션을 뺀 "제품명"으로 검색하라고 안내한다. */
         out.action='revise_product'; out.exec=true;
@@ -588,11 +623,15 @@
         out.product_option=pr.option||null;
         out.reasons.push(pr.option ? '브랜드○ 제품○ (옵션 «'+pr.option+'») → 재선택 요청'
                                    : '브랜드○ 제품○ → 재선택 요청');
-      } else if(pr.pick || (pr.candidates&&pr.candidates.length)){
+      } else if(pr.pick){
         out.action='hold';
-        out.product_exact=pr.pick?pr.pick.name:null; out.product_id=pr.pick?pr.pick.id:null;
+        out.product_exact=pr.pick.name; out.product_id=pr.pick.id;
         out.product_options=pr.options||null; out.residue=pr.residue||null;
         out.reasons.push(pr.why);
+      } else if(pr.lookupFailed){
+        /* 조회가 실패한 것을 "제품 없음"으로 단정하면 안 된다 */
+        out.action='hold';
+        out.reasons.push('브랜드○ · '+pr.why);
       } else {
         /* 5번: 브랜드는 있는데 그 안에 제품이 없음 */
         out.action='register_product';
@@ -604,31 +643,32 @@
     /* 여기부터는 규칙 1·2 를 통과한 정상 매칭 리뷰 */
 
     /* 사진이 전량 캡처·저해상이면 어뷰징 */
-    if(out.photo.v==='suspect') out.reasons.push('사진 해상도 참고정보 — 도용 여부는 사람이 확인');
+    if(out.photo.v==='suspect'){ out.action='hide'; out.exec=true; out.reasons.push('사진 '+out.photo.label); return out; }
 
     /* 브랜드가 CMS에 조회되는지 확인 — 액션은 바꾸지 않고 경고만 남긴다
        (브랜드 표기 차이로 조회가 빗나갈 수 있어 오탐을 만들지 않는다) */
-    var nb=await findBrand(item.brandName);
-    if(!nb.approvedBrand){out.action='hold';out.reasons.push('브랜드 일치 미확정 — 승인 차단');return out;}
-    var inventory=await brandProducts(nb.approvedBrand.id);
-    var linked=inventory.find(function(p){return String(p.id)===String(detail.productId);});
-    if(!linked||linked.approved===false){out.action='hold';out.reasons.push('연결된 제품이 해당 브랜드의 검수 가능한 상품으로 확인되지 않음');return out;}
-    out.product_exact=linked.name;out.product_id=linked.id;
-    out.reasons.push('CMS 연결 상품: '+linked.name);
+    try {
+      var nb=await findBrand(item.brandName);
+      if(!nb.approvedBrand && !nb.anyExact) out.warn='브랜드 조회 안 됨';
+    } catch(e){}
 
     /* 본문이 정말 비어 있으면 자동 승인하지 않고 사람에게 보낸다 */
     if(!content){ out.action='hold'; out.reasons.push('본문 없음 → 확인'); return out; }
-    if(!atts.length||cls.indexOf('broken')>=0){out.action='hold';out.reasons.push('첨부 사진 없음/로드 실패 — 승인 차단');return out;}
 
     /* ── 규칙 4: 발색 있는 제품이면 발색샷 유무를 사람이 보고 고른다 ── */
     out.swatch = isSwatch(item.productName);
 
-    out.action='hold'; out.approvable=true;
-    out.reasons.push('기본 데이터 확인 완료 · 제품/리뷰 사진 및 본문 일치와 발색샷은 직접 확인 필요');
+    if(out.photo.v==='none'){
+      /* 사진이 없으면 그리드에서 눈으로 볼 것이 없다 — 승인 후보로 두지 않는다 */
+      out.action='hold'; out.reasons.push('첨부 사진 없음 → 확인');
+      if(out.warn) out.reasons.push(out.warn);
+      return out;
+    }
+    out.action='approve'; out.approvable=true;
     if(out.photo.v==='mixed')       out.reasons.push('사진 '+out.photo.label+' → 눈으로 확인');
-    else if(out.photo.v==='camera') out.reasons.push('고해상 사진 · 연결 상품 확인');
-    else if(out.photo.v==='none')   out.reasons.push('첨부 사진 없음 → 확인');
+    else if(out.photo.v==='camera') out.reasons.push('직접촬영 · 매칭 정상');
     else                            out.reasons.push('사진 판별 애매 → 확인');
+    if(out.suspension && out.suspension.count) out.warn='정지 이력 '+out.suspension.count+'회';
     if(out.swatch) out.reasons.push('발색 제품('+out.swatch+') — 발색샷 확인');
     if(out.warn)   out.reasons.push(out.warn);
     return out;
@@ -643,21 +683,6 @@
   document.body.appendChild(box);
 
   var tplMap={}, results=[], logLines=[];
-  var JOURNAL_KEY='unpa-console-journal-v2',SESSION_KEY='unpa-console-session-v2',journal={};
-  try{journal=JSON.parse(localStorage.getItem(JOURNAL_KEY)||'{}');}catch(e){alert('실행 기록을 읽지 못했습니다. 실행 전 브라우저 저장소를 확인하세요.');return;}
-  function saveSession(){
-    var previous=JSON.parse(localStorage.getItem(SESSION_KEY)||'{}');
-    var sessions=previous.sessions||{};
-    if(previous.date&&previous.results)sessions[previous.date]=previous.results;
-    sessions[SCAN_DATE]=results;
-    localStorage.setItem(SESSION_KEY,JSON.stringify({date:SCAN_DATE,sessions:sessions}));
-  }
-  function recordExecution(r,state,status){
-    var req=buildReq(r);
-    var e={id:String(r.id),action:r.action,date:SCAN_DATE,state:state,status:status||0,at:new Date().toISOString(),product_exact:r.product_exact||null,message:req&&req.body&&req.body.content||null};
-    var old=journal[e.id];e.history=(old&&old.history||[]).concat(old?[Object.assign({},old,{history:undefined})]:[]);
-    journal[e.id]=e;localStorage.setItem(JOURNAL_KEY,JSON.stringify(journal));return e;
-  }
   function log(h){ logLines.push(h); var el=document.getElementById('csLog'); if(el) el.innerHTML=logLines.join('<br>'); }
 
   var ACT={
@@ -681,27 +706,11 @@
       +'<button id="csScan" style="margin-top:11px;width:100%;background:#3ddc97;color:#04130c;border:0;border-radius:9px;padding:10px;font-weight:800;cursor:pointer">스캔 시작 (읽기만)</button>'
       +'<div style="margin-top:8px;font-size:11px;color:#6b7f77">스캔은 조회만 합니다. 실제 처리는 이후 대기열에서 승인해야 합니다.</div>');
     document.getElementById('csScan').onclick=function(){ var d=document.getElementById('csDate').value.trim(); if(!validDate(d)){alert('실제 존재하는 YYYY-MM-DD 날짜를 입력해주세요.');return;} scan(d); };
-    var saved;try{saved=JSON.parse(localStorage.getItem(SESSION_KEY)||'null');}catch(e){}
-    var sessions=saved&&(saved.sessions||(saved.date?{[saved.date]:saved.results}:{}))||{};
-    Object.keys(sessions).sort().reverse().forEach(function(date){if(!Array.isArray(sessions[date]))return;
-      var restore=document.createElement('button');restore.textContent='스캔/선택 복원 ('+date+')';
-      restore.onclick=function(){SCAN_DATE=date;results=sessions[date];results.forEach(restoreExecution);renderQueue(SCAN_DATE);offerWorklog();};box.appendChild(restore);
-    });
-    if(Object.keys(journal).length){var backup=document.createElement('button');backup.textContent='전체 실행 이력 JSON 백업';backup.onclick=function(){dl({v:2,executions:Object.values(journal)},'unpa-executions-'+Date.now()+'.json');};box.appendChild(backup);}
-  }
-  function restoreExecution(r){
-    var e=journal[String(r.id)];if(!e)return;r.execution=e;r.applied=e.state==='success';
-    if(r.applied)r.action=e.action;
-    else{r.action='hold';r.approvable=false;r.reasons.push('전송 결과 미확정 — CMS 상세 대조 필요, 자동 재실행 차단');}
   }
 
   function listUrl(sd,page,size){ return API+'/admin/reviews?pageSize='+size+'&startDate='+sd+'&endDate='+sd+'&beforeApproval=true&page='+page+'&field=CREATED_AT&direction=desc'; }
 
   async function scan(sd){
-    if(window.__CONSOLE_RUNNING) return;
-    window.__CONSOLE_RUNNING=true;
-    try {
-    brandCache={};allBrands=null;inventoryCache={};prodCache={};
     SCAN_DATE=sd;
     box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">인증 확인 중…</div>');
     var chk=await get(listUrl(sd,1,1));
@@ -709,12 +718,8 @@
 
     var page=1, all=[], total=0;
     while(page<=30){ box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">목록 수집… <b>'+all.length+'</b>건</div>');
-      var r=await get(listUrl(sd,page,100)); var rows=listOf(r.json); total=totalOf(r.json)||total;
-      if(r.status!==200||!rows) throw new Error('리뷰 목록 조회 실패');
-      if(rows.some(function(x){return !x||!/^\d+$/.test(String(x.id));}))throw new Error('리뷰 식별자 형식 변경');
-      if(rows.some(function(x){return all.some(function(y){return String(y.id)===String(x.id);});})) throw new Error('리뷰 페이지 반복');
-      all=all.concat(rows); if(rows.length<100||(total>0&&all.length>=total)) break; page++; }
-    if(page>30) throw new Error('목록 조회 상한 도달 — 날짜 범위를 확인하세요');
+      var r=await get(listUrl(sd,page,100)); var rows=listOf(r.json)||[]; total=totalOf(r.json)||total;
+      all=all.concat(rows); if(rows.length<100||all.length>=total) break; page++; }
 
     /* 이미 처리된(비노출/승인완료) 건은 건너뜀 후보로만 */
     var pending=all;
@@ -724,19 +729,27 @@
         +esc(pending[i].brandName||'')+' — '+esc(pending[i].productName||'')+'</div>');
       var dr=await get(API+'/admin/reviews/'+pending[i].id);
       var c;
-      try {
-        if(dr.status!==200||!dr.json||typeof dr.json!=='object') throw new Error('리뷰 상세 조회 실패');
-        c=await classify(pending[i], dr.json);
-        c.snapshot=JSON.stringify(dr.json);
-      } catch(e){c={id:pending[i].id,brand:pending[i].brandName,product:pending[i].productName,action:'hold',reasons:[e.message],attachments:[],approvable:false};}
-      restoreExecution(c);
-      results.push(c);
-      saveSession();
+      if(dr.status!==200 || !dr.json || typeof dr.json!=='object'){
+        /* 상세를 못 받았으면 빈 값으로 지어내지 않는다 — 잘못된 판정보다 보류가 낫다 */
+        c={ id:pending[i].id, brand:pending[i].brandName, product:pending[i].productName,
+            user:pending[i].userNickname, action:'hold', exec:false, approvable:false,
+            reasons:['리뷰 상세 조회 실패 (HTTP '+dr.status+') — 판정 보류'],
+            attachments:[], photo:{v:'none',label:'조회 실패'}, photoCls:[] };
+      } else {
+        try {
+          c=await classify(pending[i], dr.json);
+        } catch(e){
+          /* 한 건이 터져도 나머지 스캔은 이어간다 */
+          c={ id:pending[i].id, brand:pending[i].brandName, product:pending[i].productName,
+              user:pending[i].userNickname, action:'hold', exec:false, approvable:false,
+              reasons:['판정 중 오류 — '+(e&&e.message||e)], attachments:[],
+              photo:{v:'none',label:'오류'}, photoCls:[] };
+        }
+      }
+      results.push(sentApply(c));
       await delay(60);
     }
     renderQueue(sd);
-    } catch(e){box.innerHTML=head('<p>'+esc(e.message)+'</p><p>불완전 스캔입니다. 새로고침 후 다시 시도하세요.</p>');}
-    finally {window.__CONSOLE_RUNNING=false;}
   }
 
   function renderQueue(sd){
@@ -760,18 +773,16 @@
       g.forEach(function(r,idx){
         var gid=k+'_'+idx;
         html+='<div style="margin-top:7px;background:#111d18;border:1px solid #22392e;border-radius:8px;padding:8px 10px">'
-          +(exec?'<label style="display:flex;gap:7px;align-items:flex-start;cursor:pointer"><input type="checkbox" class="csChk" data-id="'+r.id+'" '+(r.applied?'disabled':'')+' style="margin-top:3px">':'<div>')
+          +(exec?'<label style="display:flex;gap:7px;align-items:flex-start;cursor:pointer"><input type="checkbox" class="csChk" data-id="'+r.id+'" '+(r.applied?'disabled':'checked')+' style="margin-top:3px">':'<div>')
           +'<div><a class="csLink" href="'+reviewUrl(r.id)+'" target="_blank" rel="noopener" '
           +'title="CMS 리뷰 상세를 새 탭에서 열기" '
           +'style="color:#8fd8ff;font-weight:800;text-decoration:none;border-bottom:1px dotted rgba(143,216,255,.5)">#'+r.id+' ↗</a> '
           +(r.applied?'<span style="color:#3ddc97;font-weight:800">✓ 처리됨</span> ':'')
-          +(r.execution&&!r.applied?'<span style="color:#ff8f6b">전송 결과 미확정 · CMS 확인 필요</span> ':'')
-          +(r.suspension?'<span style="color:'+(r.suspension.blocked===true?'#ff8f6b':'#9fb4ab')+'">['+esc(r.suspension.label)+(r.suspension.count!=null?' / '+r.suspension.count+'회':'')+']</span> ':'')
           +'<span style="color:#9fb4ab">'+esc(r.brand||'')+' / '+esc(r.product||'')+'</span>'
           +'<div style="font-size:11px;color:#7f948b;margin-top:2px">'+esc(r.reasons.join(' · '))
           + (r.photo&&r.photo.v!=='none'?' · 사진:'+esc(r.photo.label):'')
           + (r.product_exact?' · <span style="color:#3ddc97">→ '+esc(r.product_exact)+'</span>':'')+'</div>'
-          + (!exec && r.exbak && r.product_exact && !r.applied && !(r.candidates||[]).some(function(p){return p.id===r.product_id&&p.approved===false;})
+          + (!exec && r.product_exact && !r.applied
               ? '<button class="csFix" data-id="'+r.id+'" '
                 +'style="margin-top:7px;width:100%;background:#1b3329;color:#9fe3c4;border:1px solid #3ddc97;'
                 +'border-radius:7px;padding:7px 9px;font:inherit;font-size:11.5px;font-weight:700;cursor:pointer">'
@@ -809,31 +820,40 @@
         ev.stopPropagation(); ev.preventDefault();
         var r=results.filter(function(x){ return String(x.id)===String(b.dataset.id); })[0];
         if(!r || !r.product_exact) return;
-        runJobs([Object.assign({},r,{action:'revise_product'})]);
+        r.action='revise_product';
+        runJobs([r]);
       };
     });
-    document.getElementById('csRescan').onclick=function(){ if(!window.__CONSOLE_RUNNING) renderStart(sd); };
+    document.getElementById('csRescan').onclick=function(){ renderStart(sd); };
     document.getElementById('csDl').onclick=function(){ dl(auditPayload(),'unpa-audit-'+sd+'.json'); };
     if(nGrid) document.getElementById('csGridBtn').onclick=function(){ openGrid(); };
     if(nExec) document.getElementById('csRun').onclick=function(){ runExec(); };
-    results.filter(function(r){return r.action==='hold'&&!r.applied;}).forEach(function(r){
-      var row=document.createElement('div');row.style.cssText='margin-top:10px;border-top:1px solid #456;padding-top:8px';
-      var label=document.createElement('div');label.textContent='#'+r.id+' 직접 판단';row.appendChild(label);
-      if(r.candidates&&r.candidates.length){
-        var select=document.createElement('select');select.style.maxWidth='100%';
-        var empty=document.createElement('option');empty.value='';empty.textContent='CMS 후보 선택 (상세에서 동일 제품인지 확인)';select.appendChild(empty);
-        r.candidates.forEach(function(p){var o=document.createElement('option');o.value=String(p.id);o.disabled=p.approved===false;o.textContent=p.name+' (#'+p.id+')'+(o.disabled?' 미검수':'');select.appendChild(o);});row.appendChild(select);
-        var revise=document.createElement('button');revise.textContent='선택한 상품으로 수정요청';revise.onclick=function(){var p=r.candidates.find(function(p){return String(p.id)===select.value;});if(!p)return;runJobs([Object.assign({},r,{action:'revise_product',product_exact:p.name,product_id:p.id})]);};row.appendChild(revise);
-      }
-      var hide=document.createElement('button');hide.textContent='문제 리뷰 확인 → 미노출';hide.onclick=function(){runJobs([Object.assign({},r,{action:'hide'})]);};row.appendChild(hide);box.appendChild(row);
-    });
+  }
+
+  /* ── 전송 이력 ────────────────────────────────────────
+     성공한 전송만 기록한다. 재스캔해도 같은 리뷰에 수정요청이
+     두 번 나가지 않게 하는 것이 목적이다. */
+  var SENT_KEY='unpa-console-sent-v1';
+  function sentLoad(){ try{ return JSON.parse(localStorage.getItem(SENT_KEY)||'{}'); }catch(e){ return {}; } }
+  function sentMark(r){
+    try{ var m=sentLoad();
+      m[String(r.id)]={ action:r.action, at:new Date().toISOString(), date:SCAN_DATE };
+      localStorage.setItem(SENT_KEY, JSON.stringify(m));
+    }catch(e){}
+  }
+  function sentApply(r){
+    var m=sentLoad(), e=m[String(r.id)];
+    if(!e) return r;
+    r.applied=true; r.action=e.action; r.approvable=false;
+    r.reasons=(r.reasons||[]).concat(['이미 처리됨 ('+String(e.at).slice(0,16).replace('T',' ')+')']);
+    return r;
   }
 
   /* ── 공통 다운로드 ── */
   function dl(obj,name){
     var blob=new Blob([JSON.stringify(obj,null,1)],{type:'application/json'});
     var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name;
-    document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){URL.revokeObjectURL(a.href);},1000);
+    document.body.appendChild(a); a.click(); a.remove();
   }
 
   /* ── 실행 ─────────────────────────────────────────────
@@ -856,36 +876,14 @@
     if(r.action==='approve') return {method:'POST',url:API+'/admin/reviews/'+r.id+'/approve', body:{}};
     return null;
   }
-  function confirmedResult(r,d){
-    if(!d||String(d.id)!==String(r.id))return false;
-    if(r.action==='approve')return d.status==='APPROVED';
-    if(r.action==='hide')return d.visible===false;
-    if(r.action==='revise_product'||r.action==='revise_swatch'){
-      var old;try{old=JSON.parse(r.snapshot);}catch(e){return false;}
-      return !!d.lastRevisedAt&&Number.isFinite(Date.parse(d.lastRevisedAt))&&d.lastRevisedAt!==old.lastRevisedAt;
-    }
-    return false;
-  }
 
   async function runJobs(jobs){
-    var perform=async function(){
-      try{journal=JSON.parse(localStorage.getItem(JOURNAL_KEY)||'{}');return await runJobsUnlocked(jobs);}
-      catch(e){alert('실행 기록 확인 실패: '+e.message);}
-    };
-    if(typeof navigator!=='undefined'&&navigator.locks){
-      return navigator.locks.request('unpa-console-execution',{ifAvailable:true},function(lock){if(!lock){alert('다른 탭에서 실행 중입니다.');return;}return perform();});
-    }
-    return perform();
-  }
-  async function runJobsUnlocked(jobs){
     if(window.__CONSOLE_RUNNING){ alert('이미 실행 중입니다.'); return; }
     if(!jobs.length){ alert('실행할 대상이 없습니다.'); return; }
-    jobs=JSON.parse(JSON.stringify(jobs));
-    if(jobs.some(function(r){return r.applied||journal[String(r.id)]||!/^\d+$/.test(String(r.id))||(r.action==='approve'&&(!r.approvable||!r.humanVerified));})){
-      alert('이미 실행했거나 결과가 불명확한 건, 또는 확인되지 않은 승인이 포함되어 있습니다. CMS 상세와 실행 기록을 확인하세요.');return;
-    }
-    if(jobs.some(function(r){return !buildReq(r);})){alert('템플릿/요청 정보가 없어 실행할 수 없습니다.');return;}
 
+    var already=sentLoad();
+    jobs=jobs.filter(function(r){ return !already[String(r.id)]; });   /* 이미 보낸 건은 빼고 보낸다 */
+    if(!jobs.length){ alert('선택한 건은 모두 이미 처리되었습니다.'); return; }
     var byAct={}; jobs.forEach(function(r){ byAct[r.action]=(byAct[r.action]||0)+1; });
     var over=Object.keys(byAct).filter(function(k){ return byAct[k] > (CAP[k]||0); });
     if(over.length){
@@ -894,41 +892,20 @@
       return;
     }
     var summ=Object.keys(byAct).map(function(k){ return ACT[k].t+' '+byAct[k]+'건'; }).join(' · ');
-    var preview=jobs.map(function(r){var req=buildReq(r);return '#'+r.id+' '+ACT[r.action].t+'\n'+(req.body.content?req.body.content.join('\n'):'');}).join('\n\n');
-    if(!confirm('실제로 '+jobs.length+'건을 처리합니다.\n\n'+summ+'\n사진·본문의 제품 일치와 발색샷(해당 시)을 직접 확인했습니까?\n\n'+preview+'\n\n진행할까요?')) return;
+    if(!confirm('실제로 '+jobs.length+'건을 처리합니다.\n\n'+summ+'\n\n진행할까요?')) return;
 
     window.__CONSOLE_RUNNING=true;
     var run=document.getElementById('csRun'); if(run){ run.disabled=true; run.textContent='실행 중…'; }
     var logs=[];
-    try {
     for(var i=0;i<jobs.length;i++){
       var r=jobs[i], req=buildReq(r);
       if(!req){ log('&nbsp;&nbsp;<span style="color:#ff8f6b">✗ #'+r.id+' 요청 생성 실패 — 건너뜀</span>'); continue; }
       log('▶ #'+r.id+' '+ACT[r.action].t+' <span style="color:#6b7f77">('+(i+1)+'/'+jobs.length+')</span>');
-      var fresh=await get(API+'/admin/reviews/'+r.id);
-      if(fresh.status!==200||JSON.stringify(fresh.json)!==r.snapshot){alert('#'+r.id+' 상세가 변경됐거나 재조회 실패했습니다. 재스캔하세요.');break;}
-      var currentSuspension=suspensionOf(null,fresh.json);
-      if(currentSuspension.blocked===null){
-        var currentRows=await pages('/admin/reviews?startDate='+SCAN_DATE+'&endDate='+SCAN_DATE+'&beforeApproval=true');
-        currentSuspension=suspensionOf(currentRows.find(function(x){return String(x.id)===String(r.id);}),fresh.json);
-      }
-      if((r.action!=='hide'&&currentSuspension.blocked!==false)||(r.suspension&&r.suspension.blocked===true&&currentSuspension.blocked!==true)){
-        alert('#'+r.id+' 정지 상태가 변경되었거나 확인되지 않습니다. 재스캔 후 처리하세요.');break;
-      }
-      recordExecution(r,'pending'); // 먼저 영속화. 전송 이후 응답 유실 시 자동 재시도 금지.
       var res=await send(req.method,req.url,req.body);
-      var ok=false;
-      if(res.status>=200&&res.status<300){
-        ok=confirmedResult(r,res.json);
-        if(!ok){var verified=await get(API+'/admin/reviews/'+r.id);ok=verified.status===200&&confirmedResult(r,verified.json);}
-      }
-      var execution=recordExecution(r,ok?'success':'uncertain',res.status);
+      var ok=(res.status>=200&&res.status<300);
       r.applied=ok;
-      var original=results.find(function(x){return String(x.id)===String(r.id);});
-      if(original){original.execution=execution;original.applied=ok;if(ok){original.action=r.action;original.product_exact=r.product_exact;original.product_id=r.product_id;original.product_option=r.product_option;}}
-      saveSession();
       logs.push({id:r.id,action:r.action,status:res.status,ok:ok,response:res.json||res.text});
-      if(ok){ log('&nbsp;&nbsp;<span style="color:#3ddc97">✓ '+res.status+'</span>'); }
+      if(ok){ sentMark(r); log('&nbsp;&nbsp;<span style="color:#3ddc97">✓ '+res.status+'</span>'); }
       else {
         log('&nbsp;&nbsp;<span style="color:#ff8f6b">✗ '+res.status+' — 중단</span>');
         log('&nbsp;&nbsp;<span style="font-size:11px">'+esc((res.text||'').slice(0,140))+'</span>');
@@ -938,9 +915,8 @@
     }
     dl({at:new Date().toISOString(),date:SCAN_DATE,logs:logs},'cms-console-log-'+Date.now()+'.json');
     var okN=logs.filter(function(x){return x.ok;}).length;
-    log('<b style="color:'+(okN===jobs.length?'#3ddc97':'#ff8f6b')+'">결과 확인 성공 '+okN+'/'+jobs.length+' · 실제 요청 '+logs.length+' · 로그 저장</b>');
-    } catch(e){alert('실행 중단: '+e.message+'\n응답이 불명확한 건은 CMS에서 확인하세요. 자동 재시도하지 않습니다.');}
-    finally {window.__CONSOLE_RUNNING=false;}
+    log('<b style="color:'+(okN===logs.length?'#3ddc97':'#ff8f6b')+'">완료 '+okN+'/'+logs.length+' · 로그 저장</b>');
+    window.__CONSOLE_RUNNING=false;
     renderQueue(SCAN_DATE);
     offerWorklog();
   }
@@ -948,7 +924,7 @@
   /* 대기열 체크박스 → 실행 */
   function runExec(){
     var ids={};
-    [].slice.call(box.querySelectorAll('.csChk')).forEach(function(c){ if(c.checked) ids[c.dataset.id]=1; });
+    [].slice.call(document.querySelectorAll('.csChk')).forEach(function(c){ if(c.checked) ids[c.dataset.id]=1; });
     runJobs(results.filter(function(r){ return ids[r.id] && (r.action==='revise_product'||r.action==='hide'); }));
   }
 
@@ -964,18 +940,16 @@
     return {
       v:1, date:SCAN_DATE, at:new Date().toISOString(), total:results.length, summary:summary,
       schema: SCHEMA,          /* 상세 응답 필드 — 판정이 어긋나면 여기부터 본다 */
-      executions:Object.values(journal).filter(function(e){return e.date===SCAN_DATE;}),
       items: results.map(function(r){
         return { id:r.id, brand:r.brand, product:r.product, user:r.user,
                  verdict: VMAP[r.action]||'hold', action:r.action,
                  reason: r.reasons.join(' · '), reasons:r.reasons,
                  applied: !!r.applied, exbak:!!r.exbak, swatch:r.swatch||null, warn:r.warn||null,
+                 suspension:r.suspension||null,
                  text: r.text||'',
                  photo: r.photo?r.photo.label:'', photoCls:r.photoCls||[],
                  product_exact:r.product_exact, product_option:r.product_option||null,
                  product_options:r.product_options||null, residue:r.residue||null,
-                 execution:r.execution||null,candidates:r.candidates||[],selection:r.selection||'skip',
-                 suspension:r.suspension||null,
                  attachments:r.attachments||[] };
       })
     };
@@ -985,7 +959,7 @@
     var done=results.filter(function(r){ return r.applied; });
     if(!done.length) return;
     var n=function(a){ return done.filter(function(r){return r.action===a;}).length; };
-    var payload={ d:SCAN_DATE, r:done.length, p:0, ids:done.map(function(r){return String(r.id);}),
+    var payload={ d:SCAN_DATE, r:done.length, p:0,
                   note:'콘솔 처리 · 검수완료 '+n('approve')+' · 제품재선택 '+n('revise_product')
                        +' · 발색샷 '+n('revise_swatch')+' · 미노출 '+n('hide') };
     var wl=WORKLOG_URL+'#sync='+encodeURIComponent(JSON.stringify(payload));
@@ -995,15 +969,7 @@
     var b1=document.createElement('button');
     b1.textContent='📒 업무일지 반영 ('+done.length+')';
     b1.style.cssText='flex:1.4;background:#2c4a3c;color:#cfe;border:1px solid #3ddc97;border-radius:8px;padding:9px;font:inherit;font-weight:800;cursor:pointer';
-    b1.onclick=function(){
-      var audit=auditPayload();var nonce=crypto.randomUUID();var child=window.open(WORKLOG_URL+'#console='+nonce,'_blank');
-      if(!child){alert('팝업을 허용하거나 검수기록 JSON을 불러오세요.');return;}
-      var target=new URL(WORKLOG_URL).origin;
-      var listener=function(ev){if(ev.origin!==target||ev.source!==child||!ev.data||ev.data.nonce!==nonce||ev.data.type!=='unpa-console-ready')return;
-        child.postMessage({type:'unpa-console-result',nonce:nonce,payload:payload,audit:audit},target);
-        window.removeEventListener('message',listener);
-      };window.addEventListener('message',listener);setTimeout(function(){window.removeEventListener('message',listener);},120000);
-    };
+    b1.onclick=function(){ window.open(wl,'_blank'); };
     var b2=document.createElement('button');
     b2.textContent='검수기록 JSON';
     b2.style.cssText='flex:1;background:#132019;color:#9fb4ab;border:1px solid #2c4a3c;border-radius:8px;padding:9px;font:inherit;font-weight:700;cursor:pointer';
@@ -1017,14 +983,13 @@
      눈으로 봐야 한다. 한 화면에 깔아놓고 이상한 것만 체크를 풀어
      나머지를 한 번에 승인한다. */
   function openGrid(){
-    if(window.__CONSOLE_RUNNING){alert('스캔/실행 완료 후 열어주세요.');return;}
     var pool=results.filter(function(r){ return r.approvable && !r.applied; });
     if(!pool.length){ alert('검수 진행할 대상이 없습니다.'); return; }
     /* 발색 제품을 앞으로 — 발색샷 유무는 주의해서 봐야 하므로 */
     pool.sort(function(a,b){ return (b.swatch?1:0)-(a.swatch?1:0); });
 
     var st={}, node={};
-    pool.forEach(function(r){ st[r.id]=r.selection||'skip'; });
+    pool.forEach(function(r){ st[r.id]='approve'; });   /* 기본은 검수완료 */
 
     var ov=document.createElement('div'); ov.id='csGrid';
     ov.style.cssText='position:fixed;inset:0;z-index:2147483646;background:#0a1310;color:#e8f1ed;'
@@ -1079,9 +1044,10 @@
 
     var BTN='background:#132019;color:#9fb4ab;border:1px solid #2c4a3c;border-radius:8px;padding:8px 13px;font:inherit;cursor:pointer';
     bar.innerHTML='<b style="color:#3ddc97;font-size:14px">👀 사진 확인 후 검수</b>'
-      +'<span style="color:#9fb4ab">카드=<b>사진·본문 확인 후 선택/해제</b> · <b style="color:#f0a35e">💄</b>=발색샷 요청 · <b>🔍</b>=사진 크게 · <b>↗</b>=CMS 상세</span>'
+      +'<span style="color:#9fb4ab">카드=<b>건너뛰기</b> 토글 · <b style="color:#f0a35e">💄</b>=발색샷 요청 · <b>🔍</b>=사진 크게 · <b>↗</b>=CMS 상세</span>'
       +'<span id="gCnt" style="color:#6b7f77">건너뜀 0</span>'
       +'<span style="flex:1"></span>'
+      +'<button id="gAll" style="'+BTN+'">전체 검수완료</button>'
       +'<button id="gNone" style="'+BTN+'">전체 건너뛰기</button>'
       +'<button id="gGo" style="background:#3ddc97;color:#04130c;border:0;border-radius:8px;padding:8px 17px;font:inherit;font-weight:800;cursor:pointer">실행</button>'
       +'<button id="gX" style="'+BTN+'">닫기</button>';
@@ -1101,14 +1067,11 @@
         +'<span class="gopen" title="CMS 상세 열기" style="position:absolute;right:66px;top:6px;background:rgba(0,0,0,.7);border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px">↗</span>'
         +'</div>'
         +'<div style="padding:7px 8px">'
-        +(r.product_image?'<img src="'+esc(r.product_image)+'" style="width:48px;height:48px;object-fit:contain" alt="CMS 연결 제품">':'')
-        +'<div style="font-size:11px;color:#cfe">CMS: '+esc(r.product_exact||'')+'</div>'
         +'<div style="font-size:11px;color:#9fb4ab;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(r.brand||'')+'</div>'
         +'<div style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(r.product||'')+'</div>'
         +(r.swatch?'<div style="font-size:10px;color:#f0a35e;margin-top:2px">💄 발색 제품 — 발색샷 확인</div>':'')
         +(r.photo&&r.photo.v==='mixed'?'<div style="font-size:10px;color:#f5c451;margin-top:2px">⚠ '+esc(r.photo.label)+'</div>':'')
         +(r.warn?'<div style="font-size:10px;color:#f5c451;margin-top:2px">⚠ '+esc(r.warn)+'</div>':'')
-        +'<div style="white-space:pre-wrap;max-height:160px;overflow:auto;font-size:11px;margin-top:6px">'+esc(r.text||'')+'</div>'
         +'</div>';
       el.onclick=function(ev){
         var t=ev.target;
@@ -1121,7 +1084,6 @@
           st[r.id] = (st[r.id]==='skip') ? 'approve' : 'skip';
         }
         paint(r); syncBar();
-        r.selection=st[r.id];saveSession();
       };
       node[r.id]=el; grid.appendChild(el);
     });
@@ -1141,14 +1103,15 @@
       document.body.appendChild(lb);
     }
 
-    document.getElementById('gNone').onclick=function(){ pool.forEach(function(r){ st[r.id]='skip';r.selection='skip';paint(r); });saveSession();syncBar(); };
+    document.getElementById('gAll').onclick =function(){ pool.forEach(function(r){ st[r.id]='approve'; paint(r); }); syncBar(); };
+    document.getElementById('gNone').onclick=function(){ pool.forEach(function(r){ st[r.id]='skip';    paint(r); }); syncBar(); };
     document.getElementById('gX').onclick   =function(){ closeGrid(); };
     document.getElementById('gGo').onclick  =function(){
       var jobs=[];
       pool.forEach(function(r){
         var v=st[r.id];
-        if(v==='approve') jobs.push(Object.assign({},r,{action:'approve',humanVerified:true}));
-        else if(v==='swatch') jobs.push(Object.assign({},r,{action:'revise_swatch'}));
+        if(v==='approve'){ r.action='approve';       jobs.push(r); }
+        else if(v==='swatch'){ r.action='revise_swatch'; jobs.push(r); }
       });
       if(!jobs.length){ alert('선택된 건이 없습니다.'); return; }
       closeGrid();
@@ -1158,7 +1121,7 @@
   }
 
   /* ── 시작 ── */
-  var qs=new URLSearchParams(location.search); var sd=qs.get('startDate')||new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Seoul'}).format(new Date());
+  var qs=new URLSearchParams(location.search); var sd=qs.get('startDate')||new Date().toISOString().slice(0,10);
   box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">템플릿 불러오는 중…</div>');
   oF.call(window,TPL_URL+'?t='+Date.now()).then(function(r){return r.json();}).then(function(d){
     (d.templates||[]).forEach(function(t){tplMap[t.key]=t;}); renderStart(sd);

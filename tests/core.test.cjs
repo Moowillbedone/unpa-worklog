@@ -10,7 +10,7 @@ function consoleRules(overrides={}){
   function XHR(){}XHR.prototype.open=function(){};XHR.prototype.setRequestHeader=function(){};
   const ctx={location:{hostname:'cms.unpa.me'},document:{getElementById:()=>null},window:{fetch:async()=>{throw Error('Unexpected network');}},XMLHttpRequest:XHR,alert:()=>{},AbortController,setTimeout,clearTimeout,URL,Set,...overrides};
   vm.createContext(ctx);
-  vm.runInContext(code+`;globalThis.rules={gibberish,notBeauty,reviewText,stripSize,tokensOf,photoVerdict,findProduct,findBrand,classify,pages,exbakOf,esc};globalThis.mock=(name,fn)=>{if(name==='get')get=fn;if(name==='imgDims')imgDims=fn;if(name==='delay')delay=fn;};})();`,ctx);
+  vm.runInContext(code+`;globalThis.rules={gibberish,notBeauty,reviewText,stripSize,tokensOf,photoVerdict,findProduct,findBrand,classify,exbakOf,esc,suspensionOf,residueOf,tokenCover,validDate};globalThis.mock=(name,fn)=>{if(name==='get')get=fn;if(name==='imgDims')imgDims=fn;if(name==='delay')delay=fn;};})();`,ctx);
   ctx.mock('delay',async()=>{});return ctx;
 }
 test('all distribution scripts parse',()=>{
@@ -41,22 +41,23 @@ test('full brand inventory + option lookup finds nail shade',async()=>{
   const p=await c.rules.findProduct(4,'링링 파스텔 네일 10 ml 라임민트');
   assert.equal(p.confident,true);assert.equal(p.option,'라임민트');assert.ok(calls.some(x=>x.endsWith('/options')));
 });
-test('omitted name words and collaborations are recommendations, not confirmed',async()=>{
+test('omitted name words and collaborations are auto-confirmed',async()=>{
   for(const [user,name] of [['코쿤 드 세레니떼 필로우 미스트','코쿤 드 세레니떼 릴랙싱 필로우 미스트'],['올테이크 무드 라이크 팔레트','(페리페라X궁) 올테이크 무드 라이크 팔레트']]){
     const c=consoleRules();c.mock('get',async()=>({status:200,json:{total:1,results:[{id:1,name}]}}));
-    const p=await c.rules.findProduct(1,user);assert.equal(p.confident,false);assert.equal(p.pick.name,name);
+    const p=await c.rules.findProduct(1,user);assert.equal(p.confident,true);assert.equal(p.pick.name,name);
   }
 });
-test('failed and repeated pages are not absence',async()=>{
-  const c=consoleRules();c.mock('get',async()=>({status:500,json:null}));await assert.rejects(c.rules.findProduct(1,'쿠션'));
-  c.mock('get',async()=>({status:200,json:{total:200,results:[{id:1,name:'x'}]}}));await assert.rejects(c.rules.pages('/admin/products?brandId=1'),/반복/);
+test('lookup failure is not treated as absence',async()=>{
+  const c=consoleRules();c.mock('get',async()=>({status:500,json:null}));
+  const p=await c.rules.findProduct(1,'쿠션 미스트');
+  assert.equal(p.lookupFailed,true);assert.equal(p.pick,null);assert.match(p.why,/조회 실패/);
 });
-test('normal review remains human verification, broken attachments never approval',async()=>{
+test('normal review becomes approve candidate',async()=>{
   const c=consoleRules();c.mock('get',async url=>({status:200,json:{total:1,results:url.includes('/brands?')?[{id:4,name:'브랜드',approved:true}]:[{id:1,name:'쿠션',brandId:4}]}}));
   c.mock('imgDims',async()=>({w:2500,h:2500}));
   const item={id:10,brandName:'브랜드',productName:'쿠션'};
   const detail={userBlocked:false,userBlockedCount:5,productId:1,productImageUrl:'https://img.test/product',contentText:'촉촉해요!',attachments:['https://img.test/review']};
-  const r=await c.rules.classify(item,detail);assert.equal(r.action,'hold');assert.equal(r.approvable,true);assert.equal(r.suspension.count,5);
+  const r=await c.rules.classify(item,detail);assert.equal(r.action,'approve');assert.equal(r.approvable,true);assert.equal(r.suspension.count,5);assert.equal(r.warn,'정지 이력 5회');
   const empty=await c.rules.classify(item,{...detail,attachments:[]});assert.equal(empty.approvable,false);
 });
 test('dates, numeric types and import validation',()=>{

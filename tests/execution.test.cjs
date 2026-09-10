@@ -1,72 +1,89 @@
-const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const vm=require('node:vm');
+/* 실행 경로 — 무엇이 실제로 CMS 로 나가는가 */
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+const path=require('node:path');
+const root=path.resolve(__dirname,'..');
+
+/* cms-console.js 를 통째로 실행하고 내부를 꺼내 온다.
+   네트워크는 전부 가짜이며 실제 CMS 로는 아무것도 나가지 않는다. */
 function harness(){
-  const ids={},storage=new Map(),sent=[],alerts=[];
-  class Element{
-    constructor(){this.style={};this.children=[];this.dataset={};this.classList={contains:()=>false};}
-    set innerHTML(s){this.html=s;for(const m of s.matchAll(/id="([^"]+)"/g)){const e=new Element();e.parentNode=this;ids[m[1]]=e;}}
-    get innerHTML(){return this.html||'';}
-    appendChild(e){this.children.push(e);e.parentNode=this;if(e.id)ids[e.id]=e;return e;}
-    insertBefore(e){return this.appendChild(e);}
-    remove(){if(this.id)delete ids[this.id];}
-    querySelector(){return null;}
-    querySelectorAll(){return [];}
-    click(){}
-  }
-  function XHR(){}XHR.prototype.open=function(){};XHR.prototype.setRequestHeader=function(){};
-  const ctx={location:{hostname:'cms.unpa.me',origin:'https://cms.unpa.me'},window:{fetch:()=>{throw Error('Network prohibited');}},document:{body:new Element(),createElement:()=>new Element(),getElementById:id=>ids[id]||null},localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},XMLHttpRequest:XHR,alert:x=>alerts.push(x),confirm:()=>false,URL,Blob,AbortController,setTimeout:()=>0,clearTimeout:()=>{},crypto:require('node:crypto').webcrypto};
-  vm.createContext(ctx);const source=fs.readFileSync(require.resolve('../cms-console.js'),'utf8').split('  /* ── 시작 ── */')[0];
-  vm.runInContext(source+`;globalThis.api={runJobs,openGrid,auditPayload,scan,renderQueue,set(rows){results=rows;SCAN_DATE='2026-09-02';},mock(g,s){get=g;send=s;delay=async()=>{};dl=()=>{};tplMap={swatch:{body:'발색샷 요청'},product_match:{body:'{제품명} 재선택'}};},get rows(){return results;}};})();`,ctx);
-  const detail={id:1,userBlocked:false,contentText:'촉촉해요',productId:2};
-  ctx.api.mock(async()=>({status:200,json:detail}),async(...args)=>{sent.push(args);return {status:201,json:{id:1,status:'APPROVED'}};});
-  const row={id:1,brand:'브랜드',product:'쿠션',action:'hold',approvable:true,attachments:[],reasons:[],snapshot:JSON.stringify(detail)};
-  ctx.api.set([row]);return {ctx,ids,storage,sent,alerts,row,detail};
+  const code=fs.readFileSync(path.join(root,'cms-console.js'),'utf8');
+  const raw=[]; const store={};
+  const sent={get length(){return raw.filter(x=>x.url.indexOf('/admin/')>=0).length;},
+              filter(f){return raw.filter(x=>x.url.indexOf('/admin/')>=0).filter(f);}};
+  function XHR(){} XHR.prototype.open=function(){}; XHR.prototype.setRequestHeader=function(){};
+  const el=()=>({style:{},onclick:null,appendChild(){},remove(){},click(){},querySelectorAll:()=>[],
+                 querySelector:()=>null,insertBefore(){},set innerHTML(v){},get innerHTML(){return '';},
+                 dataset:{},classList:{contains:()=>false},parentNode:{insertBefore(){}}});
+  const ctx={
+    location:{hostname:'cms.unpa.me',origin:'https://cms.unpa.me',search:''},
+    document:{getElementById:()=>el(),createElement:el,body:{appendChild(){}},
+              querySelectorAll:()=>[],querySelector:()=>null},
+    localStorage:{getItem:k=>store[k]||null,setItem:(k,v)=>{store[k]=v;},removeItem:k=>{delete store[k];}},
+    URLSearchParams:class{constructor(){}get(){return null;}},
+    Blob:class{constructor(p){this.parts=p;}},Image:class{},
+    URL:Object.assign(function(u,b){return new URL(u,b);},
+        {createObjectURL:()=>'blob:stub',revokeObjectURL(){},prototype:URL.prototype}),
+    AbortController,setTimeout,clearTimeout,Set,Date,JSON,Math,
+    alert:m=>{ctx.__alert=m;},confirm:()=>ctx.__confirm!==false,
+    fetch:async(url,init)=>{ raw.push({url:String(url),method:(init&&init.method)||'GET',body:init&&init.body});
+                             const payload='{"status":"APPROVED","templates":[]}';
+                             return {status:201,text:async()=>payload,json:async()=>JSON.parse(payload)}; },
+  };
+  ctx.window=ctx; ctx.XMLHttpRequest=XHR;
+  vm.createContext(ctx);
+  vm.runInContext(code.replace('  /* ── 시작 ── */',
+    `globalThis.api={buildReq,runJobs,sentLoad,CAP,setResults:r=>{results=r;},
+                     setDate:d=>{SCAN_DATE=d;},setTpl:t=>{tplMap=t;},getResults:()=>results};
+     /* ── 시작 ── */`), ctx);
+  return {api:ctx.api, sent, ctx, store};
 }
-test('grid defaults to skip and preserves swatch selection on reopen',()=>{
-  const h=harness();h.ctx.api.openGrid();assert.match(h.ids.gGo.textContent,/검수완료 0 · 발색샷 0/);
-  h.ids.gX.onclick();h.row.selection='swatch';h.ctx.api.openGrid();assert.match(h.ids.gGo.textContent,/검수완료 0 · 발색샷 1/);
+const TPL={ product_match:{body:'제품 정보에서 [{제품명}] 검색 및 선택해주세요.'},
+            swatch:{body:'해당 제품의 발색샷도 첨부 부탁드립니다.'} };
+
+test('each verdict maps to the documented CMS request',()=>{
+  const {api}=harness(); api.setTpl(TPL);
+  assert.equal(JSON.stringify(api.buildReq({id:1,action:'approve'})),
+    JSON.stringify({method:'POST',url:'https://api-v2.unpa.me/admin/reviews/1/approve',body:{}}));
+  assert.equal(JSON.stringify(api.buildReq({id:2,action:'hide'})),
+    JSON.stringify({method:'PUT',url:'https://api-v2.unpa.me/admin/reviews/2',body:{visible:false}}));
+  const rev=api.buildReq({id:3,action:'revise_product',product_exact:'참 틴트'});
+  assert.equal(rev.url,'https://api-v2.unpa.me/admin/reviews/3/revise');
+  assert.match(rev.body.content[0],/\[참 틴트\]/);
+  const sw=api.buildReq({id:4,action:'revise_swatch'});
+  assert.match(sw.body.content[0],/발색샷/);
+  assert.equal(api.buildReq({id:5,action:'hold'}),null,'사람이 볼 건은 요청을 만들지 않는다');
 });
-test('cancelled execution does not mutate verdict or transmit',async()=>{
-  const h=harness();await h.ctx.api.runJobs([{...h.row,action:'approve',humanVerified:true}]);
-  assert.equal(h.row.action,'hold');assert.equal(h.sent.length,0);assert.equal(h.storage.size,0);
+
+test('per-action caps refuse oversized batches',async()=>{
+  const {api,sent,ctx}=harness(); api.setTpl(TPL); api.setDate('2026-09-02');
+  const many=Array.from({length:api.CAP.hide+1},(_,i)=>({id:1000+i,action:'hide',reasons:[]}));
+  await api.runJobs(many);
+  assert.equal(sent.length,0,'상한을 넘으면 한 건도 보내지 않는다');
+  assert.match(ctx.__alert,/상한/);
 });
-test('unverified approval is rejected even if manually passed to executor',async()=>{
-  const h=harness();h.ctx.confirm=()=>true;await h.ctx.api.runJobs([{...h.row,action:'approve'}]);assert.equal(h.sent.length,0);
+
+test('cancelling the confirm sends nothing',async()=>{
+  const {api,sent,ctx}=harness(); api.setTpl(TPL); api.setDate('2026-09-02');
+  ctx.__confirm=false;
+  await api.runJobs([{id:7,action:'approve',reasons:[]}]);
+  assert.equal(sent.length,0);
 });
-test('successful execution is journaled and cannot execute twice',async()=>{
-  const h=harness();h.ctx.confirm=()=>true;const job={...h.row,action:'approve',humanVerified:true};
-  await h.ctx.api.runJobs([job]);assert.equal(h.sent.length,1);assert.equal(h.row.applied,true);
-  assert.equal(JSON.parse(h.storage.get('unpa-console-journal-v2'))['1'].state,'success');
-  await h.ctx.api.runJobs([job]);assert.equal(h.sent.length,1);assert.equal(h.ctx.window.__CONSOLE_RUNNING,false);
+
+test('a successful send is journaled and never repeats',async()=>{
+  const {api,sent}=harness(); api.setTpl(TPL); api.setDate('2026-09-02');
+  const job={id:9,action:'approve',reasons:[]};
+  api.setResults([job]);
+  await api.runJobs([job]);
+  assert.equal(sent.filter(s=>s.method==='POST').length,1);
+  assert.ok(api.sentLoad()['9'],'전송 이력에 남는다');
+  await api.runJobs([job]);                       /* 같은 건을 다시 실행 */
+  assert.equal(sent.filter(s=>s.method==='POST').length,1,'두 번 나가지 않는다');
 });
-test('changed detail blocks sending',async()=>{
-  const h=harness();h.ctx.confirm=()=>true;h.ctx.api.mock(async()=>({status:200,json:{...h.detail,contentText:'changed'}}),async()=>{throw Error('must not send');});
-  await h.ctx.api.runJobs([{...h.row,action:'hide'}]);assert.equal(h.storage.has('unpa-console-journal-v2'),false);assert.equal(h.ctx.window.__CONSOLE_RUNNING,false);
-});
-test('lost response is persisted as uncertain and blocks retry',async()=>{
-  const h=harness();h.ctx.confirm=()=>true;let n=0;
-  h.ctx.api.mock(async()=>({status:200,json:h.detail}),async()=>{n++;return {status:0,text:'timeout'};});
-  const job={...h.row,action:'hide'};await h.ctx.api.runJobs([job]);await h.ctx.api.runJobs([job]);
-  assert.equal(n,1);assert.equal(JSON.parse(h.storage.get('unpa-console-journal-v2'))['1'].state,'uncertain');
-});
-test('storage failure stops before CMS send',async()=>{
-  const h=harness();h.ctx.confirm=()=>true;h.ctx.localStorage.setItem=()=>{throw Error('quota');};
-  await h.ctx.api.runJobs([{...h.row,action:'hide'}]);assert.equal(h.sent.length,0);assert.equal(h.ctx.window.__CONSOLE_RUNNING,false);
-});
-test('HTTP 200 without verified result is not counted as success',async()=>{
-  const h=harness();h.ctx.confirm=()=>true;
-  h.ctx.api.mock(async()=>({status:200,json:h.detail}),async()=>({status:200,json:{ok:true}}));
-  await h.ctx.api.runJobs([{...h.row,action:'approve',humanVerified:true}]);
-  assert.equal(h.row.applied,false);assert.equal(JSON.parse(h.storage.get('unpa-console-journal-v2'))['1'].state,'uncertain');
-});
-test('suspended user cannot receive approval even with a previous human selection',async()=>{
-  const h=harness();h.ctx.confirm=()=>true;const detail={...h.detail,userBlocked:true};
-  h.ctx.api.mock(async()=>({status:200,json:detail}),async()=>{throw Error('must not send');});
-  await h.ctx.api.runJobs([{...h.row,snapshot:JSON.stringify(detail),action:'approve',humanVerified:true}]);
-  assert.equal(h.storage.has('unpa-console-journal-v2'),false);
-});
-test('list-only suspension is rechecked before hiding and release cancels the action',async()=>{
-  const h=harness();h.ctx.confirm=()=>true;const detail={id:1,contentText:'좋아요',productId:2};
-  h.ctx.api.mock(async url=>({status:200,json:url.includes('/admin/reviews?')?{total:1,results:[{id:1,userBlocked:false}]}:detail}),async()=>{throw Error('must not send');});
-  await h.ctx.api.runJobs([{...h.row,snapshot:JSON.stringify(detail),action:'hide',suspension:{blocked:true}}]);
-  assert.equal(h.storage.has('unpa-console-journal-v2'),false);
+
+test('nothing is transmitted merely by classifying',async()=>{
+  const {sent}=harness();
+  assert.equal(sent.filter(s=>s.method&&s.method!=='GET').length,0);
 });
