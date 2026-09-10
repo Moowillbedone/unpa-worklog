@@ -10,7 +10,7 @@ function consoleRules(overrides={}){
   function XHR(){}XHR.prototype.open=function(){};XHR.prototype.setRequestHeader=function(){};
   const ctx={location:{hostname:'cms.unpa.me'},document:{getElementById:()=>null},window:{fetch:async()=>{throw Error('Unexpected network');}},XMLHttpRequest:XHR,alert:()=>{},AbortController,setTimeout,clearTimeout,URL,Set,...overrides};
   vm.createContext(ctx);
-  vm.runInContext(code+`;globalThis.rules={gibberish,notBeauty,reviewText,stripSize,tokensOf,photoVerdict,findProduct,findBrand,classify,exbakOf,esc,suspensionOf,residueOf,tokenCover,validDate,lowEffort,bareName};globalThis.mock=(name,fn)=>{if(name==='get')get=fn;if(name==='imgDims')imgDims=fn;if(name==='delay')delay=fn;};})();`,ctx);
+  vm.runInContext(code+`;globalThis.rules={gibberish,notBeauty,reviewText,stripSize,tokensOf,photoVerdict,findProduct,findBrand,classify,exbakOf,esc,suspensionOf,residueOf,tokenCover,validDate,lowEffort,bareName,isSwatch};globalThis.mock=(name,fn)=>{if(name==='get')get=fn;if(name==='imgDims')imgDims=fn;if(name==='delay')delay=fn;};})();`,ctx);
   ctx.mock('delay',async()=>{});return ctx;
 }
 test('all distribution scripts parse',()=>{
@@ -125,4 +125,12 @@ test('unapproved brand is separated from absent brand',async()=>{
   assert.equal(b.approvedBrand,null);
   assert.ok(b.unapproved,'미검수 브랜드는 따로 알려야 한다');
   assert.equal(b.unapproved.id,9);
+});
+
+test('removers are not swatch products',()=>{
+  const {rules:r}=consoleRules();
+  for(const x of ['본체청정 연 네일 에나멜 리무버','립앤아이 리무버','젤 리무버','포인트 메이크업 리무버'])
+    assert.equal(r.isSwatch(x),null,x);
+  for(const x of ['잉크 글래스팅 립글로스','프루티 스퀴즈 틴트','유에프오 커버 쿠션','링링 글리터 네일'])
+    assert.ok(r.isSwatch(x),x);
 });
