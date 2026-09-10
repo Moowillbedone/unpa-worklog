@@ -10,7 +10,7 @@ function consoleRules(overrides={}){
   function XHR(){}XHR.prototype.open=function(){};XHR.prototype.setRequestHeader=function(){};
   const ctx={location:{hostname:'cms.unpa.me'},document:{getElementById:()=>null},window:{fetch:async()=>{throw Error('Unexpected network');}},XMLHttpRequest:XHR,alert:()=>{},AbortController,setTimeout,clearTimeout,URL,Set,...overrides};
   vm.createContext(ctx);
-  vm.runInContext(code+`;globalThis.rules={gibberish,notBeauty,reviewText,stripSize,tokensOf,photoVerdict,findProduct,findBrand,classify,exbakOf,esc,suspensionOf,residueOf,tokenCover,validDate};globalThis.mock=(name,fn)=>{if(name==='get')get=fn;if(name==='imgDims')imgDims=fn;if(name==='delay')delay=fn;};})();`,ctx);
+  vm.runInContext(code+`;globalThis.rules={gibberish,notBeauty,reviewText,stripSize,tokensOf,photoVerdict,findProduct,findBrand,classify,exbakOf,esc,suspensionOf,residueOf,tokenCover,validDate,lowEffort,bareName};globalThis.mock=(name,fn)=>{if(name==='get')get=fn;if(name==='imgDims')imgDims=fn;if(name==='delay')delay=fn;};})();`,ctx);
   ctx.mock('delay',async()=>{});return ctx;
 }
 test('all distribution scripts parse',()=>{
@@ -92,4 +92,37 @@ test('audit merges same day, preserving previous success',()=>{
 test('cumulative worklog transfer counts each review once',()=>{
   const ledger={};const first=W.unappliedIds(['1','2'],ledger);first.forEach(id=>ledger[id]=true);
   assert.deepEqual(W.unappliedIds(['1','2','3','3'],ledger),['3']);
+});
+
+test('filler-only reviews are excluded, real short reviews are not',()=>{
+  const {rules:r}=consoleRules();
+  for(const x of ['좋아요','굿','짱','최고예요','좋아요 잘 쓸게요','추천합니다','만족합니다'])
+    assert.ok(r.lowEffort(x),x);
+  for(const x of ['촉촉하고 좋아요','향이 좋아요','발림성 최고','순하고 자극없어요',
+                  '건성인데 잘 맞아요','머릿결이 부드러워졌어요'])
+    assert.equal(r.lowEffort(x),null,x);
+});
+test('brand is matched despite notation differences, not sent to brand registration',async()=>{
+  /* CMS 에는 "카밀(Kamil)" 로 있고 유저는 "카밀" 이라고 썼다 */
+  const c=consoleRules();
+  c.mock('get',async()=>({status:200,json:{total:1,results:[{id:7,name:'카밀(Kamil)',approved:true}]}}));
+  const b=await c.rules.findBrand('카밀');
+  assert.ok(b.approvedBrand,'표기가 달라도 브랜드를 찾아야 한다');
+  assert.equal(b.approvedBrand.id,7);
+  assert.ok(b.tier>1,'정확 일치가 아닌 단계로 잡힌다');
+});
+test('brand lookup failure is not reported as missing brand',async()=>{
+  const c=consoleRules();
+  c.mock('get',async()=>({status:500,json:null}));
+  const b=await c.rules.findBrand('아무브랜드');
+  assert.equal(b.lookupFailed,true);
+  assert.equal(b.approvedBrand,null);
+});
+test('unapproved brand is separated from absent brand',async()=>{
+  const c=consoleRules();
+  c.mock('get',async()=>({status:200,json:{total:1,results:[{id:9,name:'신생브랜드',approved:false}]}}));
+  const b=await c.rules.findBrand('신생브랜드');
+  assert.equal(b.approvedBrand,null);
+  assert.ok(b.unapproved,'미검수 브랜드는 따로 알려야 한다');
+  assert.equal(b.unapproved.id,9);
 });

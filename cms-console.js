@@ -287,6 +287,21 @@
     return null;
   }
 
+  /* ── 무성의한 리뷰 ────────────────────────────────────
+     "좋아요", "굿", "잘 쓸게요" 처럼 상투어만 있고 제품에 대한 내용이 없는 것.
+     되돌리기 어려운 처리라 기준을 좁게 잡는다 —
+     상투어를 걷어낸 뒤 남는 글자가 하나도 없고, 전체가 짧을 때만 본다.
+     "촉촉하고 좋아요"처럼 한 마디라도 붙으면 정상으로 둔다. */
+  var FILLER_RE = /좋아요|좋아용|좋아여|조아요|좋네요|좋음|좋다|굿굿|굿|good|나이스|최고|짱|대박|만족|괜찮아요|괜찮네요|무난|보통|추천|강추|잘\s*쓸게요|잘\s*쓰겠습니다|잘\s*쓸께요|잘\s*사용할게요|감사합니다|감사해요|고마워요|재구매|또\s*살게요|ㅎ+|ㅋ+|ㅠ+|ㅜ+|입니다|이에요|예요|네요|해요|어요|합니다|했어요|하네요/gi;
+  function lowEffort(text){
+    var t=String(text||'').trim();
+    var body=(t.match(/[가-힣a-zA-Z0-9]/g)||[]).length;
+    if(body===0 || body>=12) return null;          /* 어느 정도 길면 성의 있는 것으로 본다 */
+    var left=t.replace(FILLER_RE,'').replace(/[^가-힣a-zA-Z0-9]/g,'');
+    if(left.length===0) return '상투어만 있음 («'+t.slice(0,14)+'»)';
+    return null;
+  }
+
   /* ── 발색 제품 판별 ────────────────────────────────────
      색조 제품인데 발색샷이 없으면 "발색샷 요청" 대상이다.
      사진에 발색샷이 있는지는 기계가 알 수 없으므로,
@@ -339,14 +354,72 @@
 
   /* ── 브랜드/제품 검색 ── */
   var brandCache={};
+  /* 괄호 안 병기를 걷어낸 이름. "카밀(Kamil)" → "카밀", "넘버즈인(numbuz:n)" → "넘버즈인" */
+  function bareName(x){ return norm(String(x||'').replace(/[\(\[][^\)\]]*[\)\]]/g,' ')); }
+
+  /* ── 브랜드 찾기 ──────────────────────────────────────
+     예전에는 정규화한 이름이 완전히 같을 때만 인정했다.
+     그래서 영문 병기·띄어쓰기·조사 차이만 나도 "브랜드가 CMS에 없음"이 되어
+     이미 있는 브랜드까지 브랜드부터 등록하라고 내보냈다.
+     여러 검색어로 후보를 모으고 단계적으로 맞춰 본다. */
   async function findBrand(name){
-    var key=norm(name); if(brandCache[key]!==undefined) return brandCache[key];
-    var r=await get(API+'/admin/brands?approved=true&page=1&pageSize=50&q='+encodeURIComponent(name));
-    var rows=listOf(r.json)||[];
-    var exact=rows.filter(function(b){return norm(b.name)===key;});
-    var appr=exact.filter(function(b){return b.approved;});
-    var pick = appr.length?appr.sort(function(a,b){return a.id-b.id;})[0] : null;
-    var res={ approvedBrand:pick, anyExact:exact.length>0, exact:exact };
+    var key=norm(name);
+    if(brandCache[key]!==undefined) return brandCache[key];
+
+    var raw=String(name||'').trim();
+    var queries=[raw];
+    var bare=raw.replace(/[\(\[][^\)\]]*[\)\]]/g,' ').trim();
+    if(bare && bare!==raw) queries.push(bare);
+    var toks=tokensOf(raw).filter(function(t){ return t.length>=2; })
+                          .sort(function(a,b){ return b.length-a.length; });
+    if(toks.length) queries.push(toks[0]);
+
+    var seen={}, rows=[], okQueries=0;
+    for(var i=0;i<queries.length;i++){
+      var r=await get(API+'/admin/brands?page=1&pageSize=100&q='+encodeURIComponent(queries[i]));
+      var got=listOf(r.json);
+      if(r.status===200 && got){ okQueries++;
+        got.forEach(function(b){ if(b&&b.id!=null&&!seen[b.id]){ seen[b.id]=1; rows.push(b); } });
+      }
+      await delay(60);
+    }
+    if(!okQueries){
+      var fail={ approvedBrand:null, tier:null, anyExact:false, unapproved:null,
+                 likely:[], lookupFailed:true };
+      brandCache[key]=fail; return fail;
+    }
+
+    var uBare=bareName(raw), uTok=tokensOf(raw);
+    function tierOf(b){
+      var n=norm(b.name);
+      if(n===key) return 1;                                   /* 이름이 그대로 같다 */
+      if(bareName(b.name)===uBare && uBare) return 2;         /* 괄호 병기만 다르다 */
+      var bt=tokensOf(b.name);
+      if(uTok.length && tokenCover(uTok,bt)>=0.999 && tokenCover(bt,uTok)>=0.6) return 3;
+      if(n && key && (n.indexOf(key)>=0 || key.indexOf(n)>=0)){
+        var mn=Math.min(n.length,key.length), mx=Math.max(n.length,key.length);
+        if(mn/mx>=0.8) return 4;                              /* 표기 차이 수준 */
+      }
+      return 0;
+    }
+    var scored=rows.map(function(b){ return {b:b, t:tierOf(b)}; })
+                   .filter(function(x){ return x.t>0; })
+                   .sort(function(a,b){ return a.t-b.t || a.b.id-b.b.id; });
+
+    var approvedHits=scored.filter(function(x){ return x.b.approved===true; });
+    var best=approvedHits[0]||null;
+    /* 같은 단계에 검수 완료 브랜드가 여럿이면 사람이 고르게 둔다 */
+    if(best && approvedHits.length>1 && approvedHits[1].t===best.t) best=null;
+
+    var res={
+      approvedBrand: best?best.b:null,
+      tier: best?best.t:null,
+      anyExact: scored.some(function(x){ return x.t===1; }),
+      unapproved: scored.filter(function(x){ return x.b.approved!==true; }).map(function(x){ return x.b; })[0]||null,
+      likely: scored.slice(0,5).map(function(x){ return x.b; }),
+      ambiguous: approvedHits.length>1 && !best,
+      lookupFailed:false
+    };
     brandCache[key]=res; return res;
   }
   function tokenize(name){
@@ -573,7 +646,7 @@
     var out={ id:item.id, brand:item.brandName, product:item.productName, user:item.userNickname,
               visible:item.visible, exbak:!!exWhy, reasons:[], photo:null, action:null, exec:false, msg:null,
               product_exact:null, product_id:null, product_option:null,
-              product_options:null, residue:null, swatch:null, warn:null, suspension:null,
+              product_options:null, residue:null, swatch:null, warn:null, suspension:null, brand_match:null,
               attachments:atts.slice(0,6),
               approvable:false };   /* 그리드에서 승인/발색샷요청을 고를 수 있는 건인지 */
 
@@ -602,6 +675,8 @@
     var gb=gibberish(content);
     if(gb){ out.action='hide'; out.exec=true; out.reasons.push('무의미한 본문 — '+gb); return out; }
     if(isSpam(content)){ out.action='hide'; out.exec=true; out.reasons.push('본문 도배'); return out; }
+    var le=lowEffort(content);
+    if(le){ out.action='hide'; out.exec=true; out.reasons.push('무성의한 리뷰 — '+le); return out; }
 
     /* 취급하지 않는 품목은 검수 대상이 아니다 — 사람이 보고 미노출 여부를 정한다 */
     var nb2=notBeauty(item.productName+' '+item.brandName);
@@ -611,12 +686,27 @@
     if(exWhy){
       out.reasons.push('엑박 — '+exWhy.join(' · '));
       var b=await findBrand(item.brandName);
+      out.brand_match = b.approvedBrand ? { id:b.approvedBrand.id, name:b.approvedBrand.name, tier:b.tier } : null;
       if(!b.approvedBrand){
-        /* 6번: 브랜드부터 새로 등록해야 함 */
-        out.action='register_brand';
-        out.reasons.push(b.anyExact?'브랜드가 미검수 상태':'브랜드가 CMS에 없음');
+        /* 브랜드를 확정하지 못한 이유마다 사람이 할 일이 다르다 */
+        if(b.lookupFailed){
+          out.action='hold';
+          out.reasons.push('브랜드 조회 실패 — 없음으로 단정하지 않음');
+        } else if(b.ambiguous){
+          out.action='hold';
+          out.reasons.push('같은 이름의 검수 완료 브랜드 여러 건 — 사람이 선택 ['
+            + b.likely.slice(0,3).map(function(x){return x.name;}).join(' / ')+']');
+        } else if(b.unapproved){
+          out.action='register_brand';
+          out.reasons.push('브랜드 「'+b.unapproved.name+'」 미검수 — 브랜드 검수 후 상품등록');
+        } else {
+          out.action='register_brand';
+          out.reasons.push('브랜드가 CMS에 없음 — 브랜드부터 등록');
+        }
         return out;
       }
+      /* 표기가 달라 유사 일치로 잡힌 경우 어떤 브랜드로 봤는지 남긴다 */
+      if(b.tier>1) out.reasons.push('브랜드 「'+b.approvedBrand.name+'」 로 일치(표기 차이)');
       var pr=await findProduct(b.approvedBrand.id, item.productName);
       if(pr.pick && pr.confident){
         /* 4번: 브랜드○ 제품○ → 템플릿 수정요청 (일괄 실행 대상).
@@ -652,7 +742,7 @@
        (브랜드 표기 차이로 조회가 빗나갈 수 있어 오탐을 만들지 않는다) */
     try {
       var nb=await findBrand(item.brandName);
-      if(!nb.approvedBrand && !nb.anyExact) addWarn(out,'브랜드 조회 안 됨');
+      if(!nb.approvedBrand && !nb.likely.length) addWarn(out,'브랜드 조회 안 됨');
     } catch(e){}
 
     /* 본문이 정말 비어 있으면 자동 승인하지 않고 사람에게 보낸다 */
@@ -958,6 +1048,7 @@
                  suspension:r.suspension||null,
                  text: r.text||'',
                  photo: r.photo?r.photo.label:'', photoCls:r.photoCls||[],
+                 brand_match:r.brand_match||null,
                  product_exact:r.product_exact, product_option:r.product_option||null,
                  product_options:r.product_options||null, residue:r.residue||null,
                  attachments:r.attachments||[] };
