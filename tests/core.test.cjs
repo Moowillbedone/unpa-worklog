@@ -10,7 +10,7 @@ function consoleRules(overrides={}){
   function XHR(){}XHR.prototype.open=function(){};XHR.prototype.setRequestHeader=function(){};
   const ctx={location:{hostname:'cms.unpa.me'},document:{getElementById:()=>null},window:{fetch:async()=>{throw Error('Unexpected network');}},XMLHttpRequest:XHR,alert:()=>{},AbortController,setTimeout,clearTimeout,URL,Set,...overrides};
   vm.createContext(ctx);
-  vm.runInContext(code+`;globalThis.rules={gibberish,notBeauty,reviewText,stripSize,tokensOf,photoVerdict,findProduct,findBrand,classify,exbakOf,esc,suspensionOf,residueOf,tokenCover,validDate,lowEffort,bareName,isSwatch};globalThis.mock=(name,fn)=>{if(name==='get')get=fn;if(name==='imgDims')imgDims=fn;if(name==='delay')delay=fn;};})();`,ctx);
+  vm.runInContext(code+`;globalThis.rules={gibberish,notBeauty,reviewText,stripSize,tokensOf,photoVerdict,findProduct,findBrand,classify,exbakOf,esc,suspensionOf,residueOf,tokenCover,validDate,lowEffort,bareName,isSwatch,diceSim,looseCover};globalThis.mock=(name,fn)=>{if(name==='get')get=fn;if(name==='imgDims')imgDims=fn;if(name==='delay')delay=fn;};})();`,ctx);
   ctx.mock('delay',async()=>{});return ctx;
 }
 test('all distribution scripts parse',()=>{
@@ -133,4 +133,37 @@ test('removers are not swatch products',()=>{
     assert.equal(r.isSwatch(x),null,x);
   for(const x of ['잉크 글래스팅 립글로스','프루티 스퀴즈 틴트','유에프오 커버 쿠션','링링 글리터 네일'])
     assert.ok(r.isSwatch(x),x);
+});
+
+test('word order and spacing differences still find the same product',async()=>{
+  /* 유저 "러브 라이트 하이드레이션 바디 로션" · CMS "바디러브 로션 라이트 하이드레이션" */
+  const c=consoleRules();
+  c.mock('get',async url=>{
+    if(url.includes('/products?')) return {status:200,json:{total:2,results:[
+      {id:1,name:'바디러브 로션 라이트 하이드레이션'},{id:2,name:'너리싱 오일 케어 샴푸'}]}};
+    return {status:404,json:null};
+  });
+  const p=await c.rules.findProduct(1,'러브 라이트 하이드레이션 바디 로션');
+  assert.equal(p.confident,true);
+  assert.equal(p.pick.name,'바디러브 로션 라이트 하이드레이션');
+  assert.match(p.why,/유사도/);
+});
+test('close candidates are handed to a person instead of guessing',async()=>{
+  const c=consoleRules();
+  c.mock('get',async url=>{
+    if(url.includes('/products?')) return {status:200,json:{total:2,results:[
+      {id:1,name:'바디러브 로션 라이트 핑크'},{id:2,name:'바디러브 로션 라이트 블루'}]}};
+    return {status:404,json:null};
+  });
+  const p=await c.rules.findProduct(1,'바디러브 로션 라이트');
+  assert.equal(p.confident,false,'우열이 없으면 자동으로 보내지 않는다');
+  assert.match(p.why,/여러 건|사람이 선택/);
+});
+test('character similarity separates same product from different product',()=>{
+  const {rules:r}=consoleRules();
+  const n=s=>s.replace(/\s/g,'');
+  assert.ok(r.diceSim(n('러브라이트하이드레이션바디로션'),n('바디러브로션라이트하이드레이션'))>=0.72);
+  assert.ok(r.diceSim(n('러브라이트하이드레이션바디로션'),n('너리싱오일케어샴푸'))<0.3);
+  assert.ok(r.diceSim(n('쿠션'),n('에센셜스킨누더쿠션'))<0.5,'짧은 입력이 아무 데나 붙지 않는다');
+  assert.equal(r.looseCover(['러브','바디'],['바디러브','로션']),1,'단어가 서로를 품으면 겹친 것으로 본다');
 });

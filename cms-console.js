@@ -424,12 +424,18 @@
     };
     brandCache[key]=res; return res;
   }
+  /* 검색어를 만든다. 후보를 못 찾으면 아무리 잘 맞춰도 소용이 없으므로
+     긴 낱말(더 특징적인 것)부터 넣고, 긴 낱말은 앞 절반도 함께 넣는다. */
   function tokenize(name){
-    var clean=String(name).replace(/\[[^\]]*\]/g,' ').replace(/\([^)]*\)/g,' ').replace(/[0-9]+/g,' ');
-    var words=clean.split(/\s+/).filter(function(w){return w.length>=2;}); var set={};
-    words.forEach(function(w){set[w]=1;});
-    words.forEach(function(w){ if(w.length>=6) set[w.slice(0,Math.ceil(w.length/2))]=1; });
-    var t=Object.keys(set).slice(0,5); if(!t.length) t=[String(name).slice(0,4)]; return t;
+    var clean=stripSize(String(name)).replace(/\[[^\]]*\]/g,' ').replace(/\([^)]*\)/g,' ').replace(/[0-9]+/g,' ');
+    var words=clean.split(/\s+/).filter(function(w){ return w.length>=2; })
+                   .sort(function(a,b){ return b.length-a.length; });
+    var set={}, order=[];
+    var add=function(w){ if(w && w.length>=2 && !set[w]){ set[w]=1; order.push(w); } };
+    words.forEach(add);
+    words.forEach(function(w){ if(w.length>=6) add(w.slice(0, Math.ceil(w.length/2))); });
+    if(!order.length) order=[String(name).slice(0,4)];
+    return order.slice(0,6);
   }
   /* 상품명 매칭.
      예전에는 부분 문자열만 겹쳐도 매칭으로 쳐서
@@ -527,6 +533,39 @@
       .map(function(t){ return t.replace(/[^0-9a-zA-Z가-힣]/g,'').toLowerCase(); })
       .filter(Boolean);
   }
+  /* ── 글자 단위 유사도 ─────────────────────────────────
+     유저와 CMS 는 같은 제품을 단어 순서도 띄어쓰기 위치도 다르게 쓴다.
+       유저 "러브 라이트 하이드레이션 바디 로션"
+       CMS  "바디러브 로션 라이트 하이드레이션"
+     "러브" 와 "바디러브" 는 단어로는 다르고, 순서가 달라 문자열 포함도 깨진다.
+     그래서 두 글자씩 잘라 겹치는 비율(Dice)을 본다. 순서에 영향을 덜 받는다.
+     실측: 같은 제품 0.79~0.82 / 다른 제품 0.00~0.25 로 뚜렷하게 갈린다. */
+  function bigrams(str){
+    var m={}, n=0;
+    for(var i=0;i<str.length-1;i++){ var g=str.substr(i,2); m[g]=(m[g]||0)+1; n++; }
+    return {m:m, n:n};
+  }
+  function diceSim(a, b){
+    if(!a || !b) return 0;
+    if(a.length<2 || b.length<2) return a===b ? 1 : 0;
+    var A=bigrams(a), B=bigrams(b), common=0;
+    Object.keys(A.m).forEach(function(g){ if(B.m[g]) common+=Math.min(A.m[g], B.m[g]); });
+    return (2*common)/(A.n+B.n);
+  }
+  /* 단어가 서로를 품고 있어도 겹친 것으로 본다 ("러브" ↔ "바디러브") */
+  function looseCover(a, b){
+    if(!a.length) return 0;
+    var hit=0;
+    for(var i=0;i<a.length;i++){
+      var t=a[i];
+      for(var j=0;j<b.length;j++){
+        var o=b[j];
+        if(o===t || (t.length>=2 && o.indexOf(t)>=0) || (o.length>=2 && t.indexOf(o)>=0)){ hit++; break; }
+      }
+    }
+    return hit/a.length;
+  }
+
   function tokenCover(a, b){          /* a 의 단어가 b 에 얼마나 들어 있나 (0~1) */
     if(!a.length) return 0;
     var set={}; b.forEach(function(t){ set[t]=1; });
@@ -543,7 +582,11 @@
   }
 
   async function findProduct(brandId, productName){
-    var toks=tokenize(productName); var seen={}, cand=[], okQueries=0;
+    /* 낱말 검색 앞에 이름 전체로도 한 번 찾아본다 — 검색이 구절을 지원할 수 있다 */
+    var toks=tokenize(productName);
+    var whole=stripSize(String(productName).replace(/\[[^\]]*\]/g,' ')).trim();
+    if(whole && toks.indexOf(whole)<0) toks.unshift(whole);
+    var seen={}, cand=[], okQueries=0;
     for(var i=0;i<toks.length;i++){
       var r=await get(API+'/admin/products?approved=true&brandApproved=true&page=1&pageSize=20&brandId='+brandId+'&q='+encodeURIComponent(toks[i]));
       var rows=listOf(r.json);
@@ -619,7 +662,29 @@
                candidates:cand };
     }
 
-    /* 4) 길이가 비슷한 포함 관계 */
+    /* 4) 글자 유사도 — 단어 순서·띄어쓰기가 달라도 같은 제품을 찾아낸다 */
+    var DICE_MIN=0.72, COVER_MIN=0.7, MARGIN=0.08;
+    var fuzzy=cand.map(function(p){
+      var pn=nm(p.name);
+      return { p:p, d:diceSim(target,pn), c:looseCover(uT, tokensOf(p.name)) };
+    }).filter(function(x){ return x.d>=DICE_MIN && x.c>=COVER_MIN; })
+      .sort(function(a,b){ return b.d-a.d; });
+
+    if(fuzzy.length){
+      var top=fuzzy[0];
+      /* 2등과 차이가 없으면 기계가 고르지 않는다 */
+      if(fuzzy.length>1 && (top.d-fuzzy[1].d)<MARGIN){
+        return { pick:top.p, confident:false,
+                 why:'비슷한 후보 여러 건 — 사람이 선택 ['
+                     + fuzzy.slice(0,3).map(function(x){ return x.p.name+'('+x.d.toFixed(2)+')'; }).join(' / ')+']',
+                 candidates:fuzzy.map(function(x){ return x.p; }) };
+      }
+      return { pick:top.p, confident:true,
+               why:'단어 순서·띄어쓰기만 다름 (글자 유사도 '+top.d.toFixed(2)+')',
+               candidates:cand };
+    }
+
+    /* 5) 길이가 비슷한 포함 관계 */
     var near=cand.filter(function(p){
       var pn=nm(p.name); if(!pn) return false;
       if(target.indexOf(pn)<0 && pn.indexOf(target)<0) return false;
