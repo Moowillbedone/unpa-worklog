@@ -913,6 +913,7 @@
   }
 
   function renderQueue(sd){
+    var done=doneLoad();
     var groups={revise:[],hide:[],register:[],hold:[]};
     results.forEach(function(r){ (groups[r.action]||(groups[r.action]=[])).push(r); });
     var order=['revise_product','hide','register_product','register_brand','hold','revise_swatch','approve'];
@@ -920,25 +921,35 @@
     var html='<div style="margin-top:8px;color:#9fb4ab">'+esc(sd)+' · 총 <b style="color:#fff">'+results.length+'</b>건 판정 완료</div>';
     html+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">';
     order.forEach(function(k){ if(!groups[k]||!groups[k].length) return;
-      html+='<span style="font-size:11px;background:#132019;border:1px solid #2c4a3c;border-radius:20px;padding:3px 9px;color:'+ACT[k].c+'">'+ACT[k].t+' <b>'+groups[k].length+'</b></span>'; });
+      var nDone = MANUAL_TODO[k] ? groups[k].filter(function(r){ return done[String(r.id)]; }).length : 0;
+      html+='<span style="font-size:11px;background:#132019;border:1px solid #2c4a3c;border-radius:20px;padding:3px 9px;color:'+ACT[k].c+'">'+ACT[k].t+' <b>'+groups[k].length+'</b>'
+        +(nDone?' <span style="color:#3ddc97">· 완료 '+nDone+'</span>':'')+'</span>'; });
     html+='</div>';
 
     order.forEach(function(k){ var g=groups[k]; if(!g||!g.length) return;
       var exec = (k==='revise_product'||k==='hide');
+      var manual = !!MANUAL_TODO[k];
+      var gDone = manual ? g.filter(function(r){ return done[String(r.id)]; }).length : 0;
       html+='<div style="margin-top:12px;border-top:1px solid #22392e;padding-top:9px">'
         +'<div style="font-weight:800;color:'+ACT[k].c+'">'+ACT[k].t+' · '+g.length+'건'
+        +(manual?' <span class="csDoneCnt" data-k="'+k+'" style="font-size:11px;color:'+(gDone===g.length?'#3ddc97':'#9fb4ab')+'">✓ '+gDone+'/'+g.length+'</span>':'')
         +' <span style="font-size:10.5px;color:#6b7f77">('
         + (exec ? '체크 후 실행' : (k==='approve'||k==='revise_swatch') ? '👀 그리드에서 처리' : '사람이 직접')
         +')</span></div>';
       g.forEach(function(r,idx){
         var gid=k+'_'+idx;
-        html+='<div style="margin-top:7px;background:#111d18;border:1px solid #22392e;border-radius:8px;padding:8px 10px">'
-          +(exec?'<label style="display:flex;gap:7px;align-items:flex-start;cursor:pointer"><input type="checkbox" class="csChk" data-id="'+r.id+'" '+(r.applied?'disabled':'checked')+' style="margin-top:3px">':'<div>')
+        var dn = manual ? done[String(r.id)] : null;
+        var strike = dn ? 'text-decoration:line-through;text-decoration-color:rgba(159,180,171,.7);' : '';
+        html+='<div class="csCard" data-id="'+r.id+'" style="margin-top:7px;background:'+(dn?'#0d1512':'#111d18')+';border:1px solid '+(dn?'#1a2b23':'#22392e')+';border-radius:8px;padding:8px 10px;opacity:'+(dn?'.6':'1')+'">'
+          +(exec?'<label style="display:flex;gap:7px;align-items:flex-start;cursor:pointer"><input type="checkbox" class="csChk" data-id="'+r.id+'" '+(r.applied?'disabled':'checked')+' style="margin-top:3px">'
+            :manual?'<div style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" class="csDone" data-id="'+r.id+'" '+(dn?'checked':'')+' title="등록을 끝냈으면 체크 (표시만, CMS 로 보내지 않음)" style="margin-top:3px;width:15px;height:15px;accent-color:#3ddc97;cursor:pointer">'
+            :'<div>')
           +'<div><a class="csLink" href="'+reviewUrl(r.id)+'" target="_blank" rel="noopener" '
           +'title="CMS 리뷰 상세를 새 탭에서 열기" '
           +'style="color:#8fd8ff;font-weight:800;text-decoration:none;border-bottom:1px dotted rgba(143,216,255,.5)">#'+r.id+' ↗</a> '
           +(r.applied?'<span style="color:#3ddc97;font-weight:800">✓ 처리됨</span> ':'')
-          +'<span style="color:#9fb4ab">'+esc(r.brand||'')+' / '+esc(r.product||'')+'</span>'
+          +'<span style="color:#9fb4ab;'+strike+'">'+esc(r.brand||'')+' / '+esc(r.product||'')+'</span>'
+          +(dn?' <span style="color:#3ddc97;font-size:10.5px;font-weight:800">✓ 완료 '+esc(doneStamp(dn.at))+'</span>':'')
           + (r.suspension && (r.suspension.blocked===true || r.suspension.count)
               ? '<span style="display:inline-block;margin-left:5px;padding:1px 7px;border-radius:20px;font-size:10.5px;font-weight:800;'
                 + (r.suspension.blocked===true
@@ -946,7 +957,7 @@
                     : 'background:#3a3320;color:#f5c451;border:1px solid #f5c451">⚠ 정지이력')
                 + (r.suspension.count ? ' '+r.suspension.count+'회' : '') + '</span>'
               : '')
-          +'<div style="font-size:11px;color:#7f948b;margin-top:2px">'+esc(r.reasons.join(' · '))
+          +'<div style="font-size:11px;color:#7f948b;margin-top:2px;'+strike+'">'+esc(r.reasons.join(' · '))
           + (r.photo&&r.photo.v!=='none'?' · 사진:'+esc(r.photo.label):'')
           + (r.product_exact?' · <span style="color:#3ddc97">→ '+esc(r.product_exact)+'</span>':'')+'</div>'
           + (!exec && r.product_exact && !r.applied
@@ -955,7 +966,7 @@
                 +'border-radius:7px;padding:7px 9px;font:inherit;font-size:11.5px;font-weight:700;cursor:pointer">'
                 +'「'+esc(r.product_exact)+'」로 수정요청</button>'
               : '')
-          +'</div>'+(exec?'</label>':'</div>')
+          +'</div>'+(exec?'</label>':manual?'</div>':'</div>')
           +'</div>';
       });
       html+='</div>';
@@ -980,6 +991,18 @@
     /* 링크는 label 안에 있어 클릭이 체크박스까지 토글한다 — 막는다 */
     [].slice.call(box.querySelectorAll('.csLink')).forEach(function(a){
       a.onclick=function(ev){ ev.stopPropagation(); };
+    });
+    /* 등록 완료 체크 — 표시만 바꾸고 CMS 로는 보내지 않는다 */
+    [].slice.call(box.querySelectorAll('.csDone')).forEach(function(cb){
+      cb.onclick=function(ev){ ev.stopPropagation(); };
+      cb.onchange=function(){
+        var r=results.filter(function(x){ return String(x.id)===String(cb.dataset.id); })[0];
+        if(!r) return;
+        doneToggle(r, cb.checked);
+        var top=box.scrollTop;
+        renderQueue(SCAN_DATE);
+        box.scrollTop=top;
+      };
     });
     /* 확인 목록에서 한 번에 수정요청 — 확인창은 runJobs 가 띄운다 */
     [].slice.call(box.querySelectorAll('.csFix')).forEach(function(b){
@@ -1014,6 +1037,27 @@
     r.applied=true; r.action=e.action; r.approvable=false;
     r.reasons=(r.reasons||[]).concat(['이미 처리됨 ('+String(e.at).slice(0,16).replace('T',' ')+')']);
     return r;
+  }
+
+  /* ── 사람이 직접 한 등록 작업의 완료 표시 ─────────────────
+     상품등록·브랜드 등록은 CMS 에서 사람이 직접 한다. 목록을 보며 하나씩 처리하므로
+     끝낸 건을 체크해 둘 수 있게 한다. 표시만 할 뿐 CMS 로는 아무것도 보내지 않는다.
+     브라우저에 저장해 재스캔·새로고침 후에도 유지한다. */
+  var DONE_KEY='unpa-console-manual-done-v1';
+  var MANUAL_TODO={ register_product:1, register_brand:1 };
+  function doneLoad(){ try{ return JSON.parse(localStorage.getItem(DONE_KEY)||'{}'); }catch(e){ return {}; } }
+  function doneToggle(r, on){
+    var m=doneLoad(), id=String(r.id);
+    if(on) m[id]={ at:new Date().toISOString(), action:r.action, date:SCAN_DATE };
+    else delete m[id];
+    try{ localStorage.setItem(DONE_KEY, JSON.stringify(m)); }catch(e){ alert('완료 표시를 저장하지 못했습니다 (브라우저 저장공간 확인).'); }
+    return m[id]||null;
+  }
+  /* 저장은 ISO(UTC) 로 하되 화면에는 이 컴퓨터 시간대로 보인다 */
+  function doneStamp(at){
+    var d=new Date(at); if(!isFinite(d.getTime())) return '';
+    var p=function(n){ return (n<10?'0':'')+n; };
+    return p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
   }
 
   /* ── 공통 다운로드 ── */
@@ -1103,6 +1147,7 @@
              revise_swatch:'revise_color', revise_product:'revise_product',
              register_product:'register', register_brand:'register', hold:'hold' };
   function auditPayload(){
+    var doneMap=doneLoad();
     var summary={}; results.forEach(function(r){ summary[r.action]=(summary[r.action]||0)+1; });
     return {
       v:1, date:SCAN_DATE, at:new Date().toISOString(), total:results.length, summary:summary,
@@ -1113,6 +1158,7 @@
                  reason: r.reasons.join(' · '), reasons:r.reasons,
                  applied: !!r.applied, exbak:!!r.exbak, swatch:r.swatch||null, warn:r.warn||null,
                  suspension:r.suspension||null,
+                 manual_done:(MANUAL_TODO[r.action] && doneMap[String(r.id)]) ? doneMap[String(r.id)].at : null,
                  text: r.text||'',
                  photo: r.photo?r.photo.label:'', photoCls:r.photoCls||[],
                  brand_match:r.brand_match||null,

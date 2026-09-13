@@ -35,7 +35,7 @@ function harness(){
   ctx.window=ctx; ctx.XMLHttpRequest=XHR;
   vm.createContext(ctx);
   vm.runInContext(code.replace('  /* ── 시작 ── */',
-    `globalThis.api={buildReq,runJobs,sentLoad,CAP,setResults:r=>{results=r;},
+    `globalThis.api={buildReq,runJobs,sentLoad,doneLoad,doneToggle,auditPayload,CAP,setResults:r=>{results=r;},
                      setDate:d=>{SCAN_DATE=d;},setTpl:t=>{tplMap=t;},getResults:()=>results};
      /* ── 시작 ── */`), ctx);
   return {api:ctx.api, sent, ctx, store};
@@ -86,4 +86,25 @@ test('a successful send is journaled and never repeats',async()=>{
 test('nothing is transmitted merely by classifying',async()=>{
   const {sent}=harness();
   assert.equal(sent.filter(s=>s.method&&s.method!=='GET').length,0);
+});
+
+test('registration done marks persist, can be undone, and never reach the CMS',()=>{
+  const {api,sent,store}=harness(); api.setDate('2026-09-08');
+  const r={id:471609,action:'register_product',reasons:['브랜드○ · 제품 없음'],photo:{label:'직접촬영'},photoCls:[]};
+  api.setResults([r]);
+  const before=sent.length;
+
+  const rec=api.doneToggle(r,true);
+  assert.ok(rec && rec.at,'완료 시각이 남는다');
+  assert.ok(api.doneLoad()['471609'],'브라우저에 저장된다');
+  assert.ok(store['unpa-console-manual-done-v1'],'새로고침 후에도 읽을 수 있는 키에 저장된다');
+
+  const audit=api.auditPayload();
+  assert.equal(typeof audit.items[0].manual_done,'string','검수기록 JSON 에 완료 시각이 남는다');
+
+  api.doneToggle(r,false);
+  assert.equal(api.doneLoad()['471609'],undefined,'체크를 풀면 지워진다');
+  assert.equal(api.auditPayload().items[0].manual_done,null);
+
+  assert.equal(sent.length,before,'완료 표시는 CMS 로 아무 요청도 보내지 않는다');
 });
