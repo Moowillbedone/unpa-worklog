@@ -547,8 +547,23 @@
       .replace(/\s+/g,' ').trim();
   }
 
+  /* 유저와 CMS 가 같은 종류를 다른 말로 쓴다. 비교 전에 하나로 맞춘다.
+       썬크림=선크림 · 선블록=선크림 · 에멀전=로션 · 폼클렌저=클렌징폼
+       마스크팩·시트마스크=마스크 · 이름 끝의 "팩"=마스크 · 이름 끝의 "스킨"=토너
+     "에센셜 스킨 누더 쿠션"처럼 가운데 있는 "스킨"은 종류가 아니므로 건드리지 않는다. */
+  function canonKind(str){
+    return String(str||'')
+      .replace(/썬/g,'선')
+      .replace(/선\s*블[록럭]/g,'선크림')
+      .replace(/에멀[전젼션]/g,'로션')
+      .replace(/폼\s*클렌저|클렌징\s*폼/g,'클렌징폼')
+      .replace(/마스크\s*팩|시트\s*마스크|마스크\s*시트/g,'마스크')
+      .replace(/팩(?=\s*(?:[\[(]|$))/g,'마스크')
+      .replace(/스킨(?=\s*(?:[\[(]|$))/g,'토너');
+  }
+
   function tokensOf(name){
-    return stripSize(String(name||''))
+    return canonKind(stripSize(String(name||'')))
       .replace(/\[[^\]]*\]/g,' ').replace(/\([^)]*\)/g,' ')
       .split(/[\s·/,+&]+/)
       .map(function(t){ return t.replace(/[^0-9a-zA-Z가-힣]/g,'').toLowerCase(); })
@@ -613,7 +628,28 @@
     return null;
   }
   /* 두 이름 모두 종류가 읽히는데 서로 다르면 true */
-  function kindClash(a, b){ var x=kindOf(a), y=kindOf(b); return !!(x && y && x!==y); }
+  /* 바디로션·핸드크림처럼 부위만 붙은 것은 기본 종류와 같은 것으로 본다
+     (CMS "바디러브 로션" = 유저 "바디 로션"). 아이크림은 크림과 다른 제품이라 그대로 둔다. */
+  function kindBase(k){ var m=/^(바디|핸드|풋)(.+)$/.exec(k||''); return (m && KIND_SET[m[2]]) ? m[2] : k; }
+  /* 유저가 자주 섞어 쓰지만 브랜드는 따로 파는 경우도 있는 종류 — 자동 말고 버튼으로 */
+  var KIND_FAMILY={ '에센스':'ESS', '세럼':'ESS', '앰플':'ESS' };
+  function kindRel(a, b){
+    var x=kindOf(a), y=kindOf(b);
+    if(!x || !y) return 'unknown';
+    if(kindBase(x)===kindBase(y)) return 'same';
+    if(KIND_FAMILY[x] && KIND_FAMILY[x]===KIND_FAMILY[y]) return 'near';
+    return 'clash';
+  }
+  function kindClash(a, b){ return kindRel(a, b)!=='same' && kindRel(a, b)!=='unknown'; }
+  /* 종류 낱말만 뺀 이름 — "귤타민 비타토닝 앰플" 과 "… 세럼" 이 종류만 다른지 본다 */
+  function withoutKind(name){
+    var t=tokensOf(name), k=kindOf(name);
+    for(var i=t.length-1;i>=0;i--){
+      if(t[i]===k){ t.splice(i,1); break; }
+      if(k && t[i].length>k.length && t[i].slice(-k.length)===k){ t[i]=t[i].slice(0,-k.length); break; }
+    }
+    return t.join('');
+  }
 
   function tokenCover(a, b){          /* a 의 단어가 b 에 얼마나 들어 있나 (0~1) */
     if(!a.length) return 0;
@@ -649,8 +685,8 @@
       return { pick:null, confident:false, lookupFailed:true,
                why:'제품 목록 조회 실패 — 없음으로 단정하지 않음', candidates:[] };
     /* 유저 입력과 CMS 이름 모두 용량 표기를 뺀 뒤 비교한다 */
-    var nm = function(x){ return norm(stripSize(String(x||''))); };
-    var raw=stripSize(productName.replace(/\[[^\]]*\]/g,''));
+    var nm = function(x){ return norm(canonKind(stripSize(String(x||'')))); };
+    var raw=canonKind(stripSize(productName.replace(/\[[^\]]*\]/g,'')));
     var target=nm(raw);
 
     /* 1) 상품명이 그대로 일치 */
@@ -677,7 +713,7 @@
       return { p:p, cT:cT, uInC:tokenCover(uT,cT), cInU:tokenCover(cT,uT) };
     }).filter(function(x){
       return uT.length>=2 && x.uInC>=0.999 && x.cT.length>=uT.length && x.cInU>=0.6
-             && !kindClash(productName, x.p.name);
+             && kindRel(productName, x.p.name)!=='clash' && kindRel(productName, x.p.name)!=='near';
     }).sort(function(a,b){ return b.cInU-a.cInU; });
 
     if(subset.length===1 || (subset.length>1 && subset[0].cInU>subset[1].cInU)){
@@ -724,12 +760,16 @@
 
     /* 4) 글자 유사도 — 단어 순서·띄어쓰기가 달라도 같은 제품을 찾아낸다 */
     var DICE_MIN=0.72, COVER_MIN=0.7, MARGIN=0.08;
-    var clashed=[];
+    var clashed=[], nearKind=[];
     var fuzzy=cand.map(function(p){
       var pn=nm(p.name);
-      return { p:p, d:diceSim(target,pn), c:looseCover(uT, tokensOf(p.name)) };
-    }).filter(function(x){ return x.d>=DICE_MIN && x.c>=COVER_MIN && !(kindClash(productName, x.p.name) && clashed.push(x)); })
-      .sort(function(a,b){ return b.d-a.d; });
+      return { p:p, d:diceSim(target,pn), c:looseCover(uT, tokensOf(p.name)), rel:kindRel(productName, p.name) };
+    }).filter(function(x){
+      if(x.d<DICE_MIN || x.c<COVER_MIN) return false;
+      if(x.rel==='clash'){ clashed.push(x); return false; }
+      if(x.rel==='near'){ nearKind.push(x); return false; }
+      return true;
+    }).sort(function(a,b){ return b.d-a.d; });
 
     if(fuzzy.length){
       var top=fuzzy[0];
@@ -742,6 +782,25 @@
       }
       return { pick:top.p, confident:true,
                why:'단어 순서·띄어쓰기만 다름 (글자 유사도 '+top.d.toFixed(2)+')',
+               candidates:cand };
+    }
+
+    /* 4-1) 이름은 같고 종류 표기만 다른 경우 — 유사도 기준에 못 미쳐도 여기서 본다.
+            에센스·세럼·앰플은 버튼으로 사람이 한 번 확인하고 보낸다. */
+    var uNoKind=norm(withoutKind(productName));
+    if(uNoKind.length>=4){
+      cand.forEach(function(p){
+        if(norm(withoutKind(p.name))!==uNoKind) return;
+        var rel=kindRel(productName, p.name);
+        if(rel==='near' && !nearKind.some(function(x){ return x.p===p; })) nearKind.push({ p:p, d:1 });
+        if(rel==='clash' && !clashed.some(function(x){ return x.p===p; })) clashed.push({ p:p, d:1 });
+      });
+    }
+    if(nearKind.length){
+      nearKind.sort(function(a,b){ return b.d-a.d; });
+      var nk=nearKind[0];
+      return { pick:nk.p, confident:false, kindNear:true,
+               why:'종류 표기만 다름 ('+kindOf(productName)+' ≈ '+kindOf(nk.p.name)+') — 같은 제품이면 버튼으로 수정요청',
                candidates:cand };
     }
 

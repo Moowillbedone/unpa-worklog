@@ -200,3 +200,30 @@ test('color products that used to slip through are now swatch products',()=>{
     assert.ok(r.isSwatch(x),x);
   assert.equal(r.isSwatch('수분 크림'),null);
 });
+
+test('near-certain product matches still send a re-select request automatically',async()=>{
+  const cases=[
+    ['트라넥삼산 톤업 선 에센스','트라넥삼산 서플 톤업 선 에센스'],   /* 디어클래스 — 사용자가 든 사례 */
+    ['씀바귀 진정 스킨','씀바귀 진정 토너'],
+    ['큐어 하이드라 수딩 에멀전','큐어 하이드라 수딩 로션'],
+    ['워터풀 톤업 썬크림','워터풀 퍼플 톤업 선크림'],
+    ['바다포도 스킨 마스크','바다포도 스킨팩'],
+    ['5알파 컨트롤 클리어링 폼클렌저','5알파 컨트롤 클리어링 클렌징 폼'],
+  ];
+  let id=0;
+  for(const [user,cms] of cases){
+    const c=consoleRules(); const pid=++id;
+    c.mock('get',async url=>url.includes('/products?')?{status:200,json:{total:1,results:[{id:pid,name:cms}]}}:{status:404,json:null});
+    const p=await c.rules.findProduct(1,user);
+    assert.equal(p.confident,true,user+' → '+cms+' 는 자동이어야 한다 ('+p.why+')');
+    assert.equal(p.pick.name,cms);
+  }
+});
+test('essence/serum/ampoule differences go to the one-click button, not auto',async()=>{
+  const c=consoleRules();
+  c.mock('get',async url=>url.includes('/products?')?{status:200,json:{total:1,results:[{id:9,name:'귤타민 비타토닝 세럼'}]}}:{status:404,json:null});
+  const p=await c.rules.findProduct(1,'귤타민 비타토닝 앰플');
+  assert.equal(p.confident,false,'자동으로 보내지 않는다');
+  assert.equal(p.pick.name,'귤타민 비타토닝 세럼','버튼으로 보낼 후보는 잡는다');
+  assert.match(p.why,/종류 표기만 다름/);
+});
