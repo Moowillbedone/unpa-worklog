@@ -250,3 +250,52 @@ test('partial search failure never turns into "missing" or an automatic pick',as
   assert.equal((await e.rules.findProduct(1,'수분 크림')).confident,true,'정확히 일치하면 일부 실패여도 확정');
   assert.equal((await consoleRules().rules.findProduct(1,'')).lookupFailed,true,'제품명이 없으면 확인으로');
 });
+
+/* ── 업무일지 자동 반영 규칙 ─────────────────────────────── */
+function monthOf(m,days){const n=new Date(Date.UTC(+m.slice(0,4),+m.slice(5,7),0)).getUTCDate(),d={};for(let i=1;i<=n;i++)d[String(i).padStart(2,'0')]={r:0,p:0,memo:'',unreg:''};Object.assign(d,days||{});return {month:m,target:1450000,days:d};}
+test('auto sync fills the real work day, keeps what was typed before, and never double counts',()=>{
+  const base={'2026-09':monthOf('2026-09',{'10':{r:172,p:25,memo:'m',unreg:''},'11':{r:13,p:7,memo:'',unreg:''},'28':{r:9,p:0,memo:'',unreg:''}}),
+              '2026-08':monthOf('2026-08',{'31':{r:200,p:3,memo:'',unreg:''}})};
+  const work={v:1,from:'2026-09-01',to:'2026-09-27',
+    reviews:[...Array.from({length:8},(_,i)=>[String(100+i),'2026-09-10']),...Array.from({length:171},(_,i)=>[String(200+i),'2026-09-11']),['999','2026-08-31'],['998','2026-09-28']],
+    products:[['1','2026-09-11'],['2','2026-09-11']]};
+  const r=W.applyWork(base,work);
+  const d=r.months['2026-09'].days;
+  assert.equal(d['10'].r,8); assert.equal(d['11'].r,171,'9/10 리뷰를 9/11 에 했으면 9/11');
+  assert.deepEqual(d['10'].manual,{r:172,p:25},'전에 적은 값은 남긴다');
+  assert.equal(d['10'].memo,'m','메모는 그대로');
+  assert.equal(d['10'].p,0); assert.equal(d['11'].p,2);
+  assert.equal(r.months['2026-08'].days['31'].r,200,'자동 반영 시작일 전은 건드리지 않는다');
+  assert.equal(d['28'].r,9,'오늘 이후는 건드리지 않는다');
+  assert.equal(r.today.d,'2026-09-27');
+  assert.ok(r.changes.some(c=>c.d==='2026-09-10'&&c.r[0]===172&&c.r[1]===8));
+  const again=W.applyWork(r.months,work);
+  assert.equal(again.changes.length,0,'같은 자료를 다시 받아도 그대로');
+  assert.equal(again.months['2026-09'].days['11'].r,171);
+  /* 사람이 고친 것은 조정값으로 유지 */
+  again.months['2026-09'].days['11'].r=175;
+  const more=Object.assign({},work,{reviews:work.reviews.concat([['500','2026-09-11']])});
+  const r3=W.applyWork(again.months,more);
+  assert.equal(r3.months['2026-09'].days['11'].r,176,'자동 172 + 직접 조정 +4');
+  /* 장부는 줄지 않는다 — 조회 범위에서 빠진 날도 그대로 */
+  const r4=W.applyWork(r3.months,{v:1,from:'2026-09-01',to:'2026-09-27',reviews:[],products:[]});
+  assert.equal(r4.months['2026-09'].days['10'].r,8); assert.equal(r4.changes.length,0);
+  assert.throws(()=>W.applyWork(base,{v:1,from:'2026-09-01',to:'2026-09-27',reviews:[['x','2026-09-01']]}),/항목/);
+  assert.throws(()=>W.applyWork(base,{v:2}),/형식/);
+});
+test('sync store keeps history, marks months for server upload, refuses a corrupt store',()=>{
+  const now=new Date('2026-09-27T12:00:00Z');
+  const work={v:1,from:'2026-09-01',to:'2026-09-27',reviews:[['1','2026-09-27']],products:[]};
+  const base={v:1,months:{'2026-08':monthOf('2026-08',{'01':{r:5,p:0,memo:'',unreg:''}})},dirty:[]};
+  const r=W.syncStore(null,work,base,now);
+  const o=JSON.parse(r.value);
+  assert.equal(o.months['2026-08'].days['01'].r,5,'처음 쓰는 브라우저면 저장소 기록부터 깐다');
+  assert.equal(o.months['2026-09'].days['27'].r,1);
+  assert.ok(o.dirty.includes('2026-09')); assert.equal(o.months['2026-09']._u,now.toISOString());
+  assert.throws(()=>W.syncStore('{broken',work,null,now),'깨진 기록 위에 덮어쓰지 않는다');
+  const a1=W.syncAudit(null,{'2026-09-24':{items:[{id:1,applied:true,action:'approve'}],executions:[{id:1,action:'approve',at:'t1'}]}},now);
+  const a2=W.syncAudit(a1.value,{'2026-09-24':{items:[{id:1,applied:false,action:'approve'},{id:2,applied:false,action:'hold'}],executions:[{id:1,action:'approve',at:'t1'}]}},now);
+  const day=JSON.parse(a2.value).days['2026-09-24'];
+  assert.equal(day.items.length,2); assert.equal(day.items.find(x=>x.id===1).applied,true,'처리됨은 되돌리지 않는다');
+  assert.equal(day.executions.length,1,'같은 실행 기록은 한 번만');
+});

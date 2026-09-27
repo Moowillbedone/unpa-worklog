@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>업무일지 동기화</title>
+<style>
+  :root{--bg:#f6f8f7;--card:#fff;--line:#dde3e1;--ink:#16211d;--dim:#5a6b65;--ok:#0d9668;--bad:#c8443c}
+  @media (prefers-color-scheme:dark){:root{--bg:#0d1512;--card:#132019;--line:#22392e;--ink:#e8f1ed;--dim:#9fb4ab;--ok:#3ddc97;--bad:#ff8f6b}}
+  body{margin:0;background:var(--bg);color:var(--ink);font:13.5px/1.6 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",sans-serif}
+  .box{margin:14px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+  .t{font-weight:800;font-size:15px}
+  .st{margin-top:8px;color:var(--dim)}
+  .st b{color:var(--ink)}
+  .ok{color:var(--ok)} .bad{color:var(--bad)}
+  ul{margin:8px 0 0;padding-left:18px;color:var(--dim);font-size:12.5px;max-height:120px;overflow:auto}
+  a{color:var(--ok);font-weight:700;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="t">📒 업무일지 자동 동기화</div>
+  <div class="st" id="st">검수 콘솔 연결 중…</div>
+  <ul id="chg" hidden></ul>
+  <div class="st" style="font-size:12px"><a href="./" target="_blank" rel="noopener">업무일지 열기 ↗</a> · 반영이 끝나면 이 창은 저절로 닫힙니다.</div>
+</div>
+<script src="worklog-core.js"></script>
+<script>
+/* 검수 콘솔(cms.unpa.me)이 이 창을 열고 CMS 집계를 넘긴다.
+   여기서 이 브라우저의 업무일지·검수기록 저장소에 반영하고 결과를 돌려준 뒤 닫힌다.
+   이 창을 연 콘솔 창, 그 창의 주소(cms.unpa.me), 주소에 붙은 일회용 번호가 모두 맞을 때만 받는다. */
+(function(){
+  var CMS='https://cms.unpa.me';
+  var st=document.getElementById('st'), chg=document.getElementById('chg');
+  var m=(location.hash||'').match(/^#n=([a-f0-9]{16,64})$/);
+  if(!m || !window.opener){ st.textContent='검수 콘솔에서 열리는 창입니다. 업무일지는 위 링크로 여세요.'; return; }
+  var nonce=m[1], src=window.opener, done=false;
+  history.replaceState(null,'',location.pathname);
+
+  function activeKey(){ try{ return localStorage.getItem('unpa-worklog-active')||'unpa-worklog-v1'; }catch(e){ return 'unpa-worklog-v1'; } }
+  async function apply(p){
+    if(!p || p.v!==1 || !p.work) throw Error('받은 자료 형식 오류');
+    var key=activeKey(), base=null;
+    /* 이 브라우저에 업무일지가 아직 없으면 저장소의 기존 기록(data/log.json)부터 깐다 — 과거 달이 사라지지 않게 */
+    if(!localStorage.getItem(key)){
+      try{ var r=await fetch('data/log.json?t='+Date.now(),{cache:'no-store'}); if(r.ok){ var o=await r.json(); base={v:1,months:(o&&o.months)||o,dirty:[]}; } }catch(e){}
+    }
+    var now=new Date();
+    /* 읽고 쓰는 사이에 다른 탭이 끼어들지 않도록 기다림 없이 한 번에 */
+    var res=WorklogCore.syncStore(localStorage.getItem(key), p.work, base, now);
+    localStorage.setItem(key, res.value);
+    var au={days:0};
+    if(p.audit && Object.keys(p.audit).length){
+      au=WorklogCore.syncAudit(localStorage.getItem('unpa-audit-v1'), p.audit, now);
+      localStorage.setItem('unpa-audit-v1', au.value);
+    }
+    var info={ at:now.toISOString(), from:p.work.from, today:res.today, partial:!!p.work.partial,
+               changes:res.changes.slice(0,60), nChanges:res.changes.length, auditDays:au.days };
+    try{ localStorage.setItem('unpa-worklog-sync-v1', JSON.stringify(info)); }catch(e){}
+    return { ok:true, today:res.today, changes:res.changes.slice(0,20), nChanges:res.changes.length, auditDays:au.days };
+  }
+  function md(d){ return (+d.slice(5,7))+'/'+(+d.slice(8,10)); }
+  function show(res){
+    if(!res.ok){ st.innerHTML='<span class="bad">반영 실패</span> — '+String(res.error||'').replace(/[<>&]/g,''); return; }
+    st.innerHTML='<span class="ok">반영 완료</span> · 오늘('+md(res.today.d)+') 리뷰 <b>'+res.today.r+'</b> · 제품 <b>'+res.today.p+'</b>'
+      +(res.nChanges?' · 바뀐 날 '+res.nChanges+'일':' · 바뀐 날 없음')+(res.auditDays?' · 검수기록 '+res.auditDays+'일':'');
+    if(res.changes.length){
+      chg.hidden=false;
+      chg.innerHTML=res.changes.map(function(c){
+        var parts=[]; if(c.r[0]!==c.r[1]) parts.push('리뷰 '+c.r[0]+'→'+c.r[1]); if(c.p[0]!==c.p[1]) parts.push('제품 '+c.p[0]+'→'+c.p[1]);
+        return '<li>'+md(c.d)+' '+parts.join(' · ')+'</li>';
+      }).join('');
+    }
+  }
+  window.addEventListener('message', async function(ev){
+    if(done || ev.origin!==CMS || ev.source!==src || !ev.data || ev.data.nonce!==nonce) return;
+    if(ev.data.type==='unpa-sync-progress'){ st.textContent=String(ev.data.text||'').slice(0,120); return; }
+    if(ev.data.type!=='unpa-sync-data') return;
+    done=true;
+    var res;
+    try{ res=await apply(ev.data.payload); }catch(e){ res={ok:false,error:String(e&&e.message||e)}; }
+    show(res);
+    try{ src.postMessage(Object.assign({type:'unpa-sync-done',nonce:nonce,seq:ev.data.payload&&ev.data.payload.seq},res), CMS); }catch(e){}
+    setTimeout(function(){ window.close(); }, res.ok ? (res.nChanges ? 6000 : 2500) : 15000);
+  });
+  src.postMessage({type:'unpa-sync-ready',nonce:nonce}, CMS);
+  setTimeout(function(){ if(!done) st.textContent='콘솔 응답이 없습니다. 이 창을 닫고 콘솔에서 다시 시도하세요.'; }, 60000);
+})();
+</script>
+</body>
+</html>

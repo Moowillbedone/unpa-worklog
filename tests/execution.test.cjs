@@ -14,7 +14,7 @@ function harness(){
   const sent={get length(){return raw.filter(x=>x.url.indexOf('/admin/')>=0).length;},
               filter(f){return raw.filter(x=>x.url.indexOf('/admin/')>=0).filter(f);}};
   function XHR(){} XHR.prototype.open=function(){}; XHR.prototype.setRequestHeader=function(){};
-  const el=()=>({style:{},onclick:null,appendChild(){},remove(){},click(){},querySelectorAll:()=>[],
+  const el=()=>({style:{},onclick:null,appendChild(){},remove(){},click(){},querySelectorAll:()=>[],addEventListener(){},
                  querySelector:()=>null,insertBefore(){},set innerHTML(v){},get innerHTML(){return '';},
                  dataset:{},classList:{contains:()=>false},parentNode:{insertBefore(){}}});
   const ctx={
@@ -23,11 +23,14 @@ function harness(){
               querySelectorAll:()=>[],querySelector:()=>null},
     localStorage:{getItem:k=>store[k]||null,setItem:(k,v)=>{store[k]=v;},removeItem:k=>{delete store[k];}},
     URLSearchParams:class{constructor(){}get(){return null;}},
-    Blob:class{constructor(p){this.parts=p;}},Image:class{},
+    Blob:class{constructor(p){this.parts=p;ctx.__blobs=(ctx.__blobs||0)+1;}},Image:class{},
     URL:Object.assign(function(u,b){return new URL(u,b);},
         {createObjectURL:()=>'blob:stub',revokeObjectURL(){},prototype:URL.prototype}),
     AbortController,setTimeout,clearTimeout,Set,Date,JSON,Math,
-    alert:m=>{ctx.__alert=m;},confirm:()=>ctx.__confirm!==false,
+    alert:m=>{ctx.__alert=m;},confirm:()=>ctx.__confirm!==false,crypto:globalThis.crypto,
+    __listeners:[],addEventListener(t,f){ if(t==='message') ctx.__listeners.push(f); },
+    removeEventListener(t,f){ ctx.__listeners=ctx.__listeners.filter(x=>x!==f); },
+    open:(...a)=>{ ctx.__opened=a; return ctx.__open?ctx.__open(...a):null; },
     fetch:async(url,init)=>{ raw.push({url:String(url),method:(init&&init.method)||'GET',body:init&&init.body});
                              const routed=ctx.__route&&ctx.__route(String(url),init||{});
                              const status=routed?routed.status:201;
@@ -39,7 +42,9 @@ function harness(){
   vm.runInContext(code.replace('  /* ── 시작 ── */',
     `globalThis.api={buildReq,runJobs,sentLoad,doneLoad,doneToggle,auditPayload,CAP,
                      postScan,gridJobs,confidenceOf,histLoad,histSave,recheckRegistered,findProduct,aliasKey,
-                     evenDates,backlogTodo,sentApply,worklogPayloads,auditDays,scanDates,
+                     evenDates,backlogTodo,sentApply,auditDays,scanDates,
+                     collectWork,workPayload,outboxLoad,outboxAudit,outboxRun,syncNow,lastActor,
+                     setMe:e=>{ME=e;},setWork:w=>{WORK=w;},getSyncHtml:()=>SYNC_HTML,
                      listAll,loadBacklog,scanRows,capOf,canSend,sentMark,
                      getAbort:()=>SCAN_ABORT,
                      setResults:r=>{results=r;},
@@ -278,7 +283,7 @@ test('a user-fixed review may be re-sent even though it was sent before',async()
   assert.equal(plain.applied,true,'수정완료가 아니면 여전히 중복 전송을 막는다');
 });
 
-test('worklog and audit are split by review date',()=>{
+test('audit is split by review date',()=>{
   const {api}=harness(); api.setDate('2026-09-18_2026-09-22');
   api.setResults([
     {id:1,date:'2026-09-18',action:'approve',applied:true,reasons:[]},
@@ -288,15 +293,12 @@ test('worklog and audit are split by review date',()=>{
     {id:5,date:'2026-09-20',action:'hold',applied:false,reasons:[]},
   ]);
   assert.equal(api.scanDates().join(','),'2026-09-18,2026-09-20,2026-09-22');
-  const p=api.worklogPayloads();
-  assert.equal(JSON.stringify(p.map(x=>[x.d,x.ids])),JSON.stringify([['2026-09-18',['1','2']],['2026-09-22',['3']]]),'처리한 것만, 작성일별로');
   const a=api.auditDays();
   assert.equal(Object.keys(a.days).join(','),'2026-09-18,2026-09-20,2026-09-22');
   assert.equal(a.days['2026-09-22'].items.length,2);
   assert.equal(a.days['2026-09-20'].date,'2026-09-20');
 });
 
-/* ── 전체 검수 리뷰 (2026-09-27) ─────────────────────────── */
 test('several days at once raise the cap by the number of days',async()=>{
   const {api,sent,ctx}=harness(); api.setTpl(TPL);
   const hides=Array.from({length:api.CAP.hide+5},(_,i)=>({id:2000+i,action:'hide',reasons:[],date:i%2?'2026-09-24':'2026-09-26'}));
@@ -397,4 +399,82 @@ test('scan stops after repeated detail failures instead of crawling on',async()=
   await api.scanRows(Array.from({length:12},(_,i)=>({id:300+i,brandName:'b',productName:'p',_date:'2026-09-26'})));
   assert.equal(api.getResults().length,5,'연속 5번 실패하면 멈춘다');
   assert.match(api.getAbort(),/연속 5번/);
+});
+
+/* ── 업무일지 자동 동기화 (2026-09-27) ───────────────────── */
+const localYmd=d=>{const p=n=>(n<10?'0':'')+n;return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());};
+
+test('work is counted on the day I approved, only when I was the one who approved',async()=>{
+  const {api,ctx}=harness();
+  const now=new Date(), d0=localYmd(now), d3=localYmd(new Date(now.getFullYear(),now.getMonth(),now.getDate()-3));
+  const at=(daysAgo,h)=>new Date(now.getFullYear(),now.getMonth(),now.getDate()-daysAgo,h,10).toISOString();
+  const ME='me@example.com', OT='other@example.com';
+  ctx.__route=(url)=>{
+    if(url.includes('/admin/reviews?')){
+      if(!url.includes('startDate='+d3+'&')) return {status:200,body:{totalCount:0,result:[]}};
+      return {status:200,body:{totalCount:6,result:[
+        {id:1,approvedAt:at(0,10),revisedBy:[ME],status:'APPROVED'},            /* 3일 전 리뷰를 오늘 승인 */
+        {id:2,approvedAt:at(2,23),revisedBy:['Me@Example.com'],status:'APPROVED'},/* 대소문자 무시, 이틀 전 승인 */
+        {id:3,approvedAt:at(0,11),lastRevisedAt:at(1,9),revisedBy:[ME,ME],status:'APPROVED'}, /* 수정요청 뒤 내가 승인 */
+        {id:4,approvedAt:at(0,12),revisedBy:[ME,OT],status:'APPROVED'},         /* 내가 요청하고 남이 승인 → 내 것 아님 */
+        {id:5,approvedAt:at(0,12),revisedBy:[OT],status:'APPROVED'},            /* 다른 담당자 */
+        {id:6,approvedAt:null,lastRevisedAt:at(0,9),revisedBy:[ME],status:'REVISED'}, /* 수정요청만 — 세지 않는다 */
+      ]}};
+    }
+    if(url.includes('/admin/products?')){
+      const pg=Number(/page=(\d+)/.exec(url)[1]);
+      const rows=Array.from({length:300},(_,i)=>({id:pg*1000+i,createdAt:at(pg===1?0:70,8),approvedAt:at(pg===1?0:70,8),approvedBy:i<2&&pg===1?ME:OT}));
+      return {status:200,body:{totalCount:900,results:rows}};
+    }
+    return {status:404,body:{}};
+  };
+  const w=await api.collectWork(ME);
+  const expect={}; expect['1']=d0; expect['2']=localYmd(new Date(at(2,23))); expect['3']=d0;
+  assert.deepEqual(JSON.parse(JSON.stringify(w.reviews)),expect);
+  assert.deepEqual(Object.keys(w.products).sort(),['1000','1001'],'내가 등록한 제품만');
+  assert.equal(w.products['1000'],d0);
+  assert.equal(w.failed.length,0);
+});
+
+test('runs leave no downloaded files; results wait in the outbox and go with the next sync',async()=>{
+  const {api,ctx,store}=harness(); api.setTpl(TPL); api.setDate('2026-09-24');
+  ctx.__route=(url,init)=> (init.method==='POST'||init.method==='PUT') ? {status:201,body:{ok:true}} : {status:404,body:{}};
+  const jobs=[{id:11,action:'approve',reasons:[],date:'2026-09-24',user:'u'},{id:12,action:'hide',reasons:[],date:'2026-09-24',user:'v'}];
+  api.setResults(jobs);
+  await api.runJobs(jobs);
+  assert.equal(ctx.__blobs||0,0,'처리 로그를 파일로 내려받지 않는다');
+  const ob=api.outboxLoad();
+  assert.equal(ob.audit['2026-09-24'].executions.length,2,'실행 결과는 검수기록에 붙는다');
+  assert.equal(ob.audit['2026-09-24'].items.filter(x=>x.applied).length,2);
+  assert.equal(JSON.stringify(ob.reviews.map(x=>x[0])),JSON.stringify(['11']),'승인한 것은 오늘 날짜로 바로 반영 대기');
+  assert.equal(ob.reviews[0][1],localYmd(new Date()));
+  const p=api.workPayload();
+  assert.equal(p.work.from,'2026-09-01'); assert.equal(p.work.to,localYmd(new Date()));
+  assert.ok(p.work.reviews.some(x=>x[0]==='11'));
+  assert.ok(p.audit['2026-09-24']);
+});
+
+test('sync popup: blocked shows a one-click button; a verified reply clears the outbox',async()=>{
+  const {api,ctx}=harness(); api.setDate('2026-09-24');
+  api.setMe('me@example.com'); api.setWork({reviews:{'5':'2026-09-27'},products:{},failed:[]});
+  api.setResults([{id:5,date:'2026-09-24',action:'approve',applied:true,reasons:[]}]); api.outboxAudit();
+  assert.equal(api.syncNow(),false);
+  assert.match(api.getSyncHtml(),/지금 반영/,'팝업이 막히면 버튼으로');
+  const posted=[]; const win={postMessage:(m,o)=>posted.push([m,o])};
+  ctx.__open=()=>win;
+  assert.equal(api.syncNow(),true);
+  const nonce=/#n=([a-f0-9]+)/.exec(ctx.__opened[0])[1];
+  assert.match(ctx.__opened[0],/^https:\/\/moowillbedone\.github\.io\/unpa-worklog\/sync\.html#n=/);
+  const fire=(data,origin,source)=>ctx.__listeners.slice().forEach(f=>f({origin:origin||'https://moowillbedone.github.io',source:source||win,data}));
+  fire({type:'unpa-sync-ready',nonce},'https://evil.example');                /* 다른 주소는 무시 */
+  fire({type:'unpa-sync-ready',nonce:'0000'});                                /* 번호가 다르면 무시 */
+  assert.equal(posted.length,0);
+  fire({type:'unpa-sync-ready',nonce});
+  assert.equal(posted.length,1); assert.equal(posted[0][1],'https://moowillbedone.github.io','받는 곳을 업무일지 주소로 한정');
+  const pl=posted[0][0].payload;
+  assert.equal(JSON.stringify(pl.work.reviews),JSON.stringify([['5','2026-09-27']]));
+  assert.ok(pl.audit['2026-09-24']);
+  fire({type:'unpa-sync-done',nonce,ok:true,seq:pl.seq,today:{d:'2026-09-27',r:5,p:1},nChanges:1});
+  assert.deepEqual(Object.keys(api.outboxLoad()),[],'넘긴 뒤 보관함을 비운다');
+  assert.match(api.getSyncHtml(),/오늘 리뷰 <b>5<\/b>/);
 });

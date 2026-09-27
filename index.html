@@ -110,6 +110,12 @@ td input{width:100%;background:var(--surface);border:1.5px solid var(--line);bor
 td input:hover{border-color:var(--line3);background:var(--raise)}
 td input:focus{outline:none;border-color:var(--mint);box-shadow:0 0 0 3px rgba(13,150,104,.16);background:#fff}
 td input.num{text-align:right;max-width:104px}
+td input.num.auto{box-shadow:inset 3px 0 0 var(--mint,#3ddc97)}
+.autoInfo{font-size:12px;color:var(--dim)}
+.autoInfo b{color:inherit}
+.autoInfo details{display:inline}
+.autoInfo summary{display:inline;cursor:pointer;text-decoration:underline dotted}
+.autoInfo ul{margin:6px 0 0;padding-left:18px;max-height:140px;overflow:auto}
 td input.memo{color:var(--mid);font-size:12.3px;font-weight:400}
 td input::placeholder{color:#b9c4c0}
 td.inc{padding:5px 13px;text-align:right;font-family:var(--mono);font-size:12.5px;
@@ -246,7 +252,7 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
   </div>
 
   <div class="card">
-    <div class="chd"><h2 id="dayTitle">일별 기록</h2><span class="hint">숫자 칸을 클릭해 바로 입력 · 자동 저장</span></div>
+    <div class="chd"><h2 id="dayTitle">일별 기록</h2><span class="hint" id="autoHint">숫자 칸을 클릭해 바로 입력 · 자동 저장</span></div>
     <div class="tw">
       <table>
         <thead><tr>
@@ -537,7 +543,24 @@ function sync(txt, warn){
 /* ── 저장 (localStorage) ── */
 let LS = 'unpa-worklog-v1';
 let STORAGE_CONFLICT=false;
-window.addEventListener('storage',e=>{if(e.key===LS){STORAGE_CONFLICT=true;sync('● 다른 탭에서 기록 변경됨 — 백업 후 새로고침하세요',true);}});
+/* 다른 탭 — 특히 검수 콘솔이 여는 동기화 창(sync.html) — 이 기록을 바꾸면 다시 읽어 화면에 반영한다.
+   이 탭의 입력은 칠 때마다 바로 저장되므로 다시 읽어도 잃는 것이 없다. */
+window.addEventListener('storage',e=>{
+  if(e.key==='unpa-worklog-sync-v1'){ renderAutoInfo(); return; }
+  if(e.key!==LS) return;
+  try{
+    const o=JSON.parse(e.newValue||'null');
+    if(!o||!o.months) throw Error('형식 오류');
+    ST=WorklogCore.months(o.months);
+    (o.dirty||[]).filter(m=>ST[m]).forEach(m=>dirty.add(m));
+    STORAGE_CONFLICT=false;
+    month(cur); renderAll();
+    sync('● CMS 자동 동기화 반영 <b>'+new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})+'</b>');
+    if(typeof SB!=='undefined'&&SB&&SB_USER) [...dirty].forEach(m=>pushMonth(m));
+  }catch(err){ STORAGE_CONFLICT=true; sync('● 다른 탭에서 기록 변경됨 — 백업 후 새로고침하세요',true); }
+});
+/* 동기화 창이 어느 저장소에 써야 하는지 알려 둔다 (로그인하면 계정별 저장소를 쓴다) */
+function markActive(){ try{ localStorage.setItem('unpa-worklog-active', LS); }catch(e){} }
 function persist(){
   if(STORAGE_CONFLICT)return false;
   try {
@@ -612,10 +635,13 @@ function renderDays(){
     const wd = dt.getDay(), inc = income(d);
     const key = cur + '-' + dd;
     const cls = [wd===0||wd===6 ? 'wk':'', key===nowKey ? 'today':'', key>nowKey ? 'fut':''].filter(Boolean).join(' ');
+    const au = d.auto, tip = f => !au ? '' : 'CMS 자동 집계 '+au[f]+'건'
+      + ((d[f]||0)!==au[f] ? ' · 직접 조정 '+((d[f]||0)-au[f]>0?'+':'')+((d[f]||0)-au[f]) : '')
+      + (d.manual && d.manual[f]!==au[f] ? ' · 자동 전 직접 적은 값 '+d.manual[f] : '');
     rows += `<tr class="${cls}">` +
       `<td class="d">${+cur.slice(5,7)}/${i} <span style="opacity:.5">${'일월화수목금토'[wd]}</span></td>` +
-      `<td><input class="num" type="number" min="0" value="${d.r||''}" placeholder="0" data-d="${dd}" data-f="r" inputmode="numeric"></td>` +
-      `<td><input class="num" type="number" min="0" value="${d.p||''}" placeholder="0" data-d="${dd}" data-f="p" inputmode="numeric"></td>` +
+      `<td><input class="num${au?' auto':''}" type="number" min="0" value="${d.r||''}" placeholder="0" data-d="${dd}" data-f="r" inputmode="numeric" title="${htmlEscape(tip('r'))}"></td>` +
+      `<td><input class="num${au?' auto':''}" type="number" min="0" value="${d.p||''}" placeholder="0" data-d="${dd}" data-f="p" inputmode="numeric" title="${htmlEscape(tip('p'))}"></td>` +
       `<td class="inc ${inc>0?'pos':'zero'}">${inc>0?won(inc):'—'}</td>` +
       `<td><input class="memo" type="text" value="${htmlEscape(d.memo)}" placeholder="—" data-d="${dd}" data-f="memo"></td>` +
       `<td><input class="memo" type="text" value="${htmlEscape(d.unreg)}" placeholder="—" data-d="${dd}" data-f="unreg"></td>` +
@@ -781,132 +807,28 @@ $('#file').onchange = e => {
   r.readAsText(f); e.target.value = '';
 };
 
-/* ── CMS 콘솔 → 업무일지 반영 (#sync=...) ──
-   검수 콘솔이 처리를 끝내면 이 페이지를 #sync= 로 연다.
-   자동으로 쓰지 않고, 확인 카드를 띄워 사람이 승인해야 반영된다. */
-function applyHashSync(incoming){
-  const syncAccount=LS;
-  const hm = (location.hash || '').match(/[#&]sync=([^&]+)/);
-  if (!hm&&!incoming) return;
-  let pl; try { pl = incoming||JSON.parse(decodeURIComponent(hm[1])); } catch(e){ return; }
-  if (!pl || !WorklogCore.date(pl.d)) return;
-  history.replaceState(null, '', location.pathname + location.search);
-
-  const mm = pl.d.slice(0,7), dd = pl.d.slice(8,10);
-  const now = month(mm).days[dd] || { r:0, p:0 };
-  month(mm)._reviewLedger=month(mm)._reviewLedger||{};
-  const allLedger=()=>Object.assign({},...Object.values(ST).map(m=>m._reviewLedger||{}));
-  const ledger=allLedger();
-  let ids=null;try{if(pl.ids)ids=WorklogCore.unappliedIds(pl.ids,ledger);}catch(e){toast(e.message,true);return;}
-  const inR = ids?ids.length:Math.max(0, parseInt(pl.r,10) || 0), inP = ids?0:Math.max(0, parseInt(pl.p,10) || 0);
-  const safe = s => String(s == null ? '' : s).replace(/[<>&]/g, '');
-
-  const wrap = document.createElement('div');
-  wrap.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(16,26,22,.45);display:flex;align-items:center;justify-content:center;padding:20px';
-  wrap.innerHTML =
-    '<div style="background:#fff;border:1px solid #dde3e1;border-radius:16px;padding:24px 26px;max-width:420px;width:100%;box-shadow:0 20px 60px rgba(20,40,32,.25);font-size:13.5px;line-height:1.65">'
-    + '<div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;letter-spacing:.12em;color:#0d9668;font-weight:700">CMS 검수 결과 반영</div>'
-    + '<div style="font-size:19px;font-weight:800;margin-top:6px">' + safe(pl.d) + '</div>'
-    + (pl.note ? '<div style="color:#5a6b65;margin-top:5px;font-size:12.5px">' + safe(pl.note) + '</div>' : '')
-    + '<div style="background:#f1f4f3;border:1px solid #dde3e1;border-radius:10px;padding:13px 15px;margin-top:14px">'
-    +   '<div style="display:flex;align-items:center;gap:9px"><span style="width:76px;color:#5a6b65">리뷰 검수</span>'
-    +     '<input id="hsR" type="number" min="0" value="' + inR + '" style="width:84px;padding:6px 9px;border:1.5px solid #c6d0cc;border-radius:7px;font:inherit;text-align:right">'
-    +     '<span style="color:#8b9a94;font-size:12px">건 · 현재 ' + (now.r||0) + '</span></div>'
-    +   '<div style="display:flex;align-items:center;gap:9px;margin-top:9px"><span style="width:76px;color:#5a6b65">제품 등록</span>'
-    +     '<input id="hsP" type="number" min="0" value="' + inP + '" style="width:84px;padding:6px 9px;border:1.5px solid #c6d0cc;border-radius:7px;font:inherit;text-align:right">'
-    +     '<span style="color:#8b9a94;font-size:12px">건 · 현재 ' + (now.p||0) + '</span></div>'
-    + '</div>'
-    + '<div style="color:#8b9a94;font-size:12px;margin-top:10px">콘솔이 처리한 건수입니다. 수동으로 한 승인·상품등록이 있으면 숫자를 고쳐서 반영하세요.</div>'
-    + '<div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">'
-    +   '<button id="hsCancel" style="flex:1;padding:10px;border:1.5px solid #c6d0cc;background:#fff;border-radius:9px;font:inherit;font-weight:700;color:#5a6b65;cursor:pointer">취소</button>'
-    +   '<button id="hsSet" style="flex:1;padding:10px;border:1.5px solid #c6d0cc;background:#fff;border-radius:9px;font:inherit;font-weight:700;color:#5a6b65;cursor:pointer">덮어쓰기</button>'
-    +   '<button id="hsAdd" style="flex:1.4;padding:10px;border:0;background:#0d9668;color:#fff;border-radius:9px;font:inherit;font-weight:800;cursor:pointer">기존에 더하기</button>'
-    + '</div></div>';
-  document.body.appendChild(wrap);
-
-  const close = () => wrap.remove();
-  const apply = (mode) => {
-    if(LS!==syncAccount){close();toast('계정이 바뀌었습니다. 해당 계정에서 결과를 다시 전달하세요',true);return;}
-    const r = Math.max(0, parseInt(document.getElementById('hsR').value,10) || 0);
-    const p = Math.max(0, parseInt(document.getElementById('hsP').value,10) || 0);
-    if(!Number.isSafeInteger(r)||!Number.isSafeInteger(p)){toast('건수 범위를 확인하세요',true);return;}
-    const day = month(mm).days[dd];
-    if(ids){
-      const fresh=WorklogCore.unappliedIds(pl.ids,allLedger());
-      day.r=(day.r||0)+fresh.length;
-      fresh.forEach(id=>{month(mm)._reviewLedger[id]=pl.d;});
-      if(!save(mm)){toast('저장 실패 — 화면 기록을 내보내기로 백업하세요',true);return;}cur=mm;renderAll();close();toast('신규 '+fresh.length+'건 반영 (중복 제외)');return;
-    }
-    if(!confirm('이전 형식은 리뷰 ID가 없어 중복을 확인할 수 없습니다. 수동 대조 후 반영하시겠습니까?'))return;
-    if (mode === 'add'){ day.r = (day.r||0) + r; day.p = (day.p||0) + p; }
-    else { day.r = r; day.p = p; }
-    save(mm); cur = mm; renderAll(); close();
-    toast(pl.d + ' 반영됨 · 리뷰 ' + day.r + ' · 제품 ' + day.p);
-  };
-  document.getElementById('hsCancel').onclick = close;
-  document.getElementById('hsSet').onclick = () => apply('set');
-  document.getElementById('hsAdd').onclick = () => apply('add');
-  if(ids){document.getElementById('hsSet').hidden=true;document.getElementById('hsR').disabled=true;document.getElementById('hsP').disabled=true;document.getElementById('hsAdd').textContent='중복 제외 '+ids.length+'건 반영';}
-}
-
-/* ── CMS 콘솔 → 업무일지: 여러 날짜 한 번에 ──
-   콘솔이 남은 짝수일을 한 번에 처리하면 날짜별 리뷰 ID 목록이 온다.
-   확인 카드 하나에 날짜별 신규 건수를 보여 주고, 승인하면 리뷰 ID 로 중복을 걸러 반영한다. */
-function applyMultiSync(list){
-  const syncAccount=LS;
-  const allLedger=()=>Object.assign({},...Object.values(ST).map(m=>m._reviewLedger||{}));
-  const rows=[];
-  for(const pl of (list||[])){
-    if(!pl||!WorklogCore.date(pl.d)||!Array.isArray(pl.ids)) continue;
-    let fresh; try{ fresh=WorklogCore.unappliedIds(pl.ids,allLedger()); }catch(e){ toast(e.message,true); return; }
-    const cur=(month(pl.d.slice(0,7)).days[pl.d.slice(8,10)]||{r:0}).r||0;
-    rows.push({d:pl.d, ids:pl.ids, fresh:fresh.length, cur, note:pl.note||''});
-  }
-  if(!rows.length) return;
-  rows.sort((a,b)=>a.d<b.d?-1:1);
-  const total=rows.reduce((s,x)=>s+x.fresh,0);
-  const safe = s => String(s == null ? '' : s).replace(/[<>&]/g, '');
-  const wrap=document.createElement('div');
-  wrap.style.cssText='position:fixed;inset:0;z-index:9999;background:rgba(16,26,22,.45);display:flex;align-items:center;justify-content:center;padding:20px';
-  wrap.innerHTML='<div style="background:#fff;border:1px solid #dde3e1;border-radius:16px;padding:24px 26px;max-width:460px;width:100%;box-shadow:0 20px 60px rgba(20,40,32,.25);font-size:13.5px;line-height:1.65">'
-    +'<div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;letter-spacing:.12em;color:#0d9668;font-weight:700">CMS 검수 결과 반영 · '+rows.length+'일</div>'
-    +'<div style="font-size:19px;font-weight:800;margin-top:6px">신규 '+total+'건</div>'
-    +'<div style="background:#f1f4f3;border:1px solid #dde3e1;border-radius:10px;padding:10px 14px;margin-top:12px;max-height:260px;overflow:auto">'
-    + rows.map(x=>'<div style="display:flex;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px dashed #dde3e1">'
-        +'<span style="font-weight:700">'+safe(x.d)+'</span>'
-        +'<span>신규 <b>'+x.fresh+'</b>건 <span style="color:#8b9a94;font-size:12px">· 현재 '+x.cur+'</span></span></div>').join('')
-    +'</div>'
-    +'<div style="color:#8b9a94;font-size:12px;margin-top:10px">리뷰 작성일(짝수일)에 더합니다. 이미 반영된 리뷰는 리뷰 ID 로 걸러 두 번 세지 않습니다.</div>'
-    +'<div style="display:flex;gap:8px;margin-top:16px">'
-    +  '<button id="msCancel" style="flex:1;padding:10px;border:1.5px solid #c6d0cc;background:#fff;border-radius:9px;font:inherit;font-weight:700;color:#5a6b65;cursor:pointer">취소</button>'
-    +  '<button id="msApply" style="flex:1.6;padding:10px;border:0;background:#0d9668;color:#fff;border-radius:9px;font:inherit;font-weight:800;cursor:pointer">중복 제외 '+total+'건 반영</button>'
-    +'</div></div>';
-  document.body.appendChild(wrap);
-  const close=()=>wrap.remove();
-  document.getElementById('msCancel').onclick=close;
-  document.getElementById('msApply').onclick=()=>{
-    if(LS!==syncAccount){ close(); toast('계정이 바뀌었습니다. 해당 계정에서 결과를 다시 전달하세요',true); return; }
-    const touched=new Set(); let added=0;
-    for(const x of rows){
-      const mm=x.d.slice(0,7), dd=x.d.slice(8,10);
-      const fresh=WorklogCore.unappliedIds(x.ids,allLedger());   /* 반영 직전에 다시 걸러 경합을 막는다 */
-      if(!fresh.length) continue;
-      const m=month(mm); m._reviewLedger=m._reviewLedger||{};
-      const day=m.days[dd];
-      day.r=(day.r||0)+fresh.length;
-      fresh.forEach(id=>{ m._reviewLedger[id]=x.d; });
-      touched.add(mm); added+=fresh.length;
-    }
-    for(const mm of touched){ if(!save(mm)){ toast('저장 실패 — 화면 기록을 내보내기로 백업하세요',true); return; } }
-    cur=[...touched].sort().pop()||cur; renderAll(); close();
-    toast(rows.length+'일 · 신규 '+added+'건 반영 (중복 제외)');
-  };
+/* ── CMS 자동 동기화 안내 ──
+   검수 콘솔을 열면 CMS 에서 "내 계정이 그날 승인한 리뷰·등록한 제품"을 모아 sync.html 창으로 넘기고,
+   그 창이 이 브라우저 기록에 반영한다. 여기서는 마지막 반영 결과만 보여 준다. */
+function renderAutoInfo(){
+  const el=$('#autoHint'); if(!el) return;
+  let info=null; try{ info=JSON.parse(localStorage.getItem('unpa-worklog-sync-v1')||'null'); }catch(e){}
+  if(!info||!info.at){ el.innerHTML='숫자 칸을 클릭해 바로 입력 · 자동 저장 · 검수 콘솔을 열면 CMS 기준으로 자동 기록'; return; }
+  const at=new Date(info.at), p2=n=>String(n).padStart(2,'0');
+  const when=p2(at.getMonth()+1)+'-'+p2(at.getDate())+' '+p2(at.getHours())+':'+p2(at.getMinutes());
+  const md=d=>(+d.slice(5,7))+'/'+(+d.slice(8,10));
+  const list=(info.changes||[]).map(c=>{ const x=[]; if(c.r[0]!==c.r[1])x.push('리뷰 '+c.r[0]+'→'+c.r[1]); if(c.p[0]!==c.p[1])x.push('제품 '+c.p[0]+'→'+c.p[1]); return '<li>'+md(c.d)+' '+x.join(' · ')+'</li>'; }).join('');
+  el.className='hint autoInfo';
+  el.innerHTML='<b style="color:var(--mint2,#0d9668)">CMS 자동</b> · 마지막 반영 '+htmlEscape(when)
+    +' · '+htmlEscape(md(info.from||'2026-09-01'))+'부터 작업한 날 기준 · 초록 줄 칸 = 자동 집계(고치면 조정값으로 유지)'
+    +(info.partial?' · <span style="color:#b57611">일부 날짜 조회 실패 — 다음 동기화 때 채움</span>':'')
+    +(info.nChanges?' · <details><summary>바뀐 날 '+info.nChanges+'일</summary><ul>'+list+'</ul></details>':'');
 }
 
 /* ── 초기화 ── */
 cur = TODAY_M;
 $('#cs').value = dKey(today); $('#ce').value = dKey(today);
-renderAll(); renderCms();
+renderAll(); renderCms(); renderAutoInfo();
 
 const BOOT_READY=(async () => {
   // 1순위: 이 브라우저에 저장된 기록
@@ -1002,7 +924,7 @@ async function pullAll(){
   const accountKey='unpa-worklog-v2:'+SB_USER.id;
   if(LS!==accountKey){
     if(!persist()){toast('현재 기록 저장 실패 — 내보내기 후 계정을 전환하세요',true);return;}
-    LS=accountKey;dirty.clear();
+    LS=accountKey;dirty.clear();markActive();
     try{const stored=JSON.parse(localStorage.getItem(LS)||'null');ST=stored?WorklogCore.months(stored.months):{};(stored&&stored.dirty||[]).forEach(m=>dirty.add(m));}
     catch(e){ST={};toast('계정별 로컬 기록 읽기 실패. 백업을 확인하세요.',true);}
     month(cur);renderAll();
@@ -1170,7 +1092,7 @@ $('#sbOutBtn').onclick = async () => {
   await PUSH_QUEUE;persist();
   if (SB) await SB.auth.signOut();
   SB_USER = null;
-  LS='unpa-worklog-v1';dirty.clear();STORAGE_CONFLICT=false;
+  LS='unpa-worklog-v1';dirty.clear();STORAGE_CONFLICT=false;markActive();
   try{const saved=JSON.parse(localStorage.getItem(LS)||'null');ST=saved?WorklogCore.months(saved.months):{};(saved&&saved.dirty||[]).forEach(m=>dirty.add(m));}catch(e){ST={};}
   month(cur);renderAll();
   $('#sbAuth').style.display = ''; $('#sbOut').style.display = 'none';
@@ -1195,7 +1117,6 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
     $('#sbMask').hidden = false;
     if (!ok) mstat('off','<b>메일 인증이 처리되었습니다.</b><br>아래에서 이메일·비밀번호로 로그인해 주세요.');
   }
-  applyHashSync();
 });
 
 </script>
@@ -1349,24 +1270,8 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
   });
 
   aLoad(); aRenderAll();
-  var handshake=(location.hash||'').match(/^#console=([a-zA-Z0-9-]+)$/);
-  if(handshake&&window.opener){
-    var nonce=handshake[1],source=window.opener;
-    var receive=async function(ev){
-      if(ev.origin!=='https://cms.unpa.me'||ev.source!==source||!ev.data||ev.data.type!=='unpa-console-result'||ev.data.nonce!==nonce)return;
-      window.removeEventListener('message',receive);await ACCOUNT_READY;
-      if(!confirm('CMS 검수 기록을 이 브라우저로 가져올까요? 업무일지 건수는 다음 화면에서 별도로 확인합니다.'))return;
-      try{
-        adopt(ev.data.audit);
-        /* 콘솔이 여러 날짜를 한 번에 보내면 확인 카드 하나로 받는다 */
-        if(Array.isArray(ev.data.payloads) && ev.data.payloads.length>1) applyMultiSync(ev.data.payloads);
-        else applyHashSync(ev.data.payload || (Array.isArray(ev.data.payloads) ? ev.data.payloads[0] : null));
-      }catch(e){toast('검수 연동 형식 오류: '+e.message,true);}
-    };
-    window.addEventListener('message',receive);
-    source.postMessage({type:'unpa-console-ready',nonce:nonce},'https://cms.unpa.me');
-    setTimeout(function(){window.removeEventListener('message',receive);},120000);
-  }
+  /* 동기화 창(sync.html)이 검수 기록을 바꾸면 다시 읽는다 */
+  window.addEventListener('storage',function(e){ if(e.key===AKEY){ aLoad(); aRenderAll(); } });
 })();
 </script>
 </body>
