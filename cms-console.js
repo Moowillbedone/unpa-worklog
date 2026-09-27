@@ -310,7 +310,10 @@
                    '섀도우','쉐도우','아이섀도','아이쉐도','팔레트',
                    '블러셔','블러쉬','치크','하이라이터','쉐딩','셰딩','컨투어',
                    '쿠션','파운데이션','파데','컨실러','비비크림','씨씨크림','톤업',
-                   '아이라이너','마스카라','네일','매니큐어','틴트밤','립틴트','립스테인'];
+                   '아이라이너','마스카라','네일','매니큐어','틴트밤','립틴트','립스테인',
+                   /* 자동 승인 도입 뒤 빠지면 발색샷을 아무도 안 보게 되는 것들 (2026-09-27 보강) */
+                   '아이브로우','브로우','눈썹','셰이딩','브론저','헤어컬러','헤어 컬러','염색','새치',
+                   '파우더팩트','파우더 팩트','커버팩트','립오일','립 오일','컬러립','립앤치크','립 앤 치크'];
   /* 립밤·오일처럼 무색이 많은 품목은 색상명이 함께 있을 때만 색조로 본다 */
   var COLOR_KW  = ['핑크','레드','코랄','베이지','브라운','오렌지','퍼플','누드','로즈','피치',
                    '버건디','플럼','살구','자몽','체리','와인','모브','글리터','펄','실버','골드',
@@ -351,7 +354,25 @@
       var iu=String(detail[imgKey]||'');
       if(!iu || /\/?null\/?$/.test(iu)) why.push('제품 이미지 없음');
     }
+    /* 제품이 연결돼 있고 이미지도 뜨는데 가격만 비어 있으면(증정품·비매품 등) 엑박이 아니다.
+       엑박으로 보면 이미 제대로 고른 유저에게 "이 제품으로 다시 고르세요"가 나갈 수 있다. */
+    if(why.length===1 && why[0]==='productPrice 비어 있음' && pid && imgKey) return null;
     return why.length ? why : null;
+  }
+
+  /* ── 욕설·광고·연락처 ──────────────────────────────────
+     승인 그리드는 사진만 보여 주므로 본문의 욕설·광고는 원래도 사람 눈에 잘 안 띄었다.
+     자동 승인까지 생긴 지금은 여기서 걸러 사람이 본문을 읽고 정하게 한다.
+     정책(미노출 여부)은 사람이 정하도록 "확인"으로만 보낸다.
+     부정적인 평가("돈 아까워요")는 정상 리뷰이므로 걸지 않는다. */
+  /* 정상 낱말과 겹치는 것은 뺐다 — 시발점, 새끼발가락(풋크림 리뷰), "모공이 꺼져 보여요", 애비뉴 */
+  var PROFANITY_RE=/씨발|시발(?!점)|ㅅㅂ|ㅆㅂ|씨바|좆|존나|졸라|ㅈㄴ|개새끼|새끼(?!\s*(?:손가락|발가락))|병신|ㅄ|ㅂㅅ|지랄|닥쳐|엿\s*먹|느금|니미|미친놈|미친년|썅/;
+  var AD_RE=/https?:\/\/|www\.|bit\.ly|\.(?:com|co\.kr|kr|net|me|ly)\b|카톡|카카오톡|오픈\s*채팅|오픈톡|텔레그램|디엠\s*주|dm\s*주|문의\s*주세요|구매\s*링크|할인\s*코드|쿠폰\s*코드|0\d{1,2}[-\s.]?\d{3,4}[-\s.]?\d{4}|@[A-Za-z0-9_.]{3,}/i;
+  function badContent(text){
+    var t=String(text||'');
+    var m=t.match(PROFANITY_RE); if(m) return '욕설·비속어 («'+m[0]+'»)';
+    m=t.match(AD_RE);            if(m) return '광고·연락처·링크 («'+m[0].slice(0,20)+'»)';
+    return null;
   }
 
   /* ── 브랜드/제품 검색 ── */
@@ -566,6 +587,34 @@
     return hit/a.length;
   }
 
+  /* ── 제품 종류 ──────────────────────────────────────────
+     글자 유사도만 보면 "수딩 크림"과 "수딩 토너", "수분 크림"과 "수분 선크림"이 같은 제품으로 붙는다.
+     그대로 두면 크림 리뷰를 쓴 유저에게 "토너로 검색하세요"라는 틀린 안내가 나간다.
+     제품명 뒤쪽 낱말에서 종류를 읽어, 종류가 다르면 자동으로 보내지 않는다.
+     애매하면 다른 종류로 본다 — 틀린 자동 발송보다 사람 확인이 낫다. */
+  var KIND_WORDS = ['선크림','선세럼','선스틱','선밤','선쿠션','선로션','선젤','선스프레이',
+    '토너패드','클렌징폼','클렌징오일','클렌징워터','클렌징밤','클렌징젤','클렌징밀크','폼클렌저',
+    '아이크림','핸드크림','풋크림','바디크림','바디로션','바디워시','바디오일','바디미스트','바디스크럽',
+    '헤어오일','헤어에센스','헤어미스트','헤어팩','립밤','립오일','립틴트','립스틱','립글로스','립마스크',
+    '크림','토너','스킨','로션','세럼','앰플','에센스','패드','마스크','팩','클렌저','오일','미스트',
+    '밤','젤','샴푸','린스','트리트먼트','컨디셔너','틴트','쿠션','팩트','파운데이션','스크럽','워시',
+    '파우더','프라이머','컨실러','섀도우','블러셔','하이라이터','마스카라','아이라이너','향수','퍼퓸','치약'];
+  var KIND_SET={}; KIND_WORDS.forEach(function(k){ KIND_SET[k]=1; });
+  var KIND_BY_LEN=KIND_WORDS.slice().sort(function(a,b){ return b.length-a.length; });
+  function kindOf(name){
+    var t=tokensOf(name);
+    for(var i=t.length-1;i>=0;i--){
+      if(KIND_SET[t[i]]) return t[i];
+      for(var j=0;j<KIND_BY_LEN.length;j++){
+        var k=KIND_BY_LEN[j];
+        if(t[i].length>k.length && t[i].slice(-k.length)===k) return k;   /* "수분크림" → 크림 */
+      }
+    }
+    return null;
+  }
+  /* 두 이름 모두 종류가 읽히는데 서로 다르면 true */
+  function kindClash(a, b){ var x=kindOf(a), y=kindOf(b); return !!(x && y && x!==y); }
+
   function tokenCover(a, b){          /* a 의 단어가 b 에 얼마나 들어 있나 (0~1) */
     if(!a.length) return 0;
     var set={}; b.forEach(function(t){ set[t]=1; });
@@ -627,7 +676,8 @@
       var cT=tokensOf(p.name);
       return { p:p, cT:cT, uInC:tokenCover(uT,cT), cInU:tokenCover(cT,uT) };
     }).filter(function(x){
-      return uT.length>=2 && x.uInC>=0.999 && x.cT.length>=uT.length && x.cInU>=0.6;
+      return uT.length>=2 && x.uInC>=0.999 && x.cT.length>=uT.length && x.cInU>=0.6
+             && !kindClash(productName, x.p.name);
     }).sort(function(a,b){ return b.cInU-a.cInU; });
 
     if(subset.length===1 || (subset.length>1 && subset[0].cInU>subset[1].cInU)){
@@ -674,10 +724,11 @@
 
     /* 4) 글자 유사도 — 단어 순서·띄어쓰기가 달라도 같은 제품을 찾아낸다 */
     var DICE_MIN=0.72, COVER_MIN=0.7, MARGIN=0.08;
+    var clashed=[];
     var fuzzy=cand.map(function(p){
       var pn=nm(p.name);
       return { p:p, d:diceSim(target,pn), c:looseCover(uT, tokensOf(p.name)) };
-    }).filter(function(x){ return x.d>=DICE_MIN && x.c>=COVER_MIN; })
+    }).filter(function(x){ return x.d>=DICE_MIN && x.c>=COVER_MIN && !(kindClash(productName, x.p.name) && clashed.push(x)); })
       .sort(function(a,b){ return b.d-a.d; });
 
     if(fuzzy.length){
@@ -691,6 +742,14 @@
       }
       return { pick:top.p, confident:true,
                why:'단어 순서·띄어쓰기만 다름 (글자 유사도 '+top.d.toFixed(2)+')',
+               candidates:cand };
+    }
+
+    if(clashed.length){
+      clashed.sort(function(a,b){ return b.d-a.d; });
+      var cx=clashed[0];
+      return { pick:null, confident:false,
+               why:'이름이 비슷한 「'+cx.p.name+'」가 있지만 종류가 다름 ('+kindOf(productName)+' ≠ '+kindOf(cx.p.name)+') — 새 제품일 가능성, 등록 전 확인',
                candidates:cand };
     }
 
@@ -728,6 +787,8 @@
               approvable:false };   /* 그리드에서 승인/발색샷요청을 고를 수 있는 건인지 */
 
     /* 정지 사용자는 사진·제품을 볼 필요가 없다 — 먼저 가른다 */
+    if(!exWhy && 'productPrice' in detail && (detail.productPrice===null||detail.productPrice===''||detail.productPrice===0))
+      addWarn(out,'CMS 제품 가격 정보 없음');            /* 엑박은 아니지만 자동 승인에서는 뺀다 */
     out.suspension = suspensionOf(item, detail);
     if(out.suspension.blocked===true){
       out.action='hide'; out.exec=true;
@@ -753,6 +814,8 @@
     var gb=gibberish(content);
     if(gb){ out.action='hide'; out.exec=true; out.reasons.push('무의미한 본문 — '+gb); return out; }
     if(isSpam(content)){ out.action='hide'; out.exec=true; out.reasons.push('본문 도배'); return out; }
+    var bad=badContent(content);
+    if(bad){ out.action='hold'; out.reasons.push(bad+' → 본문을 읽고 판단'); return out; }
     var le=lowEffort(content);
     if(le){ out.action='hide'; out.exec=true; out.reasons.push('무성의한 리뷰 — '+le); return out; }
 
@@ -1332,7 +1395,11 @@
         log('&nbsp;&nbsp;<span style="color:#9fb4ab">이미 미노출 상태 — 완료로 처리</span>');
       }
       r.applied=ok;
-      logs.push({id:r.id,action:r.action,status:res.status,ok:ok,response:res.json||res.text});
+      /* 나중에 "무엇을 보고 무엇을 안내했는지" 검증할 수 있게 판단 근거를 함께 남긴다 */
+      logs.push({id:r.id,action:r.action,status:res.status,ok:ok,response:res.json||res.text,
+                 brand:r.brand||null, user_product:r.product||null,
+                 told:r.action==='revise_product'?(r.product_exact||null):null,
+                 conf:r.conf||null, sample:!!r.sample, why:(r.reasons||[]).slice(-2)});
       if(ok){
         sentMark(r);
         var hu=histUser(hist, r.user);

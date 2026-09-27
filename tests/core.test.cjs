@@ -10,7 +10,7 @@ function consoleRules(overrides={}){
   function XHR(){}XHR.prototype.open=function(){};XHR.prototype.setRequestHeader=function(){};
   const ctx={location:{hostname:'cms.unpa.me'},document:{getElementById:()=>null},window:{fetch:async()=>{throw Error('Unexpected network');}},XMLHttpRequest:XHR,alert:()=>{},AbortController,setTimeout,clearTimeout,URL,Set,...overrides};
   vm.createContext(ctx);
-  vm.runInContext(code+`;globalThis.rules={gibberish,notBeauty,reviewText,stripSize,tokensOf,photoVerdict,findProduct,findBrand,classify,exbakOf,esc,suspensionOf,residueOf,tokenCover,validDate,lowEffort,bareName,isSwatch,diceSim,looseCover};globalThis.mock=(name,fn)=>{if(name==='get')get=fn;if(name==='imgDims')imgDims=fn;if(name==='delay')delay=fn;};})();`,ctx);
+  vm.runInContext(code+`;globalThis.rules={gibberish,notBeauty,reviewText,stripSize,tokensOf,photoVerdict,findProduct,findBrand,classify,exbakOf,esc,suspensionOf,residueOf,tokenCover,validDate,lowEffort,bareName,isSwatch,diceSim,looseCover,kindOf,badContent};globalThis.mock=(name,fn)=>{if(name==='get')get=fn;if(name==='imgDims')imgDims=fn;if(name==='delay')delay=fn;};})();`,ctx);
   ctx.mock('delay',async()=>{});return ctx;
 }
 test('all distribution scripts parse',()=>{
@@ -166,4 +166,37 @@ test('character similarity separates same product from different product',()=>{
   assert.ok(r.diceSim(n('러브라이트하이드레이션바디로션'),n('너리싱오일케어샴푸'))<0.3);
   assert.ok(r.diceSim(n('쿠션'),n('에센셜스킨누더쿠션'))<0.5,'짧은 입력이 아무 데나 붙지 않는다');
   assert.equal(r.looseCover(['러브','바디'],['바디러브','로션']),1,'단어가 서로를 품으면 겹친 것으로 본다');
+});
+
+test('different product types are never auto-matched by similarity',async()=>{
+  for(const [user,cms] of [['레드 블레미쉬 클리어 수딩 크림','레드 블레미쉬 클리어 수딩 토너'],
+                           ['자작나무 수분 크림','자작나무 수분 선크림'],
+                           ['어성초 진정 수분 토너','어성초 진정 수분 토너 패드']]){
+    const c=consoleRules();
+    c.mock('get',async url=>url.includes('/products?')?{status:200,json:{total:1,results:[{id:1,name:cms}]}}:{status:404,json:null});
+    const p=await c.rules.findProduct(1,user);
+    assert.notEqual(p.confident,true,user+' → '+cms+' 로 자동 발송하면 안 된다');
+    assert.match(p.why,/종류가 다름/);
+  }
+  const {rules:r}=consoleRules();
+  assert.equal(r.kindOf('러브 라이트 하이드레이션 바디 로션'),r.kindOf('바디러브 로션 라이트 하이드레이션'),'도브는 같은 종류');
+});
+test('profanity, ads and contacts go to a person; ordinary negative or slang-free text does not',()=>{
+  const {rules:r}=consoleRules();
+  for(const x of ['존나 좋아요','씨발 최고','인스타 @beauty_shop','bit.ly/abc 구매','카톡 문의주세요','010-1234-5678','abc@gmail.com'])
+    assert.ok(r.badContent(x),x);
+  for(const x of ['이 제품 쓰레기임 돈아까움','피부 고민의 시발점','새끼발가락 각질 제거','모공이 꺼져 보여요','가성비 미친 제품','0.5톤 밝아짐','비타민 D3 1000 IU'])
+    assert.equal(r.badContent(x),null,x);
+});
+test('price-only gap with a visible product image is not treated as broken image',()=>{
+  const {rules:r}=consoleRules();
+  assert.equal(r.exbakOf({productId:5,productPrice:0,productImageUrl:'https://images.unpa.me/1'}),null);
+  assert.ok(r.exbakOf({productId:5,productPrice:null,productImageUrl:'https://images.unpa.me/null'}));
+  assert.ok(r.exbakOf({productId:null,productPrice:1000,productImageUrl:'https://images.unpa.me/1'}));
+});
+test('color products that used to slip through are now swatch products',()=>{
+  const {rules:r}=consoleRules();
+  for(const x of ['눈썹문신 워터프루프 아이브로우 회갈색','브로우 펜슬','헤어 컬러 크림','셰이딩 스틱','하이라이팅 파우더 팩트','컬러 립 오일'])
+    assert.ok(r.isSwatch(x),x);
+  assert.equal(r.isSwatch('수분 크림'),null);
 });
