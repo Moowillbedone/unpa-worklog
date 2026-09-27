@@ -227,3 +227,26 @@ test('essence/serum/ampoule differences go to the one-click button, not auto',as
   assert.equal(p.pick.name,'귤타민 비타토닝 세럼','버튼으로 보낼 후보는 잡는다');
   assert.match(p.why,/종류 표기만 다름/);
 });
+
+test('partial search failure never turns into "missing" or an automatic pick',async()=>{
+  /* 브랜드: 검색어 3개 중 일부만 성공 + 못 찾음 → 없음이 아니라 확인 불가, 캐시하지 않는다 */
+  let n=0;const c=consoleRules();
+  c.mock('get',async()=>{ n++; return n===1?{status:500,json:null}:{status:200,json:{total:0,results:[]}}; });
+  const b=await c.rules.findBrand('부분실패 브랜드');
+  assert.equal(b.lookupFailed,true,'일부 검색이 실패했으면 없다고 단정하지 않는다');
+  c.mock('get',async()=>({status:200,json:{total:1,results:[{id:3,name:'부분실패 브랜드',approved:true}]}}));
+  assert.equal((await c.rules.findBrand('부분실패 브랜드')).approvedBrand.id,3,'실패 결과는 캐시되지 않아 다시 찾는다');
+  /* 제품: 전체 이름 검색이 실패하고 낱말 검색만 성공 → 유사 후보를 자동 확정하지 않는다 */
+  const p=consoleRules(); let k=0;
+  p.mock('get',async()=>{ k++; return k===1?{status:500,json:null}:{status:200,json:{total:1,results:[{id:1,name:'바디러브 로션 라이트 하이드레이션'}]}}; });
+  const r=await p.rules.findProduct(1,'러브 라이트 하이드레이션 바디 로션');
+  assert.notEqual(r.confident,true); assert.match(r.why,/일부 검색 실패/);
+  const q=consoleRules(); let m=0;
+  q.mock('get',async()=>{ m++; return m===1?{status:500,json:null}:{status:200,json:{total:0,results:[]}}; });
+  const none=await q.rules.findProduct(1,'없는 제품 크림');
+  assert.equal(none.lookupFailed,true,'상품등록 필요로 보내 중복 등록하게 만들지 않는다');
+  const e=consoleRules(); let x=0;
+  e.mock('get',async()=>{ x++; return x===2?{status:500,json:null}:{status:200,json:{total:1,results:[{id:4,name:'수분 크림'}]}}; });
+  assert.equal((await e.rules.findProduct(1,'수분 크림')).confident,true,'정확히 일치하면 일부 실패여도 확정');
+  assert.equal((await consoleRules().rules.findProduct(1,'')).lookupFailed,true,'제품명이 없으면 확인으로');
+});

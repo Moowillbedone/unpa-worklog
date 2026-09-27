@@ -26,8 +26,8 @@
  *            이미 처리된 건은 다시 대상이 되지 않는다.
  *
  *  업무일지 연동
- *   - [검수기록 JSON] → 업무일지 [검수 기록] 탭에서 불러오기
- *   - [업무일지 반영] → 처리 건수를 해시로 넘겨 확인 카드 표시
+ *   - [업무일지·검수기록 한 번에 반영] → postMessage 로 날짜별 처리 ID 와 검수기록을 넘긴다
+ *   - [검수기록 JSON] → 업무일지 [검수 기록] 탭에서 불러오기 (팝업이 막힐 때)
  * ============================================================ */
 (function () {
   'use strict';
@@ -406,11 +406,10 @@
       }
       await delay(60);
     }
-    if(!okQueries){
-      var fail={ approvedBrand:null, tier:null, anyExact:false, unapproved:null,
-                 likely:[], lookupFailed:true };
-      brandCache[key]=fail; return fail;
-    }
+    /* 조회 실패는 캐시하지 않는다 — 한 번 끊긴 것 때문에 그 브랜드 리뷰가 스캔 내내 보류되던 문제 */
+    if(!okQueries)
+      return { approvedBrand:null, tier:null, anyExact:false, unapproved:null, likely:[], lookupFailed:true };
+    var partial = okQueries<queries.length;
 
     var uBare=bareName(raw), uTok=tokensOf(raw);
     function tierOf(b){
@@ -443,6 +442,9 @@
       ambiguous: approvedHits.length>1 && !best,
       lookupFailed:false
     };
+    /* 검색어 일부가 실패했는데 못 찾았으면 "없음"이 아니라 "확인 불가"다.
+       없음으로 보내면 사람이 이미 있는 브랜드를 중복 등록하게 된다. */
+    if(partial){ if(!best) res.lookupFailed=true; return res; }
     brandCache[key]=res; return res;
   }
   /* 검색어를 만든다. 후보를 못 찾으면 아무리 잘 맞춰도 소용이 없으므로
@@ -666,7 +668,21 @@
     return userNorm.split(cmsNorm).join('');
   }
 
+  /* 검색어 일부가 실패하면 후보가 빠져 있을 수 있다.
+     그 상태로 "비슷한 것 중 1등"을 확정하거나 "없음"이라 하면 틀릴 수 있으므로,
+     정확히 일치(또는 학습된 표기)가 아니면 사람에게 넘긴다. */
   async function findProduct(brandId, productName){
+    if(!String(productName||'').trim())
+      return { pick:null, confident:false, lookupFailed:true, why:'유저가 적은 제품명 없음 — 확인 필요', candidates:[] };
+    var meta={ failQ:0 };
+    var res=await findProductRaw(brandId, String(productName), meta);
+    if(meta.failQ && !res.lookupFailed && !res.learned && res.why!=='상품명 정확히 일치'){
+      if(res.confident){ res.confident=false; res.why+=' — 일부 검색 실패로 자동 확정 안 함'; }
+      else if(!res.pick){ res.lookupFailed=true; res.why+=' — 일부 검색 실패, 없음으로 단정하지 않음'; }
+    }
+    return res;
+  }
+  async function findProductRaw(brandId, productName, meta){
     /* 낱말 검색 앞에 이름 전체로도 한 번 찾아본다 — 검색이 구절을 지원할 수 있다 */
     var toks=tokenize(productName);
     var whole=stripSize(String(productName).replace(/\[[^\]]*\]/g,' ')).trim();
@@ -677,7 +693,7 @@
       var rows=listOf(r.json);
       if(r.status===200 && rows){ okQueries++;
         rows.forEach(function(p){ if(p&&p.id!=null&&!seen[p.id]){seen[p.id]=1;cand.push({id:p.id,name:p.name||p.productName||''});} });
-      }
+      } else if(meta) meta.failQ++;
       await delay(80);
     }
     /* 조회가 하나도 성공하지 못했으면 "제품 없음"이 아니라 "확인 불가"다 */
@@ -1167,6 +1183,13 @@
     }
     BACKLOG=backlog;
     var total=0, upd=0; backlog.forEach(function(b){ total+=b.rows.length; upd+=b.updated; });
+    var warns='';
+    if(backlog.failed && backlog.failed.length)
+      warns+='<div style="margin-top:8px;font-size:11.5px;color:#ff8f6b">⚠ 조회 실패 '+backlog.failed.length+'일 ('
+        +backlog.failed.slice(0,6).map(function(d){ return d.slice(5); }).join(', ')+(backlog.failed.length>6?' …':'')
+        +') — 이 날짜는 목록에 없습니다. 잠시 뒤 콘솔을 다시 열어 주세요.</div>';
+    if(!tplMap.product_match || !tplMap.swatch)
+      warns+='<div style="margin-top:8px;font-size:11.5px;color:#ff8f6b">⚠ 수정요청 안내 문구를 불러오지 못했습니다 — 제품 재선택·발색샷 요청은 보낼 수 없습니다. 새로고침 후 다시 실행해 주세요.</div>';
     var list = backlog.length
       ? backlog.slice(0,14).map(function(b){
           return '<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed #1a2b23">'
@@ -1176,7 +1199,7 @@
       : '<div style="color:#3ddc97">짝수일에 남은 일이 없습니다 🎉</div>';
     box.innerHTML=head(
       '<div style="margin-top:9px;color:#9fb4ab">📋 남은 일 · 짝수일 최근 '+BACKLOG_DAYS+'일</div>'
-      +'<div style="margin-top:6px;font-size:12px;color:#9fb4ab">'+list+'</div>'
+      +'<div style="margin-top:6px;font-size:12px;color:#9fb4ab">'+list+'</div>'+warns
       +(backlog.length?'<button id="csScanAll" style="margin-top:11px;width:100%;background:#3ddc97;color:#04130c;border:0;border-radius:9px;padding:10px;font-weight:800;cursor:pointer">'
         +'▶ 남은 것 전부 스캔 ('+backlog.length+'일 · '+total+'건'+(upd?' · 수정완료 '+upd:'')+')</button>':'')
       +manual);
@@ -1197,17 +1220,20 @@
     }
     return out;
   }
-  var BACKLOG_DAYS=60, SCAN_LABEL='', BACKLOG=null;
+  var BACKLOG_DAYS=60, SCAN_LABEL='', BACKLOG=null, SCAN_ABORT=null;
 
   /* 한 날짜의 "검수 필요" 목록 전부 (수정완료 UPDATED 도 여기 섞여 있다) */
   async function listAll(sd, onPage){
-    var page=1, all=[], total=0;
+    var page=1, all=[], total=0, seen={};
     while(page<=30){
       var r=await get(listUrl(sd,page,100)); var rows=listOf(r.json);
+      if(r.status!==200 || !rows){ await delay(800); r=await get(listUrl(sd,page,100)); rows=listOf(r.json); }   /* 한 번만 더 */
       if(r.status!==200 || !rows) return null;
-      total=totalOf(r.json)||total; all=all.concat(rows);
+      total=totalOf(r.json)||total;
+      /* 오늘 날짜는 넘기는 사이에 새 리뷰가 들어와 앞 페이지 것이 밀려 온다 — 같은 리뷰를 두 번 넣지 않는다 */
+      rows.forEach(function(x){ if(x && x.id!=null && !seen[x.id]){ seen[x.id]=1; all.push(x); } });
       if(onPage) onPage(all.length);
-      if(rows.length<100 || all.length>=total) break; page++;
+      if(rows.length<100 || (total>0 && all.length>=total)) break; page++;
     }
     return all;
   }
@@ -1224,16 +1250,29 @@
     });
   }
   async function loadBacklog(){
-    var dates=evenDates(BACKLOG_DAYS), sent=sentLoad(), out=[];
-    for(var i=0;i<dates.length;i++){
-      box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">남은 일 확인 중… <b>'+(i+1)+' / '+dates.length+'</b> ('+dates[i]+')<br>'
+    var dates=evenDates(BACKLOG_DAYS), sent=sentLoad(), res=new Array(dates.length), next=0, doneN=0;
+    var paint=function(){
+      box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">남은 일 확인 중… <b>'+doneN+' / '+dates.length+'</b>일<br>'
         +'<span style="font-size:11px">짝수일 최근 '+BACKLOG_DAYS+'일 · 조회만 합니다</span></div>');
-      var rows=await listAll(dates[i]);
-      if(rows===null) return null;
-      var todo=backlogTodo(rows, sent);
-      if(todo.length) out.push({ date:dates[i], rows:todo, updated:todo.filter(function(x){ return x.status==='UPDATED'; }).length });
-      await delay(40);
+    };
+    paint();
+    async function worker(){
+      while(next<dates.length){
+        var i=next++, rows=await listAll(dates[i]);
+        if(rows===null) res[i]={ date:dates[i], failed:true, rows:[], updated:0 };
+        else {
+          var todo=backlogTodo(rows, sent);
+          res[i]={ date:dates[i], rows:todo, updated:todo.filter(function(x){ return x.status==='UPDATED'; }).length };
+        }
+        doneN++; paint();
+        await delay(40);
+      }
     }
+    await Promise.all([worker(), worker(), worker()]);
+    var failed=res.filter(function(x){ return x.failed; }).map(function(x){ return x.date; });
+    if(failed.length===dates.length) return null;          /* 전부 실패 = 로그인·권한 문제 */
+    var out=res.filter(function(x){ return !x.failed && x.rows.length; });
+    out.failed=failed;                                     /* 일부만 실패한 날짜는 따로 알린다 */
     return out;
   }
 
@@ -1257,7 +1296,8 @@
   }
 
   async function scanRows(pending){
-    results=[];
+    results=[]; SCAN_ABORT=null;
+    var fails=0;
     for(var i=0;i<pending.length;i++){
       box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">판정 중… <b>'+(i+1)+' / '+pending.length+'</b><br>'
         +esc(pending[i].brandName||'')+' — '+esc(pending[i].productName||'')+'</div>');
@@ -1269,7 +1309,9 @@
             user:pending[i].userNickname, action:'hold', exec:false, approvable:false,
             reasons:['리뷰 상세 조회 실패 (HTTP '+dr.status+') — 판정 보류'],
             attachments:[], photo:{v:'none',label:'조회 실패'}, photoCls:[] };
+        fails++;
       } else {
+        fails=0;
         try {
           c=await classify(pending[i], dr.json);
         } catch(e){
@@ -1280,16 +1322,34 @@
               photo:{v:'none',label:'오류'}, photoCls:[] };
         }
       }
-      if(c.action==='hide' && pending[i].visible===false && !c.applied){
+      /* 목록을 받은 뒤 시간이 지났을 수 있다 — 상태·노출은 방금 받은 상세를 따른다 */
+      var dj=(dr.status===200 && dr.json && typeof dr.json==='object') ? dr.json : {};
+      var vis = typeof dj.visible==='boolean' ? dj.visible : pending[i].visible;
+      if(c.action==='hide' && vis===false && !c.applied){
         c.applied=true; c.exec=false;
         c.reasons.push('이미 미노출 상태 — 보내지 않음');
+      } else if(vis===false && !c.applied){
+        /* 누가 이미 미노출한 리뷰를 승인·수정요청하지 않는다 */
+        c.action='hold'; c.exec=false; c.approvable=false;
+        c.reasons.push('이미 미노출된 리뷰 — 승인·수정요청 대상에서 제외');
       }
       c.date = pending[i]._date || SCAN_DATE;
-      c.reviewStatus = pending[i].status || null;
+      c.reviewStatus = dj.status || pending[i].status || null;
       if(c.reviewStatus==='UPDATED'){
         c.reasons.unshift(c.exbak ? '✏️ 유저가 수정완료했지만 제품이 아직 연결 안 됨' : '✏️ 유저 수정완료');
       }
-      results.push(sentApply(c));
+      c=sentApply(c);
+      /* 콘솔 밖(CMS 화면)에서 이미 처리된 리뷰 — 다시 보내면 에러로 배치가 멈춘다 */
+      if(!c.applied && (c.reviewStatus==='APPROVED' || c.reviewStatus==='REVISED')){
+        c.action='hold'; c.exec=false; c.approvable=false;
+        c.reasons.unshift('CMS에서 이미 '+(c.reviewStatus==='APPROVED'?'검수완료':'수정요청')+'된 리뷰 — 보내지 않음');
+      }
+      results.push(c);
+      if(fails>=5){
+        SCAN_ABORT='리뷰 상세 조회가 연속 '+fails+'번 실패해 '+(i+1)+' / '+pending.length+'건에서 멈췄습니다. '
+          +'CMS 로그인 상태를 확인하고 [다시]를 눌러 주세요. 못 본 건은 남은 일 목록에 그대로 남습니다.';
+        break;
+      }
       await delay(60);
     }
     postScan();
@@ -1297,13 +1357,15 @@
   }
 
   function renderQueue(sd){
+    sd = SCAN_LABEL || sd;          /* 실행·체크 뒤 다시 그려도 "09-20 ~ 09-26 (3일)" 표시를 유지한다 */
     var done=doneLoad();
     var multiDay=scanDates().length>1;
     var groups={revise:[],hide:[],register:[],hold:[]};
     results.forEach(function(r){ (groups[r.action]||(groups[r.action]=[])).push(r); });
     var order=['revise_product','hide','register_product','register_brand','hold','revise_swatch','approve'];
 
-    var html='<div style="margin-top:8px;color:#9fb4ab">'+esc(sd)+' · 총 <b style="color:#fff">'+results.length+'</b>건 판정 완료</div>';
+    var html='<div style="margin-top:8px;color:#9fb4ab">'+esc(sd)+' · 총 <b style="color:#fff">'+results.length+'</b>건 판정 완료</div>'
+      +(SCAN_ABORT?'<div style="margin-top:6px;font-size:11.5px;color:#ff8f6b">⚠ '+esc(SCAN_ABORT)+'</div>':'');
     html+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">';
     order.forEach(function(k){ if(!groups[k]||!groups[k].length) return;
       var nDone = MANUAL_TODO[k] ? groups[k].filter(function(r){ return done[String(r.id)]; }).length : 0;
@@ -1391,7 +1453,8 @@
       +'<button id="csRun" style="flex:2;background:'+(nExec?'#3ddc97':'#22392e')+';color:'+(nExec?'#04130c':'#6b7f77')+';border:0;border-radius:8px;padding:9px;font-weight:800;cursor:'+(nExec?'pointer':'default')+'">체크한 것 실행 ('+nExec+')</button>'
       +'</div>'
       +'<div id="csLog" style="margin-top:10px;font-size:11.5px;color:#9fb4ab"></div>'
-      +'<div style="margin-top:7px;font-size:10.5px;color:#6b7f77">상한 — 미노출 '+CAP.hide+' · 제품재선택 '+CAP.revise_product+' · 발색샷 '+CAP.revise_swatch+' · 검수완료 '+CAP.approve+'. 에러 시 즉시 중단.</div>';
+      +'<div style="margin-top:7px;font-size:10.5px;color:#6b7f77">상한 — 미노출 '+capOf('hide')+' · 제품재선택 '+capOf('revise_product')+' · 발색샷 '+capOf('revise_swatch')+' · 검수완료 '+capOf('approve')
+      +(scanDates().length>1?' (하루 상한 × '+scanDates().length+'일)':'')+'. 에러 시 즉시 중단.</div>';
 
     box.innerHTML=head(html);
     /* 링크는 label 안에 있어 클릭이 체크박스까지 토글한다 — 막는다 */
@@ -1424,8 +1487,10 @@
         ev.stopPropagation(); ev.preventDefault();
         var r=results.filter(function(x){ return String(x.id)===String(b.dataset.id); })[0];
         if(!r || !r.product_exact) return;
+        var prev=r.action;
         r.action='revise_product';
-        runJobs([r]);
+        /* 취소·실패하면 원래 자리로 — 안 돌리면 확인 건이 "체크한 것 실행"에 체크된 채 섞인다 */
+        runJobs([r]).then(function(){ if(!r.applied){ r.action=prev; renderQueue(SCAN_DATE); } });
       };
     });
     document.getElementById('csRescan').onclick=function(){ renderStart(String(SCAN_DATE||'').slice(0,10)); };
@@ -1447,16 +1512,41 @@
      두 번 나가지 않게 하는 것이 목적이다. */
   var SENT_KEY='unpa-console-sent-v1';
   function sentLoad(){ try{ return JSON.parse(localStorage.getItem(SENT_KEY)||'{}'); }catch(e){ return {}; } }
+  var SENT_KEEP_DAYS=150;
+  function isRevise(a){ return a==='revise_product' || a==='revise_swatch'; }
+  /* 같은 리뷰에 수정요청을 몇 번 보냈나 (예전 기록엔 횟수가 없어 1로 본다) */
+  function reviseCount(e){ return e ? (e.rn || (isRevise(e.action)?1:0)) : 0; }
+  /* 수정완료 후 다시 보내는 것은 허용하되, 같은 수정요청은 2번까지만 — 무한 반복을 막는다 */
+  function canSend(r, e){
+    if(!e) return true;
+    if(!r._allowResend) return false;
+    return !(isRevise(r.action) && reviseCount(e)>=2);
+  }
   function sentMark(r){
-    try{ var m=sentLoad();
-      m[String(r.id)]={ action:r.action, at:new Date().toISOString(), date:r.date||SCAN_DATE };
+    try{ var m=sentLoad(), id=String(r.id), prev=m[id];
+      m[id]={ action:r.action, at:new Date().toISOString(), date:r.date||SCAN_DATE,
+              rn:reviseCount(prev)+(isRevise(r.action)?1:0) };
+      /* 브라우저 저장공간(약 5MB)이 차면 기록이 조용히 멈춰 중복 발송이 가능해진다.
+         남은 일 목록(60일)보다 훨씬 오래된 기록부터 버린다. */
+      var keys=Object.keys(m);
+      if(keys.length>5000){
+        var cut=new Date(Date.now()-SENT_KEEP_DAYS*864e5).toISOString();
+        keys.forEach(function(k){ if(String(m[k].at||'')<cut) delete m[k]; });
+      }
       localStorage.setItem(SENT_KEY, JSON.stringify(m));
-    }catch(e){}
+      return true;
+    }catch(e){ return false; }
   }
   function sentApply(r){
     var m=sentLoad(), e=m[String(r.id)];
     if(!e) return r;
-    if(r.reviewStatus==='UPDATED' && (e.action==='revise_product' || e.action==='revise_swatch')){
+    if(r.reviewStatus==='UPDATED' && isRevise(e.action)){
+      var rn=reviseCount(e);
+      if(isRevise(r.action) && rn>=2){
+        r.action='hold'; r.exec=false; r.approvable=false;
+        r.reasons=(r.reasons||[]).concat(['수정요청을 이미 '+rn+'번 보냈는데 아직 그대로 — 같은 요청을 반복하지 않고 직접 확인']);
+        return r;
+      }
       r._allowResend=true;           /* 유저가 응답했으니 새 차례다 — 이전 전송 기록으로 막지 않는다 */
       r.reasons=(r.reasons||[]).concat(['이전 요청('+String(e.at).slice(5,10)+') 후 유저 수정완료 — 다시 판정']);
       return r;
@@ -1499,6 +1589,9 @@
      상한은 액션별로 다르다 — 되돌리기 어려운 미노출은 좁게,
      되돌리기 쉬운 승인은 넓게. */
   var CAP={ hide:30, revise_product:60, revise_swatch:120, approve:300 };
+  /* 상한은 하루 기준 — 남은 짝수일을 여러 날 한꺼번에 스캔했으면 날짜 수만큼 늘린다.
+     안 그러면 3일치 승인 400건이 상한 300에 막혀 아예 실행할 수 없다. */
+  function capOf(k){ return (CAP[k]||0)*Math.max(1, scanDates().length); }
 
   function buildReq(r){
     if(r.action==='revise_product'){                 /* 제품 재선택 요청 — 정확한 상품명을 넣어 보낸다 */
@@ -1520,12 +1613,19 @@
     if(!jobs.length){ alert('실행할 대상이 없습니다.'); return; }
 
     var already=sentLoad();
-    jobs=jobs.filter(function(r){ return !already[String(r.id)] || r._allowResend; });   /* 이미 보낸 건은 빼고 보낸다 */
+    jobs=jobs.filter(function(r){ return canSend(r, already[String(r.id)]); });   /* 이미 보낸 건은 빼고 보낸다 */
     if(!jobs.length){ alert('선택한 건은 모두 이미 처리되었습니다.'); return; }
+    /* 안내 문구를 못 불러왔으면 수정요청은 만들 수 없다 — 실행 도중이 아니라 지금 알린다 */
+    var noReq=jobs.filter(function(r){ return !buildReq(r); });
+    if(noReq.length){
+      if(!confirm(noReq.length+'건은 안내 문구(템플릿)가 없어 보낼 수 없습니다.\n나머지 '+(jobs.length-noReq.length)+'건만 진행할까요?')) return;
+      jobs=jobs.filter(function(r){ return !!buildReq(r); });
+      if(!jobs.length) return;
+    }
     var byAct={}; jobs.forEach(function(r){ byAct[r.action]=(byAct[r.action]||0)+1; });
-    var over=Object.keys(byAct).filter(function(k){ return byAct[k] > (CAP[k]||0); });
+    var over=Object.keys(byAct).filter(function(k){ return byAct[k] > capOf(k); });
     if(over.length){
-      alert(over.map(function(k){ return ACT[k].t+' '+byAct[k]+'건 (상한 '+(CAP[k]||0)+')'; }).join('\n')
+      alert(over.map(function(k){ return ACT[k].t+' '+byAct[k]+'건 (상한 '+capOf(k)+')'; }).join('\n')
             + '\n\n상한을 초과해 실행을 거부합니다.');
       return;
     }
@@ -1535,50 +1635,54 @@
     window.__CONSOLE_RUNNING=true;
     var run=document.getElementById('csRun'); if(run){ run.disabled=true; run.textContent='실행 중…'; }
     var logs=[], hist=histLoad();
-    for(var i=0;i<jobs.length;i++){
-      var r=jobs[i], req=buildReq(r);
-      if(!req){ log('&nbsp;&nbsp;<span style="color:#ff8f6b">✗ #'+r.id+' 요청 생성 실패 — 건너뜀</span>'); continue; }
-      log('▶ #'+r.id+' '+ACT[r.action].t+' <span style="color:#6b7f77">('+(i+1)+'/'+jobs.length+')</span>');
-      var res=await send(req.method,req.url,req.body);
-      var ok=(res.status>=200&&res.status<300);
-      /* 이미 미노출인 리뷰에 미노출을 보내면 400 "노출 상태가 같습니다" 가 온다.
-         원하는 상태는 이미 이뤄졌으므로 성공으로 보고 다음 건으로 넘어간다.
-         (실측 실패 4건이 전부 이것이었고, 그때마다 배치 전체가 멈췄다) */
-      if(!ok && r.action==='hide' && res.status===400 && /노출 상태가 같/.test(res.text||'')){
-        ok=true; res.status=200;
-        log('&nbsp;&nbsp;<span style="color:#9fb4ab">이미 미노출 상태 — 완료로 처리</span>');
-      }
-      r.applied=ok;
-      /* 나중에 "무엇을 보고 무엇을 안내했는지" 검증할 수 있게 판단 근거를 함께 남긴다 */
-      logs.push({id:r.id,action:r.action,status:res.status,ok:ok,response:res.json||res.text,
-                 brand:r.brand||null, user_product:r.product||null,
-                 told:r.action==='revise_product'?(r.product_exact||null):null,
-                 conf:r.conf||null, sample:!!r.sample, why:(r.reasons||[]).slice(-2)});
-      if(ok){
-        sentMark(r); r._allowResend=false;
-        var hu=histUser(hist, r.user);
-        if(r.action==='approve') hu.approve++;
-        else if(r.action==='hide') hu.hide++;
-        else if(r.action==='revise_product' || r.action==='revise_swatch') hu.revise++;
-        /* 제품 재선택을 보냈으면 그 표기를 기억한다 — 같은 표기가 또 오면 자동 */
-        if(r.action==='revise_product' && r.product_id && r.brand_match && r.brand_match.id){
-          var ak=aliasKey(r.brand_match.id, r.product), prev=hist.alias[ak];
-          hist.alias[ak]={ pid:r.product_id, name:r.product_exact, n:(prev&&String(prev.pid)===String(r.product_id)?(prev.n||1)+1:1), t:new Date().toISOString() };
+    try {
+      for(var i=0;i<jobs.length;i++){
+        var r=jobs[i], req=buildReq(r);
+        if(!req){ log('&nbsp;&nbsp;<span style="color:#ff8f6b">✗ #'+r.id+' 요청 생성 실패 — 건너뜀</span>'); continue; }
+        log('▶ #'+r.id+' '+ACT[r.action].t+' <span style="color:#6b7f77">('+(i+1)+'/'+jobs.length+')</span>');
+        var res=await send(req.method,req.url,req.body);
+        var ok=(res.status>=200&&res.status<300);
+        /* 이미 미노출인 리뷰에 미노출을 보내면 400 "노출 상태가 같습니다" 가 온다.
+           원하는 상태는 이미 이뤄졌으므로 성공으로 보고 다음 건으로 넘어간다.
+           (실측 실패 4건이 전부 이것이었고, 그때마다 배치 전체가 멈췄다) */
+        if(!ok && r.action==='hide' && res.status===400 && /노출 상태가 같/.test(res.text||'')){
+          ok=true; res.status=200;
+          log('&nbsp;&nbsp;<span style="color:#9fb4ab">이미 미노출 상태 — 완료로 처리</span>');
         }
-        log('&nbsp;&nbsp;<span style="color:#3ddc97">✓ '+res.status+'</span>');
+        r.applied=ok;
+        /* 나중에 "무엇을 보고 무엇을 안내했는지" 검증할 수 있게 판단 근거를 함께 남긴다 */
+        logs.push({id:r.id,action:r.action,status:res.status,ok:ok,response:res.json||res.text,
+                   brand:r.brand||null, user_product:r.product||null,
+                   told:r.action==='revise_product'?(r.product_exact||null):null,
+                   conf:r.conf||null, sample:!!r.sample, why:(r.reasons||[]).slice(-2)});
+        if(ok){
+          if(!sentMark(r)) log('&nbsp;&nbsp;<span style="color:#ff8f6b">⚠ 전송 기록 저장 실패 — 브라우저 저장공간을 확인하세요 (재스캔 때 다시 보낼 수 있음)</span>');
+          r._allowResend=false;
+          var hu=histUser(hist, r.user);
+          if(r.action==='approve') hu.approve++;
+          else if(r.action==='hide') hu.hide++;
+          else if(r.action==='revise_product' || r.action==='revise_swatch') hu.revise++;
+          /* 제품 재선택을 보냈으면 그 표기를 기억한다 — 같은 표기가 또 오면 자동 */
+          if(r.action==='revise_product' && r.product_id && r.brand_match && r.brand_match.id){
+            var ak=aliasKey(r.brand_match.id, r.product), prev=hist.alias[ak];
+            hist.alias[ak]={ pid:r.product_id, name:r.product_exact, n:(prev&&String(prev.pid)===String(r.product_id)?(prev.n||1)+1:1), t:new Date().toISOString() };
+          }
+          log('&nbsp;&nbsp;<span style="color:#3ddc97">✓ '+res.status+'</span>');
+        }
+        else {
+          log('&nbsp;&nbsp;<span style="color:#ff8f6b">✗ '+res.status+' — 중단</span>');
+          log('&nbsp;&nbsp;<span style="font-size:11px">'+esc((res.text||'').slice(0,140))+'</span>');
+          break;
+        }
+        await delay(300);
       }
-      else {
-        log('&nbsp;&nbsp;<span style="color:#ff8f6b">✗ '+res.status+' — 중단</span>');
-        log('&nbsp;&nbsp;<span style="font-size:11px">'+esc((res.text||'').slice(0,140))+'</span>');
-        break;
-      }
-      await delay(300);
+      histSave(hist);
+      dl({at:new Date().toISOString(),date:SCAN_DATE,logs:logs},'cms-console-log-'+Date.now()+'.json');
+      var okN=logs.filter(function(x){return x.ok;}).length;
+      log('<b style="color:'+(okN===logs.length?'#3ddc97':'#ff8f6b')+'">완료 '+okN+'/'+logs.length+' · 로그 저장</b>');
+    } finally {
+      window.__CONSOLE_RUNNING=false;     /* 도중에 예외가 나도 콘솔이 "이미 실행 중"으로 잠기지 않게 */
     }
-    histSave(hist);
-    dl({at:new Date().toISOString(),date:SCAN_DATE,logs:logs},'cms-console-log-'+Date.now()+'.json');
-    var okN=logs.filter(function(x){return x.ok;}).length;
-    log('<b style="color:'+(okN===logs.length?'#3ddc97':'#ff8f6b')+'">완료 '+okN+'/'+logs.length+' · 로그 저장</b>');
-    window.__CONSOLE_RUNNING=false;
     renderQueue(SCAN_DATE);
     offerWorklog();
   }
@@ -1646,7 +1750,6 @@
   }
 
   function sendToWorklog(){
-    var done=results.filter(function(r){ return r.applied; });
     var nonce;
     try{ nonce=Array.prototype.map.call(crypto.getRandomValues(new Uint8Array(12)),function(x){ return (x<16?'0':'')+x.toString(16); }).join(''); }
     catch(e){ nonce=String(Date.now())+String(Math.random()).slice(2,10); }
@@ -1698,7 +1801,9 @@
     pool.sort(function(a,b){ return rank(a)-rank(b); });
 
     var st={}, node={};
-    pool.forEach(function(r){ st[r.id]='approve'; });   /* 기본은 검수완료 */
+    /* 기본은 검수완료. 전에 건너뛰기·발색샷으로 바꾼 카드는 그대로 둔다 —
+       그리드를 닫았다 다시 열면 건너뛴 카드가 검수완료로 돌아가 승인되던 문제 */
+    pool.forEach(function(r){ st[r.id]=r._gridSt||'approve'; });
 
     var ov=document.createElement('div'); ov.id='csGrid';
     ov.style.cssText='position:fixed;inset:0;z-index:2147483646;background:#0a1310;color:#e8f1ed;'
@@ -1738,6 +1843,7 @@
     function paint(r){
       var el=node[r.id]; if(!el) return;
       var v=st[r.id];
+      r._gridSt=v;
       var col = v==='approve' ? '#3ddc97' : v==='swatch' ? '#f0a35e' : '#22392e';
       el.style.borderColor=col;
       el.style.opacity = v==='skip' ? '.4' : '1';
@@ -1840,7 +1946,7 @@
   }
 
   /* ── 시작 ── */
-  var qs=new URLSearchParams(location.search); var sd=qs.get('startDate')||new Date().toISOString().slice(0,10);
+  var qs=new URLSearchParams(location.search); var sd=qs.get('startDate')||ymd(new Date());
   box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">템플릿 불러오는 중…</div>');
   oF.call(window,TPL_URL+'?t='+Date.now()).then(function(r){return r.json();}).then(function(d){
     (d.templates||[]).forEach(function(t){tplMap[t.key]=t;}); renderStart(sd);

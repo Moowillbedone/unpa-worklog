@@ -40,6 +40,8 @@ function harness(){
     `globalThis.api={buildReq,runJobs,sentLoad,doneLoad,doneToggle,auditPayload,CAP,
                      postScan,gridJobs,confidenceOf,histLoad,histSave,recheckRegistered,findProduct,aliasKey,
                      evenDates,backlogTodo,sentApply,worklogPayloads,auditDays,scanDates,
+                     listAll,loadBacklog,scanRows,capOf,canSend,sentMark,
+                     getAbort:()=>SCAN_ABORT,
                      setResults:r=>{results=r;},
                      setDate:d=>{SCAN_DATE=d;},setTpl:t=>{tplMap=t;},getResults:()=>results};
      /* ── 시작 ── */`), ctx);
@@ -292,4 +294,107 @@ test('worklog and audit are split by review date',()=>{
   assert.equal(Object.keys(a.days).join(','),'2026-09-18,2026-09-20,2026-09-22');
   assert.equal(a.days['2026-09-22'].items.length,2);
   assert.equal(a.days['2026-09-20'].date,'2026-09-20');
+});
+
+/* ── 전체 검수 리뷰 (2026-09-27) ─────────────────────────── */
+test('several days at once raise the cap by the number of days',async()=>{
+  const {api,sent,ctx}=harness(); api.setTpl(TPL);
+  const hides=Array.from({length:api.CAP.hide+5},(_,i)=>({id:2000+i,action:'hide',reasons:[],date:i%2?'2026-09-24':'2026-09-26'}));
+  api.setResults(hides);
+  assert.equal(api.capOf('hide'),api.CAP.hide*2);
+  await api.runJobs(hides);
+  assert.equal(sent.filter(x=>x.method==='PUT').length,hides.length,'2일치면 하루 상한의 두 배까지 나간다');
+  const {api:one,sent:s1}=harness(); one.setTpl(TPL);
+  const single=hides.map(h=>Object.assign({},h,{date:'2026-09-26'}));
+  one.setResults(single); await one.runJobs(single);
+  assert.equal(s1.length,0,'하루치는 기존 상한 그대로');
+});
+
+test('the same re-select request is not repeated a third time',()=>{
+  const {api,store}=harness(); api.setDate('2026-09-20');
+  const r={id:77,action:'revise_product',reasons:[],date:'2026-09-20'};
+  api.sentMark(r); api.sentMark(r);
+  const j=JSON.parse(store['unpa-console-sent-v1']);
+  assert.equal(j['77'].rn,2,'수정요청 횟수를 센다');
+  const again={id:77,action:'revise_product',reasons:[],reviewStatus:'UPDATED',exec:true};
+  api.sentApply(again);
+  assert.equal(again.action,'hold','두 번 보냈는데도 그대로면 사람에게');
+  assert.match(again.reasons.join(' '),/2번/);
+  const fixed={id:77,action:'approve',approvable:true,reasons:[],reviewStatus:'UPDATED'};
+  api.sentApply(fixed);
+  assert.equal(fixed.action,'approve','고쳤으면 승인은 된다');
+  assert.equal(api.canSend(fixed,j['77']),true);
+  assert.equal(api.canSend({action:'revise_swatch',_allowResend:true},j['77']),false,'그리드에서 골라도 세 번째 수정요청은 막는다');
+  assert.equal(api.canSend({action:'revise_product',_allowResend:true},{action:'revise_product'}),true,'예전 기록(횟수 없음)은 1번으로 본다');
+});
+
+test('old journal entries are pruned so storage never silently fills up',()=>{
+  const {api,store}=harness();
+  const old=new Date(Date.now()-400*864e5).toISOString(), m={};
+  for(let i=0;i<5200;i++) m[String(i)]={action:'approve',at:i<300?new Date().toISOString():old,date:'2025-08-01'};
+  store['unpa-console-sent-v1']=JSON.stringify(m);
+  assert.equal(api.sentMark({id:99999,action:'approve',date:'2026-09-26'}),true);
+  const j=JSON.parse(store['unpa-console-sent-v1']);
+  assert.equal(Object.keys(j).length,301,'오래된 기록만 버리고 최근 것과 방금 것은 남긴다');
+  assert.ok(j['99999'] && j['0']);
+});
+
+test('list paging retries once and never counts a review twice',async()=>{
+  const {api,ctx}=harness();
+  let calls=0;
+  const page=(from,n)=>Array.from({length:n},(_,i)=>({id:from+i,status:'PENDING',visible:true}));
+  ctx.__route=(url)=>{
+    if(!url.includes('/admin/reviews?')) return {status:404,body:{}};
+    calls++;
+    if(calls===1) return {status:502,body:{}};                            /* 첫 호출은 일시 오류 */
+    if(url.includes('page=1&')) return {status:200,body:{total:150,results:page(1,100)}};
+    return {status:200,body:{total:150,results:page(96,55)}};             /* 새 리뷰 유입으로 5건 겹침 */
+  };
+  const rows=await api.listAll('2026-09-26');
+  assert.equal(rows.length,150,'겹친 5건은 한 번만');
+  assert.equal(new Set(rows.map(r=>r.id)).size,150);
+  let n=0; ctx.__route=(url)=>{                                           /* total 을 안 주는 응답 */ n++; return n===1?{status:200,body:{results:page(1,100)}}:{status:200,body:{results:page(101,3)}}; };
+  assert.equal((await api.listAll('2026-09-24')).length,103,'total 이 없어도 첫 페이지에서 멈추지 않는다');
+});
+
+test('one failing date does not hide the rest of the backlog',async()=>{
+  const {api,ctx}=harness();
+  ctx.__route=(url)=>{
+    if(url.includes('startDate=2026-09-24')) return {status:500,body:{}};
+    if(url.includes('startDate=2026-09-26')) return {status:200,body:{total:2,results:[{id:1,status:'PENDING',visible:true},{id:2,status:'UPDATED',visible:true}]}};
+    return {status:200,body:{total:0,results:[]}};
+  };
+  const b=await api.loadBacklog();
+  assert.equal(b.map(x=>x.date).join(','),'2026-09-26');
+  assert.equal(b[0].updated,1);
+  assert.deepEqual([...b.failed],['2026-09-24'],'실패한 날짜는 따로 알린다');
+  ctx.__route=()=>({status:401,body:{}});
+  assert.equal(await api.loadBacklog(),null,'전부 실패면 로그인 문제로 본다');
+});
+
+test('scan follows the fresh detail: already handled or hidden reviews are not sent',async()=>{
+  const {api,ctx}=harness(); api.setDate('2026-09-26');
+  const base={contentText:'촉촉하고 흡수가 빨라서 아침에 쓰기 좋아요. 향도 은은합니다.',attachments:[],userBlocked:false,userBlockedCount:0,
+              productPrice:1000,productImageUrl:'https://img/p.png',productId:5};
+  ctx.__route=(url)=>{
+    if(url.endsWith('/reviews/1')) return {status:200,body:Object.assign({},base,{status:'APPROVED',visible:true})};
+    if(url.endsWith('/reviews/2')) return {status:200,body:Object.assign({},base,{status:'PENDING',visible:false,productId:null,productPrice:null,productImageUrl:null})};
+    if(url.includes('/admin/brands?')) return {status:200,body:{total:1,results:[{id:3,name:'브랜드',approved:true}]}};
+    if(url.includes('/admin/products?')) return {status:200,body:{total:1,results:[{id:8,name:'수분 크림'}]}};
+    return {status:404,body:{}};
+  };
+  await api.scanRows([{id:1,brandName:'브랜드',productName:'수분 크림',status:'PENDING',visible:true,_date:'2026-09-26'},
+                      {id:2,brandName:'브랜드',productName:'수분 크림',status:'PENDING',visible:true,_date:'2026-09-26'}]);
+  const [a,b]=api.getResults();
+  assert.equal(a.action,'hold'); assert.match(a.reasons[0],/이미 검수완료/);
+  assert.equal(b.action,'hold','엑박이어도 누가 미노출한 리뷰에는 재선택 요청을 보내지 않는다');
+  assert.match(b.reasons.join(' '),/이미 미노출된 리뷰/);
+});
+
+test('scan stops after repeated detail failures instead of crawling on',async()=>{
+  const {api,ctx}=harness(); api.setDate('2026-09-26');
+  ctx.__route=()=>({status:401,body:{}});
+  await api.scanRows(Array.from({length:12},(_,i)=>({id:300+i,brandName:'b',productName:'p',_date:'2026-09-26'})));
+  assert.equal(api.getResults().length,5,'연속 5번 실패하면 멈춘다');
+  assert.match(api.getAbort(),/연속 5번/);
 });
