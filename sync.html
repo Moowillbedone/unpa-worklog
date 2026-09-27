@@ -50,21 +50,29 @@
     /* 읽고 쓰는 사이에 다른 탭이 끼어들지 않도록 기다림 없이 한 번에 */
     var res=WorklogCore.syncStore(localStorage.getItem(key), p.work, base, now);
     localStorage.setItem(key, res.value);
-    var au={days:0};
+    /* 검수기록은 따로 — 여기서 실패해도 업무일지 건수 반영은 성공으로 둔다.
+       저장공간이 모자라면 오래된 날부터 덜어 가며 다시 시도한다. */
+    var au={days:0}, auditError=null;
     if(p.audit && Object.keys(p.audit).length){
-      au=WorklogCore.syncAudit(localStorage.getItem('unpa-audit-v1'), p.audit, now);
-      localStorage.setItem('unpa-audit-v1', au.value);
+      var keeps=[60,40,25,12];
+      for(var i=0;i<keeps.length;i++){
+        try{
+          au=WorklogCore.syncAudit(localStorage.getItem('unpa-audit-v1'), p.audit, now, keeps[i]);
+          localStorage.setItem('unpa-audit-v1', au.value); auditError=null; break;
+        }catch(e){ auditError=String(e&&e.message||e); au={days:0}; }
+      }
     }
     var info={ at:now.toISOString(), from:p.work.from, today:res.today, partial:!!p.work.partial,
-               changes:res.changes.slice(0,60), nChanges:res.changes.length, auditDays:au.days };
+               changes:res.changes.slice(0,60), nChanges:res.changes.length, auditDays:au.days, auditError:auditError };
     try{ localStorage.setItem('unpa-worklog-sync-v1', JSON.stringify(info)); }catch(e){}
-    return { ok:true, today:res.today, changes:res.changes.slice(0,20), nChanges:res.changes.length, auditDays:au.days };
+    return { ok:true, today:res.today, changes:res.changes.slice(0,20), nChanges:res.changes.length, auditDays:au.days, auditError:auditError };
   }
   function md(d){ return (+d.slice(5,7))+'/'+(+d.slice(8,10)); }
   function show(res){
     if(!res.ok){ st.innerHTML='<span class="bad">반영 실패</span> — '+String(res.error||'').replace(/[<>&]/g,''); return; }
     st.innerHTML='<span class="ok">반영 완료</span> · 오늘('+md(res.today.d)+') 리뷰 <b>'+res.today.r+'</b> · 제품 <b>'+res.today.p+'</b>'
-      +(res.nChanges?' · 바뀐 날 '+res.nChanges+'일':' · 바뀐 날 없음')+(res.auditDays?' · 검수기록 '+res.auditDays+'일':'');
+      +(res.nChanges?' · 바뀐 날 '+res.nChanges+'일':' · 바뀐 날 없음')+(res.auditDays?' · 검수기록 '+res.auditDays+'일':'')
+      +(res.auditError?' · <span class="bad">검수기록 저장 실패</span>':'');
     if(res.changes.length){
       chg.hidden=false;
       chg.innerHTML=res.changes.map(function(c){

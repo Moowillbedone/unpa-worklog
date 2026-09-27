@@ -92,12 +92,15 @@
     return {value:JSON.stringify(next),changes:res.changes,touched:res.touched,today:res.today};
   }
   /* 검수 기록(날짜별 판정)을 기존 기록에 합친다 */
-  function syncAudit(raw,days,now){
+  /* 검수 기록은 날마다 쌓이므로 최근 keep 일(리뷰 작성일 기준)만 남긴다 — 업무일지 건수와 저장공간을 나눠 쓴다 */
+  function syncAudit(raw,days,now,keep){
     const o=raw?JSON.parse(raw):{v:1,days:{}};
     if(!o||typeof o!=='object')throw Error('검수 기록 저장 형식 오류');
     const cur=o.days&&typeof o.days==='object'?o.days:{};const next=Object.assign({},cur);let n=0;
     Object.keys(days||{}).forEach(d=>{if(!date(d))return;const day=days[d];if(!day||!Array.isArray(day.items))return;next[d]=mergeAudit(cur[d],Object.assign({},day,{date:d}));n++;});
-    return {value:JSON.stringify({v:1,savedAt:(now||new Date()).toISOString(),days:next}),days:n};
+    const ds=Object.keys(next).sort(),k=keep||60,dropped=ds.length>k?ds.slice(0,ds.length-k):[];
+    dropped.forEach(d=>{delete next[d];});
+    return {value:JSON.stringify({v:1,savedAt:(now||new Date()).toISOString(),days:next}),days:n,dropped};
   }
   return {date,months,mergeAudit,unappliedIds,applyWork,syncStore,syncAudit};
 });
@@ -417,21 +420,21 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
 
     <div class="card">
       <div class="chd"><h2>🔎 검수 기록</h2>
-        <span class="hint">판정 결과를 불러와 날짜별로 남깁니다</span>
-        <button class="btn ghost" id="aImp">판정 결과 불러오기</button>
+        <span class="hint" id="aHint">리뷰 콘솔을 열면 자동으로 쌓입니다</span>
+        <button class="btn ghost" id="aImp" title="예전에 내려받아 둔 검수기록 JSON 을 한 번 합칠 때만" style="padding:6px 10px;font-size:12px">예전 파일 합치기</button>
         <input type="file" id="aFile" accept="application/json,.json" hidden>
-        <button class="btn ghost" id="aExp">내보내기</button>
+        <button class="btn ghost" id="aExp" title="이 브라우저의 검수 기록 백업" style="padding:6px 10px;font-size:12px">백업</button>
       </div>
       <div class="warn" id="aEmpty">
-        아직 기록이 없습니다. 순서는 이렇습니다.<br><br>
-        <b>1.</b> <a href="tools.html" style="color:var(--mint-dk);font-weight:700">🧭 리뷰 검수 콘솔</a>에서 날짜별로 스캔합니다<br>
-        <b>2.</b> 사진·본문과 후보를 확인하고 선택한 건만 실행합니다<br>
-        <b>3.</b> 콘솔의 <b>[업무일지 반영]</b>을 누르거나 <b>[검수기록 JSON]</b>을 여기서 불러오세요. 검수 상세는 이 브라우저/JSON에 보관됩니다
+        아직 기록이 없습니다. 파일을 불러올 필요는 없습니다.<br><br>
+        <b>1.</b> CMS 에서 <a href="tools.html" style="color:var(--mint-dk);font-weight:700">🧭 리뷰 검수 콘솔</a>을 열고 스캔합니다<br>
+        <b>2.</b> 판정과 실행 결과가 업무일지 건수와 함께 <b>이 탭으로 자동으로</b> 넘어옵니다 (콘솔 위쪽 📒 줄에서 반영 여부 확인)<br>
+        <b>3.</b> 리뷰 작성일별로 최근 60일치를 이 브라우저에 보관합니다
       </div>
       <div class="tw" id="aDaysWrap" hidden>
         <table class="mtable">
           <thead><tr>
-            <th>날짜</th><th style="text-align:right">대상</th>
+            <th>리뷰 작성일</th><th style="text-align:right">대상</th>
             <th style="text-align:right">승인 판정</th><th style="text-align:right">미노출 판정</th>
             <th style="text-align:right">발색샷 요청</th><th style="text-align:right">제품 매칭/수동등록</th>
             <th style="text-align:right">보류</th><th style="text-align:right">적용</th>
@@ -1364,8 +1367,20 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
   });
 
   aLoad(); aRenderAll();
-  /* 동기화 창(sync.html)이 검수 기록을 바꾸면 다시 읽는다 */
-  window.addEventListener('storage',function(e){ if(e.key===AKEY){ aLoad(); aRenderAll(); } });
+  /* 검수 콘솔 → 동기화 창(sync.html)이 검수 기록을 바꾸면 다시 읽는다 */
+  function aHint(){
+    var el=document.getElementById('aHint'); if(!el) return;
+    var info=null; try{ info=JSON.parse(localStorage.getItem('unpa-worklog-sync-v1')||'null'); }catch(e){}
+    if(!info||!info.at){ el.textContent='리뷰 콘솔을 열면 자동으로 쌓입니다'; return; }
+    var d=new Date(info.at), p=function(n){ return (n<10?'0':'')+n; };
+    el.innerHTML='리뷰 콘솔에서 자동으로 쌓입니다 · 마지막 반영 <b>'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+'</b>'
+      +' · 최근 60일 보관'+(info.auditError?' · <span style="color:#c8443c">마지막 저장 실패</span>':'');
+  }
+  aHint();
+  window.addEventListener('storage',function(e){
+    if(e.key===AKEY){ aLoad(); aRenderAll(); }
+    if(e.key==='unpa-worklog-sync-v1') aHint();
+  });
 })();
 </script>
 </body>

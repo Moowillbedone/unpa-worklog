@@ -478,3 +478,18 @@ test('sync popup: blocked shows a one-click button; a verified reply clears the 
   assert.deepEqual(Object.keys(api.outboxLoad()),[],'넘긴 뒤 보관함을 비운다');
   assert.match(api.getSyncHtml(),/오늘 리뷰 <b>5<\/b>/);
 });
+
+test('audit records stay small: approvals keep one line, other verdicts keep their evidence',()=>{
+  const {api}=harness(); api.setDate('2026-09-24');
+  const long='x'.repeat(300);
+  api.setResults([
+    {id:1,date:'2026-09-24',action:'approve',applied:true,reasons:[long],text:long,attachments:['https://a','https://b'],photo:{label:'직접촬영'},photoCls:['camera']},
+    {id:2,date:'2026-09-24',action:'hold',applied:false,reasons:['욕설','확인'],text:'본문',photo:{label:'판별 애매'},product_exact:'수분 크림',warn:'브랜드 조회 안 됨'},
+  ]);
+  const a=api.auditPayload('2026-09-24');
+  const ap=a.items[0], ho=a.items[1];
+  assert.equal(ap.reason.length,80); assert.equal(ap.text,undefined); assert.equal(ap.attachments,undefined);
+  assert.equal(ho.reason,'욕설 · 확인'); assert.equal(ho.text,'본문'); assert.equal(ho.product_exact,'수분 크림'); assert.equal(ho.warn,'브랜드 조회 안 됨');
+  assert.equal(a.schema,undefined);
+  assert.ok(JSON.stringify(ap).length<400,'승인 1건 '+JSON.stringify(ap).length+'바이트');
+});

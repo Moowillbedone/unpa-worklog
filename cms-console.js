@@ -1708,22 +1708,28 @@
     var doneMap=doneLoad();
     var rows = date ? results.filter(function(r){ return (r.date||SCAN_DATE)===date; }) : results;
     var summary={}; rows.forEach(function(r){ summary[r.action]=(summary[r.action]||0)+1; });
+    /* 업무일지 브라우저에 날마다 쌓이므로 가볍게 남긴다 (저장공간 약 5MB 를 업무일지 건수와 나눠 쓴다).
+       승인은 전체의 95% — 한 줄 사유만. 보류·미노출·수정요청·등록처럼 다시 볼 일이 있는 건만 근거를 자세히. */
     return {
       v:1, date:date||SCAN_DATE, at:new Date().toISOString(), total:rows.length, summary:summary,
-      schema: SCHEMA,          /* 상세 응답 필드 — 판정이 어긋나면 여기부터 본다 */
       items: rows.map(function(r){
-        return { id:r.id, brand:r.brand, product:r.product, user:r.user,
-                 verdict: VMAP[r.action]||'hold', action:r.action,
-                 reason: r.reasons.join(' · '), reasons:r.reasons,
-                 applied: !!r.applied, exbak:!!r.exbak, swatch:r.swatch||null, warn:r.warn||null,
-                 suspension:r.suspension||null, review_status:r.reviewStatus||null,
-                 manual_done:(MANUAL_TODO[r.action] && doneMap[String(r.id)]) ? doneMap[String(r.id)].at : null,
-                 text: r.text||'',
-                 photo: r.photo?r.photo.label:'', photoCls:r.photoCls||[],
-                 brand_match:r.brand_match||null,
-                 product_exact:r.product_exact, product_option:r.product_option||null,
-                 product_options:r.product_options||null, residue:r.residue||null,
-                 attachments:r.attachments||[] };
+        var it={ id:r.id, brand:r.brand||'', product:r.product||'', user:r.user||'',
+                 verdict: VMAP[r.action]||'hold', action:r.action, applied: !!r.applied,
+                 reason: (r.reasons||[]).join(' · ') };
+        if(r.reviewStatus && r.reviewStatus!=='PENDING') it.review_status=r.reviewStatus;
+        if(r.action==='approve'){ it.reason=it.reason.slice(0,80); return it; }
+        if(r.text) it.text=String(r.text).slice(0,120);
+        if(r.photo && r.photo.label) it.photo=r.photo.label;
+        if(r.exbak) it.exbak=true;
+        if(r.swatch) it.swatch=r.swatch;
+        if(r.warn) it.warn=r.warn;
+        if(r.suspension && (r.suspension.blocked!==false || r.suspension.count)) it.suspension=r.suspension;
+        if(MANUAL_TODO[r.action]) it.manual_done = doneMap[String(r.id)] ? doneMap[String(r.id)].at : null;
+        if(r.product_exact) it.product_exact=r.product_exact;
+        if(r.product_option) it.product_option=r.product_option;
+        if(r.residue) it.residue=r.residue;
+        if(r.brand_match) it.brand_match={ id:r.brand_match.id, name:r.brand_match.name };
+        return it;
       })
     };
   }
@@ -1820,6 +1826,9 @@
   function outboxEdit(fn){
     var o=outboxLoad(); o.audit=o.audit||{}; o.reviews=o.reviews||[];
     fn(o); o.seq=(o.seq||0)+1;
+    /* 오래 못 넘기더라도 이 브라우저 저장공간을 채우지 않게 — 최근 30일치, 승인 5000건까지만 */
+    var ds=Object.keys(o.audit).sort(); if(ds.length>30) ds.slice(0,ds.length-30).forEach(function(d){ delete o.audit[d]; });
+    if(o.reviews.length>5000) o.reviews=o.reviews.slice(-5000);
     try{ localStorage.setItem(OUTBOX_KEY, JSON.stringify(o)); return true; }catch(e){ return false; }
   }
   /* 같은 날짜 기록은 리뷰 ID 기준으로 합친다 — 처리됨(applied)은 되돌리지 않는다 */
@@ -1905,6 +1914,8 @@
       var t=ev.data.today||{}, hm=new Date().toTimeString().slice(0,5);
       syncStatus('<span style="color:#3ddc97">📒 업무일지 반영 '+hm+'</span> · 오늘 리뷰 <b>'+(t.r||0)+'</b> · 제품 <b>'+(t.p||0)+'</b>'
         +(ev.data.nChanges?' · 바뀐 날 '+ev.data.nChanges+'일':'')
+        +(ev.data.auditDays?' · 검수기록 '+ev.data.auditDays+'일':'')
+        +(ev.data.auditError?' <span style="color:#f5c451">(검수기록 저장 실패 — '+esc(String(ev.data.auditError).slice(0,60))+')</span>':'')
         +(WORK && WORK.failed.length?' <span style="color:#f5c451">(일부 날짜 조회 실패 — 다음에 채움)</span>':''));
     };
     window.addEventListener('message', onMsg);

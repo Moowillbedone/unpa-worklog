@@ -299,3 +299,11 @@ test('sync store keeps history, marks months for server upload, refuses a corrup
   assert.equal(day.items.length,2); assert.equal(day.items.find(x=>x.id===1).applied,true,'처리됨은 되돌리지 않는다');
   assert.equal(day.executions.length,1,'같은 실행 기록은 한 번만');
 });
+
+test('audit history keeps only recent days so the browser store does not fill up',()=>{
+  const now=new Date('2026-09-27T12:00:00Z');
+  const days={};for(let i=1;i<=5;i++)days['2026-09-0'+i]={items:[{id:i,applied:true,action:'approve'}]};
+  const r=W.syncAudit(null,days,now,3);
+  assert.deepEqual(Object.keys(JSON.parse(r.value).days).sort(),['2026-09-03','2026-09-04','2026-09-05']);
+  assert.deepEqual(r.dropped,['2026-09-01','2026-09-02']);
+});

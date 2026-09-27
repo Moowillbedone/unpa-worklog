@@ -83,12 +83,15 @@
     return {value:JSON.stringify(next),changes:res.changes,touched:res.touched,today:res.today};
   }
   /* 검수 기록(날짜별 판정)을 기존 기록에 합친다 */
-  function syncAudit(raw,days,now){
+  /* 검수 기록은 날마다 쌓이므로 최근 keep 일(리뷰 작성일 기준)만 남긴다 — 업무일지 건수와 저장공간을 나눠 쓴다 */
+  function syncAudit(raw,days,now,keep){
     const o=raw?JSON.parse(raw):{v:1,days:{}};
     if(!o||typeof o!=='object')throw Error('검수 기록 저장 형식 오류');
     const cur=o.days&&typeof o.days==='object'?o.days:{};const next=Object.assign({},cur);let n=0;
     Object.keys(days||{}).forEach(d=>{if(!date(d))return;const day=days[d];if(!day||!Array.isArray(day.items))return;next[d]=mergeAudit(cur[d],Object.assign({},day,{date:d}));n++;});
-    return {value:JSON.stringify({v:1,savedAt:(now||new Date()).toISOString(),days:next}),days:n};
+    const ds=Object.keys(next).sort(),k=keep||60,dropped=ds.length>k?ds.slice(0,ds.length-k):[];
+    dropped.forEach(d=>{delete next[d];});
+    return {value:JSON.stringify({v:1,savedAt:(now||new Date()).toISOString(),days:next}),days:n,dropped};
   }
   return {date,months,mergeAudit,unappliedIds,applyWork,syncStore,syncAudit};
 });
