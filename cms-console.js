@@ -1064,7 +1064,7 @@
         r.reasons.push(r.dup);
       }
       /* 처음 본 리뷰를 원본으로 둔다 — 덮어쓰면 원본이 도리어 복붙으로 몰린다 */
-      if(!seen) h.texts[k]={ id:String(r.id), d:SCAN_DATE, t:now };
+      if(!seen) h.texts[k]={ id:String(r.id), d:r.date||SCAN_DATE, t:now };
       else if(String(seen.id)===String(r.id)) seen.t=now;
     });
 
@@ -1151,30 +1151,112 @@
 
   function head(html){ return '<b style="color:#3ddc97">🧭 리뷰 검수 콘솔</b>'+html; }
 
-  function renderStart(sd){
+  async function renderStart(sd){
+    var manual='<div style="margin-top:12px;border-top:1px solid #22392e;padding-top:10px;font-size:12px;color:#9fb4ab">날짜 하나만 '
+      +'<input id="csDate" value="'+esc(sd)+'" style="width:112px;background:#132019;color:#e8f1ed;border:1px solid #2c4a3c;border-radius:7px;padding:4px 7px;font:inherit"> '
+      +'<button id="csScan" style="background:#132019;color:#9fb4ab;border:1px solid #2c4a3c;border-radius:7px;padding:5px 10px;font:inherit;cursor:pointer">이 날짜만 스캔</button></div>'
+      +'<div style="margin-top:8px;font-size:11px;color:#6b7f77">스캔은 조회만 합니다. 실제 처리는 이후 대기열·그리드에서 승인해야 나갑니다.</div>';
+    var bindManual=function(){
+      document.getElementById('csScan').onclick=function(){ var d=document.getElementById('csDate').value.trim(); if(!validDate(d)){alert('실제 존재하는 YYYY-MM-DD 날짜를 입력해주세요.');return;} scan(d); };
+    };
+
+    var backlog=await loadBacklog();
+    if(backlog===null){
+      box.innerHTML=head('<div style="margin-top:9px;color:#ff8f6b">목록 조회 실패 — 관리 화면에서 목록을 한 번 불러온 뒤 다시 실행해주세요.</div>'+manual);
+      bindManual(); return;
+    }
+    BACKLOG=backlog;
+    var total=0, upd=0; backlog.forEach(function(b){ total+=b.rows.length; upd+=b.updated; });
+    var list = backlog.length
+      ? backlog.slice(0,14).map(function(b){
+          return '<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed #1a2b23">'
+            +'<span>'+b.date.slice(5)+'</span><span><b style="color:#e8f1ed">'+b.rows.length+'</b>건'
+            +(b.updated?' <span style="color:#f5c451">✏️수정완료 '+b.updated+'</span>':'')+'</span></div>';
+        }).join('') + (backlog.length>14?'<div style="color:#6b7f77;font-size:11px;margin-top:3px">… 외 '+(backlog.length-14)+'일</div>':'')
+      : '<div style="color:#3ddc97">짝수일에 남은 일이 없습니다 🎉</div>';
     box.innerHTML=head(
-      '<div style="margin-top:9px;color:#9fb4ab">날짜별 검수대기 리뷰를 모아 자동 판정합니다.</div>'
-      +'<div style="margin-top:10px">날짜 <input id="csDate" value="'+esc(sd)+'" style="width:120px;background:#132019;color:#e8f1ed;border:1px solid #2c4a3c;border-radius:7px;padding:5px 8px;font:inherit"></div>'
-      +'<button id="csScan" style="margin-top:11px;width:100%;background:#3ddc97;color:#04130c;border:0;border-radius:9px;padding:10px;font-weight:800;cursor:pointer">스캔 시작 (읽기만)</button>'
-      +'<div style="margin-top:8px;font-size:11px;color:#6b7f77">스캔은 조회만 합니다. 실제 처리는 이후 대기열에서 승인해야 합니다.</div>');
-    document.getElementById('csScan').onclick=function(){ var d=document.getElementById('csDate').value.trim(); if(!validDate(d)){alert('실제 존재하는 YYYY-MM-DD 날짜를 입력해주세요.');return;} scan(d); };
+      '<div style="margin-top:9px;color:#9fb4ab">📋 남은 일 · 짝수일 최근 '+BACKLOG_DAYS+'일</div>'
+      +'<div style="margin-top:6px;font-size:12px;color:#9fb4ab">'+list+'</div>'
+      +(backlog.length?'<button id="csScanAll" style="margin-top:11px;width:100%;background:#3ddc97;color:#04130c;border:0;border-radius:9px;padding:10px;font-weight:800;cursor:pointer">'
+        +'▶ 남은 것 전부 스캔 ('+backlog.length+'일 · '+total+'건'+(upd?' · 수정완료 '+upd:'')+')</button>':'')
+      +manual);
+    bindManual();
+    if(backlog.length) document.getElementById('csScanAll').onclick=function(){ scanAll(backlog); };
   }
 
   function listUrl(sd,page,size){ return API+'/admin/reviews?pageSize='+size+'&startDate='+sd+'&endDate='+sd+'&beforeApproval=true&page='+page+'&field=CREATED_AT&direction=desc'; }
 
-  async function scan(sd){
-    SCAN_DATE=sd;
-    box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">인증 확인 중…</div>');
-    var chk=await get(listUrl(sd,1,1));
-    if(chk.status!==200||!chk.json){ box.innerHTML=head('<div style="margin-top:9px;color:#ff8f6b">인증/조회 실패 (HTTP '+chk.status+')<br>관리 화면에서 목록을 한 번 불러온 뒤 다시 실행해주세요.</div>'); return; }
+  /* ── 날짜 ─────────────────────────────────────────────
+     담당은 짝수일(그날 작성된 리뷰). 업무일지도 리뷰 작성일 기준으로 적는다. */
+  function ymd(d){ var p=function(n){ return (n<10?'0':'')+n; }; return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
+  function evenDates(days, today){
+    var now=today||new Date(), out=[];
+    for(var i=0;i<days;i++){
+      var d=new Date(now.getFullYear(), now.getMonth(), now.getDate()-i);
+      if(d.getDate()%2===0) out.push(ymd(d));
+    }
+    return out;
+  }
+  var BACKLOG_DAYS=60, SCAN_LABEL='', BACKLOG=null;
 
+  /* 한 날짜의 "검수 필요" 목록 전부 (수정완료 UPDATED 도 여기 섞여 있다) */
+  async function listAll(sd, onPage){
     var page=1, all=[], total=0;
-    while(page<=30){ box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">목록 수집… <b>'+all.length+'</b>건</div>');
-      var r=await get(listUrl(sd,page,100)); var rows=listOf(r.json)||[]; total=totalOf(r.json)||total;
-      all=all.concat(rows); if(rows.length<100||all.length>=total) break; page++; }
+    while(page<=30){
+      var r=await get(listUrl(sd,page,100)); var rows=listOf(r.json);
+      if(r.status!==200 || !rows) return null;
+      total=totalOf(r.json)||total; all=all.concat(rows);
+      if(onPage) onPage(all.length);
+      if(rows.length<100 || all.length>=total) break; page++;
+    }
+    return all;
+  }
 
-    /* 이미 처리된(비노출/승인완료) 건은 건너뜀 후보로만 */
-    var pending=all;
+  /* 짝수일마다 아직 할 일이 남은 리뷰를 모은다.
+     이미 콘솔로 처리한 건(전송 이력)과 이미 미노출된 건은 빼되,
+     예전에 제품 재선택 요청을 보냈는데 유저가 수정완료한 건은 다시 넣는다. */
+  function backlogTodo(rows, sent){
+    return rows.filter(function(x){
+      if(x.visible===false) return false;
+      var e=sent[String(x.id)];
+      if(!e) return true;
+      return x.status==='UPDATED' && (e.action==='revise_product' || e.action==='revise_swatch');
+    });
+  }
+  async function loadBacklog(){
+    var dates=evenDates(BACKLOG_DAYS), sent=sentLoad(), out=[];
+    for(var i=0;i<dates.length;i++){
+      box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">남은 일 확인 중… <b>'+(i+1)+' / '+dates.length+'</b> ('+dates[i]+')<br>'
+        +'<span style="font-size:11px">짝수일 최근 '+BACKLOG_DAYS+'일 · 조회만 합니다</span></div>');
+      var rows=await listAll(dates[i]);
+      if(rows===null) return null;
+      var todo=backlogTodo(rows, sent);
+      if(todo.length) out.push({ date:dates[i], rows:todo, updated:todo.filter(function(x){ return x.status==='UPDATED'; }).length });
+      await delay(40);
+    }
+    return out;
+  }
+
+  async function scan(sd){
+    SCAN_DATE=sd; SCAN_LABEL=sd;
+    box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">목록 수집…</div>');
+    var all=await listAll(sd, function(n){ box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">목록 수집… <b>'+n+'</b>건</div>'); });
+    if(all===null){ box.innerHTML=head('<div style="margin-top:9px;color:#ff8f6b">인증/조회 실패<br>관리 화면에서 목록을 한 번 불러온 뒤 다시 실행해주세요.</div>'); return; }
+    all.forEach(function(x){ x._date=sd; });
+    await scanRows(all);
+  }
+
+  /* 남은 짝수일을 한 번에 — 날짜마다 따로 돌리던 것을 한 번으로 */
+  async function scanAll(backlog){
+    var dates=backlog.map(function(b){ return b.date; }).sort();
+    SCAN_DATE = dates.length===1 ? dates[0] : dates[0]+'_'+dates[dates.length-1];
+    SCAN_LABEL = dates.length===1 ? dates[0] : dates[0].slice(5)+' ~ '+dates[dates.length-1].slice(5)+' ('+dates.length+'일)';
+    var rows=[];
+    backlog.forEach(function(b){ b.rows.forEach(function(x){ x._date=b.date; rows.push(x); }); });
+    await scanRows(rows);
+  }
+
+  async function scanRows(pending){
     results=[];
     for(var i=0;i<pending.length;i++){
       box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">판정 중… <b>'+(i+1)+' / '+pending.length+'</b><br>'
@@ -1202,15 +1284,21 @@
         c.applied=true; c.exec=false;
         c.reasons.push('이미 미노출 상태 — 보내지 않음');
       }
+      c.date = pending[i]._date || SCAN_DATE;
+      c.reviewStatus = pending[i].status || null;
+      if(c.reviewStatus==='UPDATED'){
+        c.reasons.unshift(c.exbak ? '✏️ 유저가 수정완료했지만 제품이 아직 연결 안 됨' : '✏️ 유저 수정완료');
+      }
       results.push(sentApply(c));
       await delay(60);
     }
     postScan();
-    renderQueue(sd);
+    renderQueue(SCAN_LABEL||SCAN_DATE);
   }
 
   function renderQueue(sd){
     var done=doneLoad();
+    var multiDay=scanDates().length>1;
     var groups={revise:[],hide:[],register:[],hold:[]};
     results.forEach(function(r){ (groups[r.action]||(groups[r.action]=[])).push(r); });
     var order=['revise_product','hide','register_product','register_brand','hold','revise_swatch','approve'];
@@ -1250,6 +1338,8 @@
           +'title="CMS 리뷰 상세를 새 탭에서 열기" '
           +'style="color:#8fd8ff;font-weight:800;text-decoration:none;border-bottom:1px dotted rgba(143,216,255,.5)">#'+r.id+' ↗</a> '
           +(r.applied?'<span style="color:#3ddc97;font-weight:800">✓ 처리됨</span> ':'')
+          +(multiDay?'<span style="color:#6b7f77;font-size:10.5px">'+esc(String(r.date||'').slice(5))+'</span> ':'')
+          +(r.reviewStatus==='UPDATED'?'<span style="font-size:10.5px;color:#f5c451;font-weight:800">✏️수정완료</span> ':'')
           +'<span style="color:#9fb4ab;'+strike+'">'+esc(r.brand||'')+' / '+esc(r.product||'')+'</span>'
           +(dn?' <span style="color:#3ddc97;font-size:10.5px;font-weight:800">✓ 완료 '+esc(doneStamp(dn.at))+'</span>':'')
           +(k==='approve' && !r.applied && r.conf
@@ -1338,8 +1428,8 @@
         runJobs([r]);
       };
     });
-    document.getElementById('csRescan').onclick=function(){ renderStart(sd); };
-    document.getElementById('csDl').onclick=function(){ dl(auditPayload(),'unpa-audit-'+sd+'.json'); };
+    document.getElementById('csRescan').onclick=function(){ renderStart(String(SCAN_DATE||'').slice(0,10)); };
+    document.getElementById('csDl').onclick=function(){ dl(auditDays(),'unpa-audit-'+SCAN_DATE+'.json'); };
     if(nGrid) document.getElementById('csGridBtn').onclick=function(){ openGrid(); };
     var rb=document.getElementById('csRecheck');
     if(rb) rb.onclick=async function(){
@@ -1359,13 +1449,18 @@
   function sentLoad(){ try{ return JSON.parse(localStorage.getItem(SENT_KEY)||'{}'); }catch(e){ return {}; } }
   function sentMark(r){
     try{ var m=sentLoad();
-      m[String(r.id)]={ action:r.action, at:new Date().toISOString(), date:SCAN_DATE };
+      m[String(r.id)]={ action:r.action, at:new Date().toISOString(), date:r.date||SCAN_DATE };
       localStorage.setItem(SENT_KEY, JSON.stringify(m));
     }catch(e){}
   }
   function sentApply(r){
     var m=sentLoad(), e=m[String(r.id)];
     if(!e) return r;
+    if(r.reviewStatus==='UPDATED' && (e.action==='revise_product' || e.action==='revise_swatch')){
+      r._allowResend=true;           /* 유저가 응답했으니 새 차례다 — 이전 전송 기록으로 막지 않는다 */
+      r.reasons=(r.reasons||[]).concat(['이전 요청('+String(e.at).slice(5,10)+') 후 유저 수정완료 — 다시 판정']);
+      return r;
+    }
     r.applied=true; r.action=e.action; r.approvable=false;
     r.reasons=(r.reasons||[]).concat(['이미 처리됨 ('+String(e.at).slice(0,16).replace('T',' ')+')']);
     return r;
@@ -1380,7 +1475,7 @@
   function doneLoad(){ try{ return JSON.parse(localStorage.getItem(DONE_KEY)||'{}'); }catch(e){ return {}; } }
   function doneToggle(r, on){
     var m=doneLoad(), id=String(r.id);
-    if(on) m[id]={ at:new Date().toISOString(), action:r.action, date:SCAN_DATE };
+    if(on) m[id]={ at:new Date().toISOString(), action:r.action, date:r.date||SCAN_DATE };
     else delete m[id];
     try{ localStorage.setItem(DONE_KEY, JSON.stringify(m)); }catch(e){ alert('완료 표시를 저장하지 못했습니다 (브라우저 저장공간 확인).'); }
     return m[id]||null;
@@ -1425,7 +1520,7 @@
     if(!jobs.length){ alert('실행할 대상이 없습니다.'); return; }
 
     var already=sentLoad();
-    jobs=jobs.filter(function(r){ return !already[String(r.id)]; });   /* 이미 보낸 건은 빼고 보낸다 */
+    jobs=jobs.filter(function(r){ return !already[String(r.id)] || r._allowResend; });   /* 이미 보낸 건은 빼고 보낸다 */
     if(!jobs.length){ alert('선택한 건은 모두 이미 처리되었습니다.'); return; }
     var byAct={}; jobs.forEach(function(r){ byAct[r.action]=(byAct[r.action]||0)+1; });
     var over=Object.keys(byAct).filter(function(k){ return byAct[k] > (CAP[k]||0); });
@@ -1460,7 +1555,7 @@
                  told:r.action==='revise_product'?(r.product_exact||null):null,
                  conf:r.conf||null, sample:!!r.sample, why:(r.reasons||[]).slice(-2)});
       if(ok){
-        sentMark(r);
+        sentMark(r); r._allowResend=false;
         var hu=histUser(hist, r.user);
         if(r.action==='approve') hu.approve++;
         else if(r.action==='hide') hu.hide++;
@@ -1502,18 +1597,19 @@
   var VMAP={ approve:'approve', hide:'hide',
              revise_swatch:'revise_color', revise_product:'revise_product',
              register_product:'register', register_brand:'register', hold:'hold' };
-  function auditPayload(){
+  function auditPayload(date){
     var doneMap=doneLoad();
-    var summary={}; results.forEach(function(r){ summary[r.action]=(summary[r.action]||0)+1; });
+    var rows = date ? results.filter(function(r){ return (r.date||SCAN_DATE)===date; }) : results;
+    var summary={}; rows.forEach(function(r){ summary[r.action]=(summary[r.action]||0)+1; });
     return {
-      v:1, date:SCAN_DATE, at:new Date().toISOString(), total:results.length, summary:summary,
+      v:1, date:date||SCAN_DATE, at:new Date().toISOString(), total:rows.length, summary:summary,
       schema: SCHEMA,          /* 상세 응답 필드 — 판정이 어긋나면 여기부터 본다 */
-      items: results.map(function(r){
+      items: rows.map(function(r){
         return { id:r.id, brand:r.brand, product:r.product, user:r.user,
                  verdict: VMAP[r.action]||'hold', action:r.action,
                  reason: r.reasons.join(' · '), reasons:r.reasons,
                  applied: !!r.applied, exbak:!!r.exbak, swatch:r.swatch||null, warn:r.warn||null,
-                 suspension:r.suspension||null,
+                 suspension:r.suspension||null, review_status:r.reviewStatus||null,
                  manual_done:(MANUAL_TODO[r.action] && doneMap[String(r.id)]) ? doneMap[String(r.id)].at : null,
                  text: r.text||'',
                  photo: r.photo?r.photo.label:'', photoCls:r.photoCls||[],
@@ -1529,6 +1625,26 @@
      업무일지를 #console=<일회용 번호> 로 열면 준비 신호를 보내오고,
      그 창·그 번호에만 검수기록과 처리한 리뷰 ID 를 넘긴다.
      업무일지는 리뷰 ID 로 중복을 걸러 건수를 더하므로 여러 번 눌러도 두 번 세지 않는다. */
+  function scanDates(){
+    var seen={}, out=[];
+    results.forEach(function(r){ var d=r.date||SCAN_DATE; if(validDate(d) && !seen[d]){ seen[d]=1; out.push(d); } });
+    return out.sort();
+  }
+  function auditDays(){
+    var days={}; scanDates().forEach(function(d){ days[d]=auditPayload(d); });
+    return { v:1, at:new Date().toISOString(), days:days };
+  }
+  /* 업무일지는 리뷰 작성일(짝수일) 기준 — 처리한 리뷰 ID 를 날짜별로 묶어 넘긴다 */
+  function worklogPayloads(){
+    return scanDates().map(function(d){
+      var done=results.filter(function(r){ return r.applied && (r.date||SCAN_DATE)===d; });
+      var n=function(a){ return done.filter(function(r){ return r.action===a; }).length; };
+      return { d:d, ids:done.map(function(r){ return String(r.id); }),
+               note:'콘솔 처리 · 검수완료 '+n('approve')+' · 제품재선택 '+n('revise_product')
+                    +' · 발색샷 '+n('revise_swatch')+' · 미노출 '+n('hide') };
+    }).filter(function(p){ return p.ids.length; });
+  }
+
   function sendToWorklog(){
     var done=results.filter(function(r){ return r.applied; });
     var nonce;
@@ -1537,14 +1653,13 @@
     var WL_ORIGIN=new URL(WORKLOG_URL).origin;
     var w=window.open(WORKLOG_URL+'#console='+nonce, '_blank');   /* opener 가 있어야 하므로 noopener 를 쓰지 않는다 */
     if(!w){ alert('팝업이 차단됐습니다. 이 사이트의 팝업을 허용한 뒤 다시 눌러 주세요.'); return; }
-    var n=function(a){ return done.filter(function(r){ return r.action===a; }).length; };
+    var payloads=worklogPayloads();
     var onMsg=function(ev){
       if(ev.origin!==WL_ORIGIN || ev.source!==w || !ev.data || ev.data.type!=='unpa-console-ready' || ev.data.nonce!==nonce) return;
       window.removeEventListener('message', onMsg);
-      w.postMessage({ type:'unpa-console-result', nonce:nonce, audit:auditPayload(),
-        payload:{ d:SCAN_DATE, ids:done.map(function(r){ return String(r.id); }),
-                  note:'콘솔 처리 · 검수완료 '+n('approve')+' · 제품재선택 '+n('revise_product')
-                       +' · 발색샷 '+n('revise_swatch')+' · 미노출 '+n('hide') } }, WL_ORIGIN);
+      /* payloads: 날짜별 목록. payload: 한 날짜일 때 예전 업무일지와도 맞도록 함께 보낸다 */
+      w.postMessage({ type:'unpa-console-result', nonce:nonce, audit:auditDays(),
+                      payloads:payloads, payload:payloads.length===1?payloads[0]:null }, WL_ORIGIN);
     };
     window.addEventListener('message', onMsg);
     setTimeout(function(){ window.removeEventListener('message', onMsg); }, 120000);
@@ -1563,7 +1678,7 @@
     var b2=document.createElement('button');
     b2.textContent='검수기록 JSON';
     b2.style.cssText='flex:1;background:#132019;color:#9fb4ab;border:1px solid #2c4a3c;border-radius:8px;padding:9px;font:inherit;font-weight:700;cursor:pointer';
-    b2.onclick=function(){ dl(auditPayload(),'unpa-audit-'+SCAN_DATE+'.json'); };
+    b2.onclick=function(){ dl(auditDays(),'unpa-audit-'+SCAN_DATE+'.json'); };
     wrap.appendChild(b1); wrap.appendChild(b2);
     el.parentNode.insertBefore(wrap, el.nextSibling);
   }
@@ -1669,6 +1784,7 @@
         +(r.swatch?'<div style="font-size:10px;color:#f0a35e;margin-top:2px">💄 발색 제품 — 발색샷 확인</div>':'')
         +(r.photo&&r.photo.v==='mixed'?'<div style="font-size:10px;color:#f5c451;margin-top:2px">⚠ '+esc(r.photo.label)+'</div>':'')
         +(r.warn?'<div style="font-size:10px;color:#f5c451;margin-top:2px">⚠ '+esc(r.warn)+'</div>':'')
+        +(r.reviewStatus==='UPDATED'?'<div style="font-size:10px;color:#f5c451;margin-top:2px;font-weight:800">✏️ 유저 수정완료 건</div>':'')
         +(r.sample?'<div style="font-size:10px;color:#8fd8ff;margin-top:2px;font-weight:800">🎯 표본 — 문제 있으면 건너뛰기</div>'
           :(r.conf==='check'&&r.confWhy&&r.confWhy.length?'<div style="font-size:10px;color:#9fb4ab;margin-top:2px">👀 '+esc(r.confWhy[0])+'</div>':''))
         +'</div>';

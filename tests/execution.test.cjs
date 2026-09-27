@@ -39,6 +39,7 @@ function harness(){
   vm.runInContext(code.replace('  /* ── 시작 ── */',
     `globalThis.api={buildReq,runJobs,sentLoad,doneLoad,doneToggle,auditPayload,CAP,
                      postScan,gridJobs,confidenceOf,histLoad,histSave,recheckRegistered,findProduct,aliasKey,
+                     evenDates,backlogTodo,sentApply,worklogPayloads,auditDays,scanDates,
                      setResults:r=>{results=r;},
                      setDate:d=>{SCAN_DATE=d;},setTpl:t=>{tplMap=t;},getResults:()=>results};
      /* ── 시작 ── */`), ctx);
@@ -231,4 +232,64 @@ test('after manual registration, recheck turns the item into a product re-select
   found=await api.recheckRegistered([r]);
   assert.equal(found.length,1); assert.equal(r.action,'revise_product');
   assert.equal(r.product_id,501); assert.equal(r.brand_match.id,9);
+});
+
+/* ── 남은 짝수일 한 번에 · 수정완료 ─────────────────────────── */
+test('only even days of the month are listed as mine',()=>{
+  const {api}=harness();
+  const d=api.evenDates(10,new Date(2026,8,27));          /* 2026-09-27 기준 10일 */
+  assert.equal(d.join(','),'2026-09-26,2026-09-24,2026-09-22,2026-09-20,2026-09-18');
+  const x=api.evenDates(4,new Date(2026,9,2));             /* 월이 바뀌어도 날짜 기준 짝수 */
+  assert.equal(x.join(','),'2026-10-02,2026-09-30');
+});
+
+test('backlog skips what the console already handled, but brings back user-fixed reviews',()=>{
+  const {api}=harness();
+  const sent={ '1':{action:'approve'}, '2':{action:'revise_product'}, '3':{action:'revise_product'}, '4':{action:'hide'} };
+  const rows=[
+    {id:1,status:'PENDING',visible:true},     /* 승인했는데 아직 목록에 — 처리한 것으로 본다 */
+    {id:2,status:'REVISED',visible:true},     /* 수정요청 보내고 대기 — 할 일 아님 */
+    {id:3,status:'UPDATED',visible:true},     /* 수정요청 후 유저 수정완료 — 다시 할 일 */
+    {id:4,status:'PENDING',visible:false},    /* 미노출 처리됨 */
+    {id:5,status:'PENDING',visible:true},     /* 처음 보는 건 */
+    {id:6,status:'UPDATED',visible:true},     /* 사람이 CMS에서 직접 요청했던 건의 수정완료 */
+  ];
+  assert.equal(api.backlogTodo(rows,sent).map(x=>x.id).join(','),'3,5,6');
+});
+
+test('a user-fixed review may be re-sent even though it was sent before',async()=>{
+  const {api,ctx,sent}=harness(); api.setTpl(TPL); api.setDate('2026-09-20');
+  ctx.__route=(url,init)=> (init.method==='POST'||init.method==='PUT') ? {status:201,body:{ok:true}} : {status:404,body:{}};
+  const r={id:42,action:'revise_product',product:'x',product_exact:'Y 크림',product_id:9,brand_match:{id:3},reasons:[],reviewStatus:'UPDATED',date:'2026-09-20'};
+  api.setResults([r]);
+  await api.runJobs([r]);                                   /* 1차 요청 */
+  assert.equal(sent.filter(s=>s.method==='POST').length,1);
+  const again=Object.assign({},r,{applied:false,reasons:[]});
+  api.sentApply(again);                                     /* 유저가 수정완료해서 다시 스캔된 상황 */
+  assert.notEqual(again.applied,true,'수정완료 건은 이전 전송 기록으로 막지 않는다');
+  assert.ok(again._allowResend);
+  api.setResults([again]);
+  await api.runJobs([again]);
+  assert.equal(sent.filter(s=>s.method==='POST').length,2,'두 번째 요청이 나간다');
+  const plain=Object.assign({},r,{reviewStatus:'PENDING',applied:false,reasons:[]});
+  api.sentApply(plain);
+  assert.equal(plain.applied,true,'수정완료가 아니면 여전히 중복 전송을 막는다');
+});
+
+test('worklog and audit are split by review date',()=>{
+  const {api}=harness(); api.setDate('2026-09-18_2026-09-22');
+  api.setResults([
+    {id:1,date:'2026-09-18',action:'approve',applied:true,reasons:[]},
+    {id:2,date:'2026-09-18',action:'hide',applied:true,reasons:[]},
+    {id:3,date:'2026-09-22',action:'approve',applied:true,reasons:[]},
+    {id:4,date:'2026-09-22',action:'register_product',applied:false,reasons:[]},
+    {id:5,date:'2026-09-20',action:'hold',applied:false,reasons:[]},
+  ]);
+  assert.equal(api.scanDates().join(','),'2026-09-18,2026-09-20,2026-09-22');
+  const p=api.worklogPayloads();
+  assert.equal(JSON.stringify(p.map(x=>[x.d,x.ids])),JSON.stringify([['2026-09-18',['1','2']],['2026-09-22',['3']]]),'처리한 것만, 작성일별로');
+  const a=api.auditDays();
+  assert.equal(Object.keys(a.days).join(','),'2026-09-18,2026-09-20,2026-09-22');
+  assert.equal(a.days['2026-09-22'].items.length,2);
+  assert.equal(a.days['2026-09-20'].date,'2026-09-20');
 });
