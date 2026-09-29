@@ -661,6 +661,24 @@
     return hit/a.length;
   }
 
+  /* 줄여 쓴 낱말 대응 — 같은 낱말을 먼저 짝짓고, 남은 유저 낱말은 CMS 낱말의 앞부분인지 본다.
+     유저 낱말이 모두 짝지어지고 CMS 낱말도 60% 이상 쓰였을 때만 인정한다. */
+  function abbrMatch(uT, cT){
+    if(uT.length<2 || !cT.length) return null;
+    var used={}, left=[], pairs=[], exact=0;
+    uT.forEach(function(t){ var j=cT.indexOf(t); while(j>=0 && used[j]) j=cT.indexOf(t, j+1);
+      if(j>=0){ used[j]=1; exact++; } else left.push(t); });
+    for(var i=0;i<left.length;i++){
+      var t=left[i], hit=-1;
+      if(t.length>=2) for(var k=0;k<cT.length;k++){ if(!used[k] && cT[k].indexOf(t)===0 && t.length/cT[k].length>=0.5){ hit=k; break; } }
+      if(hit<0) return null;
+      used[hit]=1; pairs.push(t+'→'+cT[hit]);
+    }
+    var cover=Object.keys(used).length/cT.length;
+    if(cover<0.6 || !pairs.length) return null;       /* 줄인 낱말이 없으면 앞 단계들의 몫이다 */
+    return { cover:cover, exact:exact, pairs:pairs };
+  }
+
   /* 유저 입력에서 CMS 제품명을 뺀 나머지를 돌려준다 (옵션 후보) */
   function residueOf(userNorm, cmsNorm){
     if(!cmsNorm || cmsNorm.length>=userNorm.length) return null;
@@ -688,9 +706,12 @@
     var toks=tokenize(productName);
     var whole=stripSize(String(productName).replace(/\[[^\]]*\]/g,' ')).trim();
     if(whole && toks.indexOf(whole)<0) toks.unshift(whole);
+    /* 전에 배운 연결이 있으면 그 제품 이름으로 먼저 찾는다 — 검색 결과에 안 걸려 못 쓰던 것을 막는다 */
+    var known=histLoad().alias[aliasKey(brandId, productName)];
+    if(known && known.name && toks.indexOf(known.name)<0) toks.unshift(known.name);
     var seen={}, cand=[], okQueries=0;
     for(var i=0;i<toks.length;i++){
-      var r=await get(API+'/admin/products?approved=true&brandApproved=true&page=1&pageSize=20&brandId='+brandId+'&q='+encodeURIComponent(toks[i]));
+      var r=await get(API+'/admin/products?approved=true&brandApproved=true&page=1&pageSize=40&brandId='+brandId+'&q='+encodeURIComponent(toks[i]));
       var rows=listOf(r.json);
       if(r.status===200 && rows){ okQueries++;
         rows.forEach(function(p){ if(p&&p.id!=null&&!seen[p.id]){seen[p.id]=1;cand.push({id:p.id,name:p.name||p.productName||''});} });
@@ -744,6 +765,23 @@
     if(subset.length>1){
       return { pick:subset[0].p, confident:false,
                why:'단어를 빠뜨린 후보 '+subset.length+'건 ['+subset.slice(0,4).map(function(x){return x.p.name;}).join(' / ')+'] — 사람이 선택',
+               candidates:cand };
+    }
+
+    /* 2-1) 낱말을 줄여 씀 — 유저 "미러 블러 멜팅 에센스" / CMS "미러링 블러 멜팅팟 에센스".
+            글자 유사도(0.67)로는 기준에 못 미쳐 "제품 없음"이 되던 경우다.
+            유저 낱말 하나하나가 CMS 의 서로 다른 낱말과 같거나 그 앞부분이면 같은 제품으로 본다.
+            종류가 같아야 하고, 이렇게 맞는 후보가 하나뿐일 때만 확정한다. */
+    var abbr=cand.map(function(p){ var m=abbrMatch(uT, tokensOf(p.name)); return { p:p, m:m }; })
+      .filter(function(x){ return x.m && kindRel(productName, x.p.name)!=='clash' && kindRel(productName, x.p.name)!=='near'; })
+      .sort(function(a,b){ return b.m.cover-a.m.cover || b.m.exact-a.m.exact; });
+    if(abbr.length===1 || (abbr.length>1 && (abbr[0].m.cover>abbr[1].m.cover || abbr[0].m.exact>abbr[1].m.exact))){
+      return { pick:abbr[0].p, confident:true,
+               why:'유저가 낱말을 줄여 씀 ['+abbr[0].m.pairs.join(' · ')+'] — 「'+abbr[0].p.name+'」', candidates:cand };
+    }
+    if(abbr.length>1){
+      return { pick:abbr[0].p, confident:false,
+               why:'줄여 쓴 이름에 맞는 후보 '+abbr.length+'건 ['+abbr.slice(0,3).map(function(x){ return x.p.name; }).join(' / ')+'] — 사람이 선택',
                candidates:cand };
     }
 
@@ -1004,7 +1042,9 @@
         keys.slice(0, keys.length-8000).forEach(function(k){ delete h.texts[k]; });
       }
       if(h.gate.length>200) h.gate=h.gate.slice(-200);
+      var jh=h._jh; delete h._jh;
       localStorage.setItem(HIST_KEY, JSON.stringify(h));
+      if(jh) h._jh=jh;
     }catch(e){}
   }
   function histUser(h, nick){ var k=String(nick||''); return h.users[k]||(h.users[k]={approve:0,hide:0,revise:0}); }
@@ -1037,7 +1077,8 @@
     if(r.warn) why.push(r.warn);
     if(r.dup) why.push(r.dup);
     var u=h.users[String(r.user||'')];
-    if(u && u.hide) why.push('과거 미노출 '+u.hide+'회 사용자');
+    var hides=Math.max(u ? (u.hide||0) : 0, (h._jh||{})[String(r.user||'')]||0);   /* 다른 컴퓨터에서 미노출한 것도 센다 */
+    if(hides) why.push('과거 미노출 '+hides+'회 사용자');
     /* 짧은 본문인데 제품·브랜드 언급도 없으면 제품 리뷰인지 확신할 수 없다 */
     if(body<80){
       var nt=normText(r._body);
@@ -1051,6 +1092,7 @@
   /* 판정이 끝난 뒤 리뷰끼리 비교해야 알 수 있는 것들 */
   function postScan(){
     var h=histLoad();
+    h._jh={}; var J=sentLoad(); Object.keys(J).forEach(function(k){ var e=J[k]; if(e && e.action==='hide' && e.u) h._jh[e.u]=(h._jh[e.u]||0)+1; });
     var items=results.filter(function(r){ return r && r._body!==undefined; });
     items.forEach(function(r){ r._nt=normText(r._body); r._bg=r._nt.length>=30 ? bigrams(r._nt) : null; });
 
@@ -1136,11 +1178,151 @@
           r.reasons.push('등록 확인 → 재선택 요청 ('+pr.why+')');
           found.push(r);
         } else {
-          r.recheck = pr.pick ? '후보 「'+pr.pick.name+'」 — 확정 못 함' : (pr.lookupFailed ? '제품 조회 실패' : '아직 CMS에서 검색되지 않음');
+          /* 이름이 달라 못 찾았어도, 방금 내가 그 브랜드에 등록한 제품이 있으면 그것이다 */
+          var me=(typeof ME!=='undefined' && ME) || await whoAmI();
+          var pe=pendingLoad()[String(r.id)]||{};
+          var entry={ id:String(r.id), ex:true, st:'open', b:r.brand, bid:b.approvedBrand.id, p:r.product,
+                      since:pe.since||new Date(Date.now()-6*3600e3).toISOString() };
+          var as=me ? associate([entry], await myRecentProducts(me)) : [];
+          if(as.length){
+            var ap=as[0].p;
+            r.action='revise_product'; r.exec=true; r.recheck=null;
+            r.product_exact=ap.name; r.product_id=ap.id;
+            r.brand_match={ id:b.approvedBrand.id, name:b.approvedBrand.name, tier:b.tier };
+            r.reasons.push('방금 등록한 「'+ap.name+'」와 연결 (이름 일치도 '+as[0].s.toFixed(2)+')');
+            found.push(r);
+          } else {
+            r.recheck = pr.pick ? '후보 「'+pr.pick.name+'」 — 확정 못 함' : (pr.lookupFailed ? '제품 조회 실패' : '아직 CMS에서 검색되지 않음');
+          }
         }
       }catch(e){ r.recheck='재확인 오류 — '+(e&&e.message||e); }
     }
     return found;
+  }
+
+  /* ── 대기 목록과 경험 쌓기 ───────────────────────────────
+     콘솔이 "상품등록 필요 · 브랜드+상품 등록 · 확인"으로 넘긴 리뷰를 유저가 쓴 표기 그대로 기억해 두고,
+     그 뒤 일어난 일에서 배운다.
+       - 내 계정이 그 브랜드에 새 제품을 등록했다 → 이름이 맞으면 그 리뷰의 제품으로 짝짓고 수정요청을 준비한다
+       - 콘솔이나 CMS 화면에서 수정요청을 보냈다 → 보낸 것으로 표시하고 계속 지켜본다
+       - 유저가 제품을 다시 골랐다(목록에 CMS 제품명이 뜬다) → (브랜드, 유저 표기) → 그 제품 을 배운다
+     배운 연결은 다음 스캔의 제품 찾기(1-1단계)에서 바로 쓰이고, 업무일지 서버로 다른 컴퓨터와 나눈다.
+     상태 st: open 대기 · sent 콘솔이 요청 보냄 · sent-manual CMS 에서 직접 보냄 · learned 배움 · resolved 끝남 */
+  var PENDING_KEY='unpa-console-pending-v1';
+  var MANUAL_KINDS={ register_product:1, register_brand:1, hold:1 };
+  function pendingLoad(){ try{ var o=JSON.parse(localStorage.getItem(PENDING_KEY)||'{}'); return (o && typeof o==='object') ? o : {}; }catch(e){ return {}; } }
+  function pendingSave(o){
+    var now=Date.now();
+    Object.keys(o).forEach(function(k){ var e=o[k]; if(!e || now-(Date.parse(e.since||0)||0)>90*864e5) delete o[k]; });   /* 90일 지난 것은 버린다 */
+    try{ localStorage.setItem(PENDING_KEY, JSON.stringify(o)); return true; }catch(e){ return false; }
+  }
+  function pendingMark(id, st, extra){
+    var o=pendingLoad(), e=o[String(id)]; if(!e) return;
+    o[String(id)]=Object.assign({}, e, extra||{}, { st:st, u:new Date().toISOString() });
+    pendingSave(o);
+  }
+  /* 스캔 결과에서 사람이 할 일로 남긴 것을 기억한다 */
+  function pendingRecord(rows){
+    var o=pendingLoad(), now=new Date().toISOString();
+    rows.forEach(function(r){
+      if(!r || r.id==null) return;
+      var k=String(r.id), e=o[k];
+      if(MANUAL_KINDS[r.action] && !r.applied){
+        o[k]=Object.assign({}, e||{}, {
+          id:k, d:r.date||SCAN_DATE, b:String(r.brand||''), p:String(r.product||''),
+          bid:(r.brand_match && r.brand_match.id) || (e && e.bid) || null,
+          a:r.action, ex:!!r.exbak, why:String((r.reasons||[]).slice(-1)[0]||'').slice(0,90),
+          since:(e && e.since) || now, u:now,
+          st:(e && (e.st==='sent-manual' || e.st==='learned')) ? e.st : 'open' });
+      }
+    });
+    pendingSave(o);
+  }
+  function brandSame(e, p){
+    if(e.bid && p.bid) return String(e.bid)===String(p.bid);
+    var a=bareName(e.b), b=bareName(p.bname);
+    if(!a || !b) return false;
+    if(a===b) return true;
+    var mn=Math.min(a.length,b.length), mx=Math.max(a.length,b.length);
+    return (a.indexOf(b)>=0 || b.indexOf(a)>=0) && mn/mx>=0.6;
+  }
+  /* 사람이 이미 "새 제품이 필요하다"고 보고 등록까지 한 뒤라 기준을 조금 낮춰도 된다 — 대신 종류가 다르면 안 되고, 후보가 뚜렷해야 한다 */
+  function nameScore(userName, cmsName){
+    if(kindRel(userName, cmsName)==='clash') return 0;
+    var uT=tokensOf(userName), cT=tokensOf(cmsName);
+    var ab=abbrMatch(uT, cT);
+    var d=diceSim(norm(canonKind(stripSize(userName))), norm(canonKind(stripSize(cmsName))));
+    var lc=(looseCover(uT, cT)+looseCover(cT, uT))/2;
+    return Math.max(ab ? 0.9 : 0, d, lc);
+  }
+  /* 대기 리뷰 ↔ 내가 그 뒤에 등록한 제품 */
+  function associate(entries, mine){
+    var out=[];
+    entries.forEach(function(e){
+      if(!e || !e.ex || !(e.st==='open' || e.st==='sent-manual')) return;
+      var t0=(Date.parse(e.since||0)||0)-15*60000;
+      var c=mine.filter(function(p){ return (Date.parse(p.at)||0)>=t0 && brandSame(e, p); })
+        .map(function(p){ return { p:p, s:nameScore(e.p, p.name) }; })
+        .filter(function(x){ return x.s>=0.55; })
+        .sort(function(a,b){ return b.s-a.s; });
+      if(!c.length || (c.length>1 && c[0].s-c[1].s<0.1)) return;       /* 비슷한 게 둘이면 사람에게 */
+      out.push({ e:e, p:c[0].p, s:c[0].s });
+    });
+    return out;
+  }
+  function learnAlias(bid, userName, pid, name){
+    if(!bid || !pid || !userName) return;
+    var h=histLoad(), k=aliasKey(bid, userName), prev=h.alias[k];
+    h.alias[k]={ pid:pid, name:name, n:(prev && String(prev.pid)===String(pid)) ? (prev.n||1)+1 : 1, t:new Date().toISOString() };
+    histSave(h);
+  }
+  /* CMS 목록에서 본 대기 리뷰의 그 뒤 상태로 배운다 (me = 내 계정) */
+  async function learnFromWatch(watch, me){
+    var o=pendingLoad(), learned=0, sent=0, done=0;
+    var ids=Object.keys(watch||{});
+    for(var i=0;i<ids.length;i++){
+      var k=ids[i], e=o[k], w=watch[k]; if(!e || !w || e.st==='learned' || e.st==='resolved') continue;
+      if(w.visible===false && w.status==='PENDING'){ e.st='resolved'; done++; continue; }
+      if(w.status==='REVISED' && w.actor===me && e.st==='open'){ e.st='sent-manual'; e.u=new Date().toISOString(); sent++; }
+      /* 유저가 제품을 골랐다 — 목록의 제품명이 유저 표기에서 CMS 제품명으로 바뀐다 */
+      if(e.ex && (w.status==='APPROVED' || w.status==='UPDATED') && w.productName && norm(w.productName)!==norm(e.p)){
+        var dr=await get(API+'/admin/reviews/'+k);
+        var pid=dr.json && dr.json.productId;
+        if(pid){
+          var bid=e.bid;
+          if(!bid){ var b=await findBrand(w.brandName||e.b); bid=b.approvedBrand && b.approvedBrand.id; }
+          learnAlias(bid, e.p, pid, dr.json.productName||w.productName);
+          e.st='learned'; e.pid=pid; e.pname=dr.json.productName||w.productName; e.u=new Date().toISOString(); learned++;
+        }
+      } else if(w.status==='APPROVED' && e.st!=='sent-manual'){ e.st='resolved'; done++; }
+    }
+    pendingSave(o);
+    return { learned:learned, sent:sent, done:done };
+  }
+  /* 내가 최근에 등록한 제품 (등록 직후 재확인용) */
+  async function myRecentProducts(me){
+    var r=await get(API+'/admin/products?approved=true&brandApproved=true&page=1&pageSize=100'), rows=listOf(r.json)||[];
+    return rows.filter(function(p){ return p && p.approvedAt && String(p.approvedBy||'').trim().toLowerCase()===me; })
+      .map(function(p){ return { id:p.id, name:p.name||'', bid:p.brand&&p.brand.id, bname:(p.brand&&p.brand.name)||'', at:p.approvedAt }; });
+  }
+  /* 업무일지 서버에 올려 다른 컴퓨터와 나누는 콘솔 경험 */
+  function consoleState(){
+    var h=histLoad();
+    return { alias:h.alias, gate:h.gate, texts:h.texts, done:doneRaw(), pending:pendingLoad(), sent:sentLoad() };
+  }
+  /* 서버에서 합쳐 돌아온 경험을 이 브라우저에 반영한다 — 그사이 새로 쌓인 것도 잃지 않게 한 번 더 합친다 */
+  function applyConsoleState(m){
+    if(!m || typeof m!=='object') return false;
+    var C=window.WorklogCore;
+    if(!C || !C.mergeConsole) return false;
+    var x=C.mergeConsole(m, consoleState());
+    var h=histLoad(); h.alias=x.alias; h.gate=x.gate; h.texts=x.texts; histSave(h);
+    try{
+      localStorage.setItem(DONE_KEY, JSON.stringify(x.done));
+      localStorage.setItem(SENT_KEY, JSON.stringify(x.sent));
+    }catch(e){}
+    pendingSave(x.pending);
+    return true;
   }
 
   /* ── 패널 ── */
@@ -1208,12 +1390,13 @@
       : '<div style="color:#3ddc97">짝수일에 남은 일이 없습니다 🎉</div>';
     box.innerHTML=head(
       '<div style="margin-top:9px;color:#9fb4ab">📋 남은 일 · 짝수일 최근 '+BACKLOG_DAYS+'일</div>'
-      +'<div style="margin-top:6px;font-size:12px;color:#9fb4ab">'+list+'</div>'+warns
+      +'<div style="margin-top:6px;font-size:12px;color:#9fb4ab">'+list+'</div>'+warns+'<div id="csAssoc"></div>'
       +(backlog.length?'<button id="csScanAll" style="margin-top:11px;width:100%;background:#3ddc97;color:#04130c;border:0;border-radius:9px;padding:10px;font-weight:800;cursor:pointer">'
         +'▶ 남은 것 전부 스캔 ('+backlog.length+'일 · '+total+'건'+(upd?' · 수정완료 '+upd:'')+')</button>':'')
       +manual);
     bindManual();
     if(backlog.length) document.getElementById('csScanAll').onclick=function(){ scanAll(backlog); };
+    renderAssoc();
   }
 
   function listUrl(sd,page,size){ return API+'/admin/reviews?pageSize='+size+'&startDate='+sd+'&endDate='+sd+'&beforeApproval=true&page='+page+'&field=CREATED_AT&direction=desc'; }
@@ -1362,6 +1545,7 @@
       await delay(60);
     }
     postScan();
+    pendingRecord(results);
     outboxAudit();
     renderQueue(SCAN_LABEL||SCAN_DATE);
   }
@@ -1534,6 +1718,7 @@
     try{ var m=sentLoad(), id=String(r.id), prev=m[id];
       m[id]={ action:r.action, at:new Date().toISOString(), date:r.date||SCAN_DATE,
               rn:reviseCount(prev)+(isRevise(r.action)?1:0) };
+      if(r.user) m[id].u=String(r.user).slice(0,40);
       /* 브라우저 저장공간(약 5MB)이 차면 기록이 조용히 멈춰 중복 발송이 가능해진다.
          남은 일 목록(60일)보다 훨씬 오래된 기록부터 버린다. */
       var keys=Object.keys(m);
@@ -1570,13 +1755,15 @@
      브라우저에 저장해 재스캔·새로고침 후에도 유지한다. */
   var DONE_KEY='unpa-console-manual-done-v1';
   var MANUAL_TODO={ register_product:1, register_brand:1 };
-  function doneLoad(){ try{ return JSON.parse(localStorage.getItem(DONE_KEY)||'{}'); }catch(e){ return {}; } }
+  function doneRaw(){ try{ var o=JSON.parse(localStorage.getItem(DONE_KEY)||'{}'); return (o && typeof o==='object') ? o : {}; }catch(e){ return {}; } }
+  /* 해제한 것은 {off:true} 로 남는다 — 다른 컴퓨터 기록과 합칠 때 되살아나지 않게 */
+  function doneLoad(){ var m=doneRaw(), out={}; Object.keys(m).forEach(function(k){ if(m[k] && !m[k].off) out[k]=m[k]; }); return out; }
   function doneToggle(r, on){
-    var m=doneLoad(), id=String(r.id);
+    var m=doneRaw(), id=String(r.id);
     if(on) m[id]={ at:new Date().toISOString(), action:r.action, date:r.date||SCAN_DATE };
-    else delete m[id];
+    else m[id]={ off:true, at:new Date().toISOString() };
     try{ localStorage.setItem(DONE_KEY, JSON.stringify(m)); }catch(e){ alert('완료 표시를 저장하지 못했습니다 (브라우저 저장공간 확인).'); }
-    return m[id]||null;
+    return (m[id] && !m[id].off) ? m[id] : null;
   }
   /* 저장은 ISO(UTC) 로 하되 화면에는 이 컴퓨터 시간대로 보인다 */
   function doneStamp(at){
@@ -1658,6 +1845,8 @@
                    told:r.action==='revise_product'?(r.product_exact||null):null,
                    conf:r.conf||null, sample:!!r.sample, why:(r.reasons||[]).slice(-2)});
         if(ok){
+          if(pendingLoad()[String(r.id)]) pendingMark(r.id, r.action==='revise_product' ? 'learned' : isRevise(r.action) ? 'sent' : 'resolved',
+                                                     r.action==='revise_product' ? { pid:r.product_id, pname:r.product_exact } : null);
           if(!sentMark(r)) log('&nbsp;&nbsp;<span style="color:#ff8f6b">⚠ 전송 기록 저장 실패 — 브라우저 저장공간을 확인하세요 (재스캔 때 다시 보낼 수 있음)</span>');
           r._allowResend=false;
           var hu=histUser(hist, r.user);
@@ -1686,7 +1875,7 @@
     } finally {
       window.__CONSOLE_RUNNING=false;     /* 도중에 예외가 나도 콘솔이 "이미 실행 중"으로 잠기지 않게 */
     }
-    renderQueue(SCAN_DATE);
+    if(results.length) renderQueue(SCAN_DATE); else renderStart(ymd(new Date()));
     if(logs.some(function(x){ return x.ok; })) syncNow();      /* 처리한 것을 바로 업무일지에 */
   }
 
@@ -1779,7 +1968,8 @@
   async function collectWork(me, onProgress){
     var now=new Date(), dates=[];
     for(var i=0;i<WORK_DAYS;i++) dates.push(ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate()-i)));
-    var reviews={}, products={}, failed=[], next=0, doneN=0;
+    var reviews={}, products={}, failed=[], next=0, doneN=0, watch={}, mine=[];
+    var watchIds=pendingLoad();
     async function worker(){
       while(next<dates.length){
         var sd=dates[next++], page=1;
@@ -1789,9 +1979,14 @@
           if(r.status!==200 || !rows){ await delay(800); r=await get(url); rows=listOf(r.json); }
           if(r.status!==200 || !rows){ failed.push(sd); break; }
           rows.forEach(function(x){
-            if(!x || x.id==null || !x.approvedAt || lastActor(x)!==me) return;
+            if(!x || x.id==null) return;
+            /* 대기 목록에 있는 리뷰는 그 뒤 상태를 지켜본다 (배우기) */
+            if(watchIds[String(x.id)]) watch[String(x.id)]={ status:x.status, productName:x.productName||'', brandName:x.brandName||'',
+                                                             visible:x.visible, actor:lastActor(x) };
+            if(!x.approvedAt || lastActor(x)!==me) return;
             var d=localDay(x.approvedAt);
-            if(d && d>=AUTO_FROM) reviews[String(x.id)]=d;
+            /* [승인한 날, 브랜드, 제품, 작성일] — 업무일지 작업 증빙 */
+            if(d && d>=AUTO_FROM) reviews[String(x.id)]=[d, x.brandName||'', x.productName||'', localDay(x.createdAt)||''];
           });
           if(rows.length<1000) break;
           page++;
@@ -1812,13 +2007,14 @@
         if(!p || p.id==null) return;
         var c=localDay(p.createdAt); if(c && (!oldest || c<oldest)) oldest=c;
         if(!p.approvedAt || String(p.approvedBy||'').trim().toLowerCase()!==me) return;
-        var d=localDay(p.approvedAt);
-        if(d && d>=AUTO_FROM) products[String(p.id)]=d;
+        var d=localDay(p.approvedAt), bn=(p.brand && p.brand.name) || '';
+        mine.push({ id:p.id, name:p.name||'', bid:p.brand && p.brand.id, bname:bn, at:p.approvedAt });
+        if(d && d>=AUTO_FROM) products[String(p.id)]=[d, bn, p.name||''];
       });
       if(prow.length<300 || (oldest && oldest<since)) break;
       pg++;
     }
-    return { reviews:reviews, products:products, failed:failed, at:new Date().toISOString() };
+    return { reviews:reviews, products:products, failed:failed, watch:watch, mine:mine, at:new Date().toISOString() };
   }
 
   /* ── 보관함: 아직 업무일지에 못 넘긴 검수기록·실행 결과 ── */
@@ -1862,20 +2058,23 @@
         day.executions=(day.executions||[]).concat([{ id:x.id, action:x.action, at:x.at, ok:x.ok, status:x.status,
           told:x.told||null, conf:x.conf||null, sample:!!x.sample }]);
         /* 방금 승인한 것은 CMS 재조회 없이 바로 반영 — 날짜는 처리한 시각 기준 (자정 무렵 어긋남 방지) */
-        if(x.ok && x.action==='approve') o.reviews.push([String(x.id), localDay(x.at)||today]);
+        if(x.ok && x.action==='approve') o.reviews.push([String(x.id), localDay(x.at)||today, (r&&r.brand)||'', (r&&(r.product_exact||r.product))||'', (r&&r.date)||'', 'c']);
       });
     });
   }
   function workPayload(){
-    var ob=outboxLoad(), rv=[], pv=[];
+    var ob=outboxLoad(), rv=[], pv=[], J=sentLoad();
+    var arr=function(x){ return Array.isArray(x) ? x : [x]; };
     if(WORK){
-      Object.keys(WORK.reviews).forEach(function(id){ rv.push([id, WORK.reviews[id]]); });
-      Object.keys(WORK.products).forEach(function(id){ pv.push([id, WORK.products[id]]); });
+      /* [리뷰ID, 승인한 날, 브랜드, 제품, 작성일, 출처(c 콘솔 · m CMS 직접)] */
+      Object.keys(WORK.reviews).forEach(function(id){ var x=arr(WORK.reviews[id]);
+        rv.push([id, x[0], x[1]||'', x[2]||'', x[3]||'', (J[id] && J[id].action==='approve') ? 'c' : 'm']); });
+      Object.keys(WORK.products).forEach(function(id){ var x=arr(WORK.products[id]); pv.push([id, x[0], x[1]||'', x[2]||'']); });
     }
-    (ob.reviews||[]).forEach(function(x){ if(x && validDate(x[1]) && x[1]>=AUTO_FROM) rv.push([String(x[0]), x[1]]); });
+    (ob.reviews||[]).forEach(function(x){ if(x && validDate(x[1]) && x[1]>=AUTO_FROM) rv.push([String(x[0])].concat(x.slice(1))); });
     return { v:1, seq:ob.seq||0,
              work:{ v:1, from:AUTO_FROM, to:ymd(new Date()), reviews:rv, products:pv, partial:!!(WORK && WORK.failed.length) },
-             audit:ob.audit||{} };
+             audit:ob.audit||{}, pending:pendingList(), console:consoleState() };
   }
   function syncNonce(){
     try{ return Array.prototype.map.call(crypto.getRandomValues(new Uint8Array(16)),function(x){ return (x<16?'0':'')+x.toString(16); }).join(''); }
@@ -1909,6 +2108,7 @@
       if(ev.data.type!=='unpa-sync-done') return;
       finish();
       if(!ev.data.ok){ syncButton('<span style="color:#ff8f6b">⚠ 업무일지 반영 실패 — '+esc(String(ev.data.error||'').slice(0,80))+'</span>'); return; }
+      if(ev.data.console) applyConsoleState(ev.data.console);
       /* 보낸 뒤로 보관함에 새로 쌓인 게 없으면 비운다 (새로 쌓였으면 다음에 함께 다시 보낸다 — 합칠 때 중복은 걸러진다) */
       if((outboxLoad().seq||0)===payload.seq){ try{ localStorage.removeItem(OUTBOX_KEY); }catch(e){} }
       var t=ev.data.today||{}, hm=new Date().toTimeString().slice(0,5);
@@ -1916,7 +2116,11 @@
         +(ev.data.nChanges?' · 바뀐 날 '+ev.data.nChanges+'일':'')
         +(ev.data.auditDays?' · 검수기록 '+ev.data.auditDays+'일':'')
         +(ev.data.auditError?' <span style="color:#f5c451">(검수기록 저장 실패 — '+esc(String(ev.data.auditError).slice(0,60))+')</span>':'')
-        +(WORK && WORK.failed.length?' <span style="color:#f5c451">(일부 날짜 조회 실패 — 다음에 채움)</span>':''));
+        +(WORK && WORK.failed.length?' <span style="color:#f5c451">(일부 날짜 조회 실패 — 다음에 채움)</span>':'')
+        +(ev.data.cloud==='on' ? ' · <span style="color:#9fe3c4">☁ 다른 컴퓨터와 합침</span>'
+          : ev.data.cloud==='off' ? ' · <span style="color:#6b7f77">☁ 업무일지 로그인 전 — 이 컴퓨터에만</span>'
+          : ev.data.cloud ? ' · <span style="color:#f5c451">☁ 서버 합치기 실패 — 다음에 다시</span>' : '')
+        +(LEARN_NOTE?' · '+LEARN_NOTE:''));
     };
     window.addEventListener('message', onMsg);
     timer=setTimeout(function(){ finish(); syncButton('<span style="color:#ff8f6b">⚠ 업무일지 창 응답 없음</span>'); }, 45000);
@@ -1927,7 +2131,78 @@
     if(!ME){ syncStatus('<span style="color:#ff8f6b">⚠ CMS 계정을 확인하지 못해 업무일지 동기화를 건너뜀</span>'); return; }
     syncStatus('📒 업무일지 집계 중… (CMS 최근 '+WORK_DAYS+'일, 조회만)');
     WORK=await collectWork(ME, function(d,n){ if(!SYNCING) syncStatus('📒 업무일지 집계 중… '+d+' / '+n+'일'); });
+    try{ await learnAndMatch(); }catch(e){}
     syncNow();
+  }
+  /* 대기 리뷰의 그 뒤 상태에서 배우고, 내가 새로 등록한 제품과 짝짓는다 */
+  var ASSOC=[], LEARN_NOTE='';
+  async function learnAndMatch(){
+    if(!WORK || !ME) return;
+    var lw=await learnFromWatch(WORK.watch, ME);
+    var o=pendingLoad(), list=Object.keys(o).map(function(k){ return o[k]; });
+    var as=associate(list, WORK.mine||[]), silent=0;
+    /* CMS 에서 이미 직접 수정요청을 보낸 건은 보낸 제품을 배우기만 한다 */
+    as.filter(function(x){ return x.e.st==='sent-manual'; }).forEach(function(x){
+      learnAlias(x.p.bid, x.e.p, x.p.id, x.p.name); pendingMark(x.e.id, 'learned', { pid:x.p.id, pname:x.p.name }); silent++; });
+    var open=pendingIds();
+    ASSOC=as.filter(function(x){ return x.e.st==='open' && (!open || open[x.e.id]); });
+    var n=lw.learned+silent;
+    LEARN_NOTE = n ? '<span style="color:#9fe3c4">🧠 제품명 연결 '+n+'건 새로 배움</span>' : '';
+    renderAssoc();
+  }
+  /* 지금 CMS 에서 아직 검수 대기인 리뷰 (시작 화면에서 불러온 남은 일) */
+  function pendingIds(){
+    if(!BACKLOG) return null;
+    var m={}; BACKLOG.forEach(function(b){ b.rows.forEach(function(x){ m[String(x.id)]=1; }); }); return m;
+  }
+  /* 업무일지 "아직 안 끝난 일" 목록 */
+  function pendingList(){
+    var o=pendingLoad(), open=pendingIds();
+    return Object.keys(o).map(function(k){ return o[k]; })
+      .filter(function(e){ return (e.st==='open' || e.st==='sent-manual') && (!open || open[e.id]); })
+      .sort(function(a,b){ return a.d<b.d ? -1 : 1; })
+      .map(function(e){ return { id:e.id, d:e.d, brand:e.b, product:e.p, action:e.a, why:e.why, st:e.st, since:e.since }; });
+  }
+  function assocJob(x){
+    var r=results.filter(function(y){ return String(y.id)===String(x.e.id); })[0] || { id:x.e.id, user:'', reasons:[] };
+    r.action='revise_product'; r.exec=true; r.approvable=false;
+    r.brand=r.brand||x.e.b; r.product=r.product||x.e.p; r.date=r.date||x.e.d;
+    r.product_exact=x.p.name; r.product_id=x.p.id;
+    r.brand_match={ id:x.p.bid, name:x.p.bname };
+    var why='방금 등록한 「'+x.p.name+'」와 연결';
+    if((r.reasons||[]).indexOf(why)<0) (r.reasons=r.reasons||[]).push(why);
+    return r;
+  }
+  function renderAssoc(){
+    if(!ASSOC.length) return;
+    if(results.length){
+      /* 스캔한 뒤라면 해당 카드를 수정요청으로 바꿔 대기열에 올린다 */
+      var hit=0; ASSOC.forEach(function(x){ if(results.some(function(y){ return String(y.id)===String(x.e.id) && !y.applied; })){ assocJob(x); hit++; } });
+      if(hit) renderQueue(SCAN_DATE);
+      return;
+    }
+    var el=document.getElementById('csAssoc'); if(!el) return;
+    el.innerHTML='<div style="margin-top:10px;background:#132019;border:1px solid #3ddc97;border-radius:9px;padding:9px 11px">'
+      +'<div style="font-weight:800;color:#9fe3c4">🆕 방금 등록한 제품과 이어진 리뷰 '+ASSOC.length+'건</div>'
+      +ASSOC.slice(0,6).map(function(x){ return '<div style="font-size:11.5px;color:#9fb4ab;margin-top:3px">#'+esc(x.e.id)+' «'+esc(x.e.p)+'» → <span style="color:#3ddc97">「'+esc(x.p.name)+'」</span></div>'; }).join('')
+      +(ASSOC.length>6?'<div style="font-size:11px;color:#6b7f77">… 외 '+(ASSOC.length-6)+'건</div>':'')
+      +'<button id="csAssocGo" style="margin-top:8px;width:100%;background:#3ddc97;color:#04130c;border:0;border-radius:8px;padding:8px;font-weight:800;cursor:pointer">이 제품으로 수정요청 보내기 ('+ASSOC.length+')</button></div>';
+    document.getElementById('csAssocGo').onclick=function(){
+      var jobs=ASSOC.map(assocJob);
+      runJobs(jobs).then(function(){ ASSOC=ASSOC.filter(function(x){ return !jobs.some(function(j){ return String(j.id)===String(x.e.id) && j.applied; }); }); });
+    };
+  }
+  /* 합치기 규칙(worklog-core.js)을 업무일지 사이트에서 불러온다 — 다른 컴퓨터 경험을 합칠 때 쓴다 */
+  function loadCore(){
+    return new Promise(function(res){
+      if(window.WorklogCore && window.WorklogCore.mergeConsole) return res(true);
+      try{
+        var sc=document.createElement('script');
+        sc.src=WORKLOG_URL+'worklog-core.js?t='+Date.now();
+        sc.onload=function(){ res(!!window.WorklogCore); }; sc.onerror=function(){ res(false); };
+        (document.head||document.body).appendChild(sc);
+      }catch(e){ res(false); }
+    });
   }
 
   /* ── 썸네일 그리드 일괄 승인 ──────────────────────────
@@ -2094,7 +2369,7 @@
   box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">템플릿 불러오는 중…</div>');
   oF.call(window,TPL_URL+'?t='+Date.now()).then(function(r){return r.json();})
     .then(function(d){ (d.templates||[]).forEach(function(t){tplMap[t.key]=t;}); }, function(){})
-    .then(function(){ return renderStart(sd); })
+    .then(function(){ loadCore(); return renderStart(sd); })
     /* 남은 일 목록을 먼저 띄우고, 업무일지 집계는 그 뒤에 뒤에서 돈다 */
     .then(function(){ return startWorkSync(); })
     .catch(function(e){ syncStatus('<span style="color:#ff8f6b">⚠ 업무일지 동기화 오류 — '+esc(e&&e.message||e)+'</span>'); });

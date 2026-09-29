@@ -26,7 +26,7 @@ function harness(){
     Blob:class{constructor(p){this.parts=p;ctx.__blobs=(ctx.__blobs||0)+1;}},Image:class{},
     URL:Object.assign(function(u,b){return new URL(u,b);},
         {createObjectURL:()=>'blob:stub',revokeObjectURL(){},prototype:URL.prototype}),
-    AbortController,setTimeout,clearTimeout,Set,Date,JSON,Math,
+    AbortController,setTimeout,clearTimeout,Set,Date,JSON,Math,WorklogCore:require('../worklog-core.js'),
     alert:m=>{ctx.__alert=m;},confirm:()=>ctx.__confirm!==false,crypto:globalThis.crypto,
     __listeners:[],addEventListener(t,f){ if(t==='message') ctx.__listeners.push(f); },
     removeEventListener(t,f){ ctx.__listeners=ctx.__listeners.filter(x=>x!==f); },
@@ -44,6 +44,8 @@ function harness(){
                      postScan,gridJobs,confidenceOf,histLoad,histSave,recheckRegistered,findProduct,aliasKey,
                      evenDates,backlogTodo,sentApply,auditDays,scanDates,
                      collectWork,workPayload,outboxLoad,outboxAudit,outboxRun,syncNow,lastActor,
+                     pendingRecord,pendingLoad,learnFromWatch,associate,consoleState,applyConsoleState,doneRaw,
+                     setBacklog:b=>{BACKLOG=b;},
                      setMe:e=>{ME=e;},setWork:w=>{WORK=w;},getSyncHtml:()=>SYNC_HTML,
                      listAll,loadBacklog,scanRows,capOf,canSend,sentMark,
                      getAbort:()=>SCAN_ABORT,
@@ -429,10 +431,10 @@ test('work is counted on the day I approved, only when I was the one who approve
     return {status:404,body:{}};
   };
   const w=await api.collectWork(ME);
-  const expect={}; expect['1']=d0; expect['2']=localYmd(new Date(at(2,23))); expect['3']=d0;
-  assert.deepEqual(JSON.parse(JSON.stringify(w.reviews)),expect);
+  const days=Object.fromEntries(Object.entries(JSON.parse(JSON.stringify(w.reviews))).map(([k,v])=>[k,v[0]]));
+  assert.deepEqual(days,{'1':d0,'2':localYmd(new Date(at(2,23))),'3':d0});
   assert.deepEqual(Object.keys(w.products).sort(),['1000','1001'],'내가 등록한 제품만');
-  assert.equal(w.products['1000'],d0);
+  assert.equal(w.products['1000'][0],d0); assert.equal(w.mine.length,2,'짝짓기에 쓸 내가 등록한 제품');
   assert.equal(w.failed.length,0);
 });
 
@@ -472,7 +474,8 @@ test('sync popup: blocked shows a one-click button; a verified reply clears the 
   fire({type:'unpa-sync-ready',nonce});
   assert.equal(posted.length,1); assert.equal(posted[0][1],'https://moowillbedone.github.io','받는 곳을 업무일지 주소로 한정');
   const pl=posted[0][0].payload;
-  assert.equal(JSON.stringify(pl.work.reviews),JSON.stringify([['5','2026-09-27']]));
+  assert.equal(JSON.stringify(pl.work.reviews),JSON.stringify([['5','2026-09-27','','','','m']]));
+  assert.ok(pl.console && pl.console.sent,'콘솔 경험도 함께 보낸다'); assert.ok(Array.isArray(pl.pending));
   assert.ok(pl.audit['2026-09-24']);
   fire({type:'unpa-sync-done',nonce,ok:true,seq:pl.seq,today:{d:'2026-09-27',r:5,p:1},nChanges:1});
   assert.deepEqual(Object.keys(api.outboxLoad()),[],'넘긴 뒤 보관함을 비운다');
@@ -492,4 +495,74 @@ test('audit records stay small: approvals keep one line, other verdicts keep the
   assert.equal(ho.reason,'욕설 · 확인'); assert.equal(ho.text,'본문'); assert.equal(ho.product_exact,'수분 크림'); assert.equal(ho.warn,'브랜드 조회 안 됨');
   assert.equal(a.schema,undefined);
   assert.ok(JSON.stringify(ap).length<400,'승인 1건 '+JSON.stringify(ap).length+'바이트');
+});
+
+/* ── 경험 쌓기 (2026-09-29) ─────────────────────────────── */
+const ago=h=>new Date(Date.now()-h*3600e3).toISOString();
+test('what a person did after the console gave up is learned for next time',async()=>{
+  const {api,ctx}=harness(); api.setDate('2026-09-24');
+  api.pendingRecord([{id:11,date:'2026-09-24',action:'register_product',brand:'앙쥬',product:'미러 블러 멜팅 에센스',exbak:true,brand_match:{id:9},reasons:['브랜드○ · 없음']},
+                     {id:12,date:'2026-09-24',action:'register_product',brand:'앙쥬',product:'수분 크림',exbak:true,brand_match:{id:9},reasons:['x']},
+                     {id:13,date:'2026-09-24',action:'hold',brand:'b',product:'p',reasons:['욕설']}]);
+  assert.equal(Object.keys(api.pendingLoad()).length,3);
+  ctx.__route=url=>{
+    if(url.endsWith('/reviews/11')) return {status:200,body:{productId:501,productName:'미러링 블러 멜팅팟 에센스'}};
+    return {status:404,body:{}};
+  };
+  const r=await api.learnFromWatch({
+    '11':{status:'UPDATED',productName:'미러링 블러 멜팅팟 에센스',brandName:'앙쥬',visible:true,actor:'someone'},   /* 유저가 제품을 골랐다 */
+    '12':{status:'REVISED',productName:'수분 크림',brandName:'앙쥬',visible:true,actor:'me@x'},                     /* CMS 에서 직접 요청 */
+    '13':{status:'PENDING',productName:'p',brandName:'b',visible:false,actor:''}},'me@x');                      /* 미노출됨 */
+  assert.equal(r.learned,1); assert.equal(r.sent,1); assert.equal(r.done,1);
+  const h=api.histLoad(); const al=h.alias[api.aliasKey(9,'미러 블러 멜팅 에센스')];
+  assert.equal(al.pid,501,'(브랜드, 유저 표기) → 유저가 고른 제품을 배운다');
+  const pend=api.pendingLoad(); assert.equal(pend['11'].st,'learned'); assert.equal(pend['12'].st,'sent-manual'); assert.equal(pend['13'].st,'resolved');
+  /* 다음에 같은 표기가 오면 이름이 전혀 안 비슷해도 바로 확정 */
+  ctx.__route=url=> url.includes('/admin/products?') ? {status:200,body:{total:1,results:[{id:501,name:'미러링 블러 멜팅팟 에센스'}]}} : {status:404,body:{}};
+  const again=await api.findProduct(9,'미러 블러 멜팅 에센스');
+  assert.equal(again.confident,true); assert.equal(again.pick.id,501);
+});
+
+test('a product I just registered is paired with the waiting review, even with a loose name',()=>{
+  const {api}=harness();
+  const e={id:'21',ex:true,st:'open',b:'앙쥬',bid:9,p:'미러 블러 멜팅 에센스',since:ago(2)};
+  const mine=[{id:501,name:'미러링 블러 멜팅팟 에센스',bid:9,bname:'앙쥬',at:ago(1)},
+              {id:502,name:'데일리 선크림',bid:9,bname:'앙쥬',at:ago(1)},
+              {id:503,name:'미러 블러 멜팅 에센스',bid:77,bname:'다른브랜드',at:ago(1)}];
+  const a=api.associate([e],mine);
+  assert.equal(a.length,1); assert.equal(a[0].p.id,501,'같은 브랜드, 대기 뒤에 등록한 제품');
+  assert.equal(api.associate([Object.assign({},e,{since:ago(0)})],mine).length,0,'대기 전에 등록된 제품은 짝짓지 않는다');
+  const twins=mine.concat([{id:504,name:'미러링 블러 멜팅팟 에센스 리필',bid:9,bname:'앙쥬',at:ago(1)}]);
+  assert.equal(api.associate([e],twins).length,0,'비슷한 후보가 둘이면 사람에게');
+  const cream={id:'22',ex:true,st:'open',b:'앙쥬',bid:9,p:'수분 크림',since:ago(2)};
+  assert.equal(api.associate([cream],[{id:505,name:'수분 토너',bid:9,bname:'앙쥬',at:ago(1)}]).length,0,'종류가 다르면 짝짓지 않는다');
+  assert.equal(api.associate([Object.assign({},e,{bid:null,b:'앙쥬(Anjou)'})],mine.slice(0,1)).length,1,'브랜드는 이름 표기 차이도 맞춘다');
+});
+
+test('recheck after registering: the fresh product is found even when search wording misses it',async()=>{
+  const {api,ctx}=harness(); api.setMe('me@x');
+  api.pendingRecord([{id:31,date:'2026-09-24',action:'register_product',brand:'앙쥬',product:'미러 블러 에센스',exbak:true,brand_match:{id:9},reasons:['없음']}]);
+  ctx.__route=url=>{
+    if(url.includes('/admin/brands?')) return {status:200,body:{total:1,results:[{id:9,name:'앙쥬',approved:true}]}};
+    if(url.includes('/admin/products?') && url.includes('brandId=')) return {status:200,body:{total:0,results:[]}};   /* 검색어로는 안 걸림 */
+    if(url.includes('/admin/products?')) return {status:200,body:{totalCount:1,results:[{id:601,name:'미러링 블러 멜팅팟 에센스',brand:{id:9,name:'앙쥬'},approvedAt:new Date().toISOString(),approvedBy:'ME@x'}]}};
+    return {status:404,body:{}};
+  };
+  const r={id:31,action:'register_product',brand:'앙쥬',product:'미러 블러 에센스',reasons:[],approvable:false};
+  const found=await api.recheckRegistered([r]);
+  assert.equal(found.length,1); assert.equal(r.action,'revise_product'); assert.equal(r.product_id,601);
+  assert.match(r.reasons.join(' '),/방금 등록한/);
+});
+
+test('experience coming back from the server is merged, not overwritten',()=>{
+  const {api,store}=harness();
+  const h=api.histLoad(); h.alias['1|a']={pid:1,name:'A',n:1,t:'2026-09-28'}; api.histSave(h);
+  store['unpa-console-sent-v1']=JSON.stringify({'7':{action:'approve',at:'2026-09-28T00:00:00Z'}});
+  store['unpa-console-manual-done-v1']=JSON.stringify({'8':{at:'2026-09-28T00:00:00Z'}});
+  const ok=api.applyConsoleState({alias:{'2|b':{pid:2,name:'B',n:1,t:'2026-09-27'}},sent:{'9':{action:'hide',at:'2026-09-27T00:00:00Z',u:'x'}},
+                                 done:{'8':{off:true,at:'2026-09-29T00:00:00Z'}},pending:{},texts:{},gate:[]});
+  assert.equal(ok,true);
+  const h2=api.histLoad(); assert.ok(h2.alias['1|a']&&h2.alias['2|b'],'이 컴퓨터에서 배운 것도, 다른 컴퓨터 것도');
+  const sent=api.sentLoad(); assert.ok(sent['7']&&sent['9'],'다른 컴퓨터에서 보낸 것은 다시 안 보낸다');
+  assert.equal(api.doneLoad()['8'],undefined,'다른 컴퓨터에서 해제한 완료 표시'); assert.equal(api.doneRaw()['8'].off,true);
 });

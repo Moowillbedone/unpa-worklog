@@ -25,6 +25,7 @@
   <ul id="chg" hidden></ul>
   <div class="st" style="font-size:12px"><a href="./" target="_blank" rel="noopener">업무일지 열기 ↗</a> · 반영이 끝나면 이 창은 저절로 닫힙니다.</div>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="worklog-core.js"></script>
 <script>
 /* 검수 콘솔(cms.unpa.me)이 이 창을 열고 CMS 집계를 넘긴다.
@@ -38,41 +39,58 @@
   var nonce=m[1], src=window.opener, done=false;
   history.replaceState(null,'',location.pathname);
 
-  function activeKey(){ try{ return localStorage.getItem('unpa-worklog-active')||'unpa-worklog-v1'; }catch(e){ return 'unpa-worklog-v1'; } }
+  /* 업무일지 서버(Supabase) — 업무일지 화면에서 로그인해 두었으면 그 로그인을 그대로 쓴다.
+     로그인 전이면 이 브라우저에만 반영하고 콘솔에 그렇게 알린다. */
+  var SB_DEFAULT={ url:'https://uqphctcinhbqjdiinlur.supabase.co',
+    key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxcGhjdGNpbmhicWpkaWlubHVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4MDg1NzEsImV4cCI6MjA5ODM4NDU3MX0.-BbeKCu8LsRgwSx6bfYPOmBRtU0ogydAEoyePdXuXRc' };
+  async function cloudIO(){
+    try{
+      if(!window.supabase) return null;
+      var c=null; try{ c=JSON.parse(localStorage.getItem('unpa-sb-cfg')||'null'); }catch(e){}
+      if(!c || !c.url || !c.key) c=SB_DEFAULT;
+      var sb=window.supabase.createClient(c.url, c.key, { auth:{ persistSession:true, autoRefreshToken:true } });
+      var s=await sb.auth.getSession(), user=s && s.data && s.data.session ? s.data.session.user : null;
+      if(!user) return null;
+      var T='worklog_months';
+      var chunk=function(list, size){ var out=[]; for(var i=0;i<list.length;i+=size) out.push(list.slice(i,i+size)); return out; };
+      return { uid:user.id, io:{
+        pull: async function(keys){
+          var all=[], parts=chunk(keys, 40);
+          for(var i=0;i<parts.length;i++){
+            var r=await sb.from(T).select('month,data,updated_at').eq('user_id',user.id).in('month',parts[i]);
+            if(r.error) throw r.error; all=all.concat(r.data||[]);
+          }
+          return all;
+        },
+        push: async function(rows){
+          /* 한 번에 너무 크게 보내지 않도록 나눠 올린다 */
+          var batch=[], size=0;
+          var flush=async function(){ if(!batch.length) return; var r=await sb.from(T).upsert(batch.map(function(x){ return Object.assign({user_id:user.id},x); }),{onConflict:'user_id,month'}); if(r.error) throw r.error; batch=[]; size=0; };
+          for(var i=0;i<rows.length;i++){ var n=JSON.stringify(rows[i].data).length; if(size+n>800000) await flush(); batch.push(rows[i]); size+=n; }
+          await flush();
+        } } };
+    }catch(e){ return null; }
+  }
   async function apply(p){
-    if(!p || p.v!==1 || !p.work) throw Error('받은 자료 형식 오류');
-    var key=activeKey(), base=null;
+    var base=null;
     /* 이 브라우저에 업무일지가 아직 없으면 저장소의 기존 기록(data/log.json)부터 깐다 — 과거 달이 사라지지 않게 */
-    if(!localStorage.getItem(key)){
+    if(!localStorage.getItem(localStorage.getItem('unpa-worklog-active')||'unpa-worklog-v1') && !localStorage.getItem('unpa-worklog-v1')){
       try{ var r=await fetch('data/log.json?t='+Date.now(),{cache:'no-store'}); if(r.ok){ var o=await r.json(); base={v:1,months:(o&&o.months)||o,dirty:[]}; } }catch(e){}
     }
-    var now=new Date();
-    /* 읽고 쓰는 사이에 다른 탭이 끼어들지 않도록 기다림 없이 한 번에 */
-    var res=WorklogCore.syncStore(localStorage.getItem(key), p.work, base, now);
-    localStorage.setItem(key, res.value);
-    /* 검수기록은 따로 — 여기서 실패해도 업무일지 건수 반영은 성공으로 둔다.
-       저장공간이 모자라면 오래된 날부터 덜어 가며 다시 시도한다. */
-    var au={days:0}, auditError=null;
-    if(p.audit && Object.keys(p.audit).length){
-      var keeps=[60,40,25,12];
-      for(var i=0;i<keeps.length;i++){
-        try{
-          au=WorklogCore.syncAudit(localStorage.getItem('unpa-audit-v1'), p.audit, now, keeps[i]);
-          localStorage.setItem('unpa-audit-v1', au.value); auditError=null; break;
-        }catch(e){ auditError=String(e&&e.message||e); au={days:0}; }
-      }
-    }
-    var info={ at:now.toISOString(), from:p.work.from, today:res.today, partial:!!p.work.partial,
-               changes:res.changes.slice(0,60), nChanges:res.changes.length, auditDays:au.days, auditError:auditError };
-    try{ localStorage.setItem('unpa-worklog-sync-v1', JSON.stringify(info)); }catch(e){}
-    return { ok:true, today:res.today, changes:res.changes.slice(0,20), nChanges:res.changes.length, auditDays:au.days, auditError:auditError };
+    st.textContent='업무일지 서버 확인 중…';
+    var c=await cloudIO();
+    st.textContent=c ? '다른 컴퓨터 기록과 합치는 중…' : '이 브라우저에 반영 중…';
+    return WorklogCore.syncWindow(localStorage, p, c && c.io, { uid:c && c.uid, base:base });
   }
   function md(d){ return (+d.slice(5,7))+'/'+(+d.slice(8,10)); }
   function show(res){
     if(!res.ok){ st.innerHTML='<span class="bad">반영 실패</span> — '+String(res.error||'').replace(/[<>&]/g,''); return; }
     st.innerHTML='<span class="ok">반영 완료</span> · 오늘('+md(res.today.d)+') 리뷰 <b>'+res.today.r+'</b> · 제품 <b>'+res.today.p+'</b>'
       +(res.nChanges?' · 바뀐 날 '+res.nChanges+'일':' · 바뀐 날 없음')+(res.auditDays?' · 검수기록 '+res.auditDays+'일':'')
-      +(res.auditError?' · <span class="bad">검수기록 저장 실패</span>':'');
+      +(res.auditError?' · <span class="bad">검수기록 저장 실패</span>':'')
+      +(res.cloud==='on' ? '<br>☁ 다른 컴퓨터 기록과 합쳤습니다'
+        : res.cloud==='off' ? '<br>☁ 업무일지에 로그인하면 회사·집 기록이 합쳐집니다'
+        : '<br><span class="bad">☁ 서버 합치기 실패</span> — 이 브라우저에는 반영됨, 다음에 다시 합칩니다');
     if(res.changes.length){
       chg.hidden=false;
       chg.innerHTML=res.changes.map(function(c){

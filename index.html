@@ -116,6 +116,19 @@ td input.num.auto{box-shadow:inset 3px 0 0 var(--mint,#3ddc97)}
 .autoInfo details{display:inline}
 .autoInfo summary{display:inline;cursor:pointer;text-decoration:underline dotted}
 .autoInfo ul{margin:6px 0 0;padding-left:18px;max-height:140px;overflow:auto}
+.evl{margin-left:4px;border:1px solid var(--line2);background:var(--surface);color:var(--mint-dk);border-radius:6px;padding:0 5px;font:inherit;font-size:11px;font-weight:800;cursor:pointer;line-height:17px}
+.evl:hover{background:var(--mint-lt)}
+.evdays{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.evdays button{border:1px solid var(--line2);background:var(--surface);border-radius:20px;padding:4px 10px;font:inherit;font-size:12px;color:var(--mid);cursor:pointer}
+.evdays button.on{background:var(--mint);border-color:var(--mint);color:#fff}
+.evsum{background:var(--sunk);border:1px solid var(--line);border-radius:10px;padding:10px 13px;margin-bottom:12px;font-size:13px}
+.evgrp{margin-top:12px;font-size:12px;font-weight:800;color:var(--mid)}
+.evrow{display:flex;gap:8px;align-items:baseline;padding:4px 0;border-bottom:1px dashed var(--line);font-size:13px}
+.evrow a{color:var(--mint-dk);font-weight:700;text-decoration:none;min-width:74px}
+.evrow .src{margin-left:auto;font-size:11px;color:var(--dim);white-space:nowrap}
+.evrow .src.c{color:var(--mint-dk)}
+.pendgrp{margin-top:10px;font-weight:800;font-size:13px}
+details.old>summary{cursor:pointer;font-weight:800;color:var(--mid);padding:6px 2px;margin-bottom:10px}
 td input.memo{color:var(--mid);font-size:12.3px;font-weight:400}
 td input::placeholder{color:#b9c4c0}
 td.inc{padding:5px 13px;text-align:right;font-family:var(--mono);font-size:12.5px;
@@ -234,7 +247,7 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
 
   <nav class="views">
     <button class="vtab on" data-v="log">📋 업무일지</button>
-    <button class="vtab" data-v="audit">🔎 검수 기록</button>
+    <button class="vtab" data-v="audit">🧾 작업 증빙</button>
   </nav>
 
   <div id="view-log">
@@ -319,6 +332,22 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
   </div><!-- /view-log -->
 
   <div id="view-audit" hidden>
+    <div class="card" id="pendCard">
+      <div class="chd"><h2>📌 아직 안 끝난 일</h2><span class="hint" id="pendHint">리뷰 콘솔을 열면 CMS 기준으로 갱신됩니다</span></div>
+      <div id="pendBody"></div>
+    </div>
+
+    <div class="card" id="evCard">
+      <div class="chd"><h2 id="evTitle">🧾 작업 증빙</h2>
+        <span class="hint" id="evHint">업무일지 숫자의 근거 — 실제로 일한 날 기준, CMS 에서 직접 한 것 포함</span>
+        <input type="date" id="evDate" class="btn ghost" style="padding:5px 9px;font-size:12px">
+      </div>
+      <div class="evdays" id="evDays"></div>
+      <div id="evBody"></div>
+    </div>
+
+    <details class="old" id="aOld">
+      <summary>판정 기록 (리뷰 작성일 기준) · 판정 기준 — 콘솔이 왜 그렇게 판정했는지 볼 때</summary>
     <div class="kpis" id="aKpis"></div>
 
     <div class="card">
@@ -406,6 +435,7 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
         그래서 수집 → 판정 → 적용을 나누고, 애매한 건 <b>보류</b>로 빼서 사람에게 넘깁니다.
       </div>
     </div>
+    </details>
   </div><!-- /view-audit -->
 
 </div>
@@ -586,6 +616,7 @@ function edit(m, d, field, val){
   if((field==='r'||field==='p')&&!Number.isSafeInteger(Math.max(0,Number(val)||0))){toast('건수는 안전한 범위의 정수로 입력하세요',true);return;}
   const day = month(m).days[d];
   day[field] = (field === 'r' || field === 'p') ? Math.max(0, parseInt(val,10) || 0) : String(val || '');
+  day._t = Date.now();
   save(m); renderAll(false);
 }
 
@@ -639,7 +670,7 @@ function renderDays(){
       + ((d[f]||0)!==au[f] ? ' · 직접 조정 '+((d[f]||0)-au[f]>0?'+':'')+((d[f]||0)-au[f]) : '')
       + (d.manual && d.manual[f]!==au[f] ? ' · 자동 전 직접 적은 값 '+d.manual[f] : '');
     rows += `<tr class="${cls}">` +
-      `<td class="d">${+cur.slice(5,7)}/${i} <span style="opacity:.5">${'일월화수목금토'[wd]}</span></td>` +
+      `<td class="d">${+cur.slice(5,7)}/${i} <span style="opacity:.5">${'일월화수목금토'[wd]}</span>${au&&(au.r||au.p)?`<button class="evl" data-ev="${key}" title="이 날 작업 목록 (작업 증빙)">≡</button>`:''}</td>` +
       `<td><input class="num${au?' auto':''}" type="number" min="0" value="${d.r||''}" placeholder="0" data-d="${dd}" data-f="r" inputmode="numeric" title="${htmlEscape(tip('r'))}"></td>` +
       `<td><input class="num${au?' auto':''}" type="number" min="0" value="${d.p||''}" placeholder="0" data-d="${dd}" data-f="p" inputmode="numeric" title="${htmlEscape(tip('p'))}"></td>` +
       `<td class="inc ${inc>0?'pos':'zero'}">${inc>0?won(inc):'—'}</td>` +
@@ -655,6 +686,7 @@ function renderDays(){
   $('#dayBody').querySelectorAll('input').forEach(el => {
     el.addEventListener('change', () => edit(cur, el.dataset.d, el.dataset.f, el.value));
   });
+  $('#dayBody').querySelectorAll('.evl').forEach(b => { b.onclick = () => openEvidence(b.dataset.ev); });
 }
 
 /* ── 렌더: 차트 ── */
@@ -924,17 +956,24 @@ async function pullAll(){
   const accountKey='unpa-worklog-v2:'+SB_USER.id;
   if(LS!==accountKey){
     if(!persist()){toast('현재 기록 저장 실패 — 내보내기 후 계정을 전환하세요',true);return;}
+    const before=JSON.parse(JSON.stringify(ST));
     LS=accountKey;dirty.clear();markActive();
-    try{const stored=JSON.parse(localStorage.getItem(LS)||'null');ST=stored?WorklogCore.months(stored.months):{};(stored&&stored.dirty||[]).forEach(m=>dirty.add(m));}
+    try{const stored=JSON.parse(localStorage.getItem(LS)||'null');
+      if(stored){ST=WorklogCore.months(stored.months);(stored.dirty||[]).forEach(m=>dirty.add(m));}
+      else{
+        /* 이 계정으로 이 브라우저 처음 — 지금까지 쌓은 기록을 그대로 옮기고, 아래에서 서버 기록과 합친다 (파일 없이) */
+        ST=WorklogCore.months(before);Object.keys(ST).forEach(m=>{delete ST[m]._remote;dirty.add(m);});persist();
+        toast('이 브라우저 기록을 계정으로 옮겼습니다 — 서버 기록과 합칩니다');
+      }}
     catch(e){ST={};toast('계정별 로컬 기록 읽기 실패. 백업을 확인하세요.',true);}
     month(cur);renderAll();
   }
   SB_BUSY = true;
   try {
-    const { data, error } = await SB.from('worklog_months').select('month,data,updated_at').eq('user_id',account);
+    const { data, error } = await SB.from('worklog_months').select('month,data,updated_at').eq('user_id',account).not('month','like','~%');
     if (error) throw error;
     if(!SB_USER||SB_USER.id!==account)return;
-    let n = 0;
+    let n = 0, merged = 0;
     const conflicts=[];
     (data || []).forEach(row => {
       if (row && row.data && row.data.days){
@@ -942,12 +981,15 @@ async function pullAll(){
         const loc = ST[row.month];
         const locT = loc && loc._u ? Date.parse(loc._u) : 0;
         const remT = Date.parse(row.updated_at || 0) || 0;
-        if(dirty.has(row.month)&&loc&&loc._remote!==row.updated_at)conflicts.push(row);
-        if (!dirty.has(row.month)&&(!loc || remT >= locT)){ ST[row.month] = Object.assign({}, row.data, {_u: row.updated_at,_remote:row.updated_at}); n++; }
+        if(dirty.has(row.month)&&loc&&loc._remote!==row.updated_at){
+          /* 회사·집이 같은 달을 따로 고쳤다 — 자동 장부는 합치고, 칸마다 나중에 고친 쪽을 쓴다. 고른 뒤 다시 올린다 */
+          ST[row.month]=Object.assign(WorklogCore.mergeMonth(loc,row.data),{_u:new Date().toISOString(),_remote:row.updated_at});merged++;
+        }
+        else if (!dirty.has(row.month)&&(!loc || remT >= locT)){ ST[row.month] = Object.assign({}, row.data, {_u: row.updated_at,_remote:row.updated_at}); n++; }
       }
     });
     persist(); renderAll();
-    sync('● 동기화됨 <b>' + n + '개월</b>');
+    sync('● 동기화됨 <b>' + n + '개월</b>'+(merged?' · 다른 컴퓨터 기록과 합침 <b>'+merged+'개월</b>':''));
     if(conflicts.length){
       sync('● '+conflicts.length+'개월 충돌 — 동기화 창에서 비교하세요',true);
       mstat('bad','서로 다른 기록이 있습니다. 먼저 내보내기로 백업한 후 월별로 선택하세요. 자동 덮어쓰기는 하지 않습니다.');
@@ -969,6 +1011,31 @@ async function pullAll(){
     mstat('bad','불러오기 실패: ' + htmlEscape(e.message || e.code || '알 수 없음') +
       '<br><span style="font-weight:400">표가 아직 없다면 아래 2단계 SQL을 실행해 주세요.</span>');
   } finally { SB_BUSY = false; }
+  for (const m of [...dirty]) pushMonth(m);          /* 합친 달·옮겨 온 달을 서버에 올린다 */
+  pullDocs();
+}
+
+/* 작업 증빙·남은 일·판정 기록도 서버에서 받아 이 브라우저 것과 합친다 (다른 컴퓨터가 동기화한 것) */
+async function pullDocs(){
+  if(!SB||!SB_USER) return;
+  try{
+    const now=new Date(), keys=['~pending'];
+    WorklogCore.monthsBack(now,3).forEach(m=>keys.push('~ev:'+m));
+    for(let i=0;i<45;i++){ const d=new Date(now.getFullYear(),now.getMonth(),now.getDate()-i); keys.push('~audit:'+dKey(d)); }
+    const { data, error } = await SB.from('worklog_months').select('month,data,updated_at').eq('user_id',SB_USER.id).in('month',keys);
+    if(error||!data) return;
+    const rd=k=>{ try{ return JSON.parse(localStorage.getItem(k)||'null'); }catch(e){ return null; } };
+    const ev=rd('unpa-evidence-v1')||{v:1,months:{}}; ev.months=ev.months||{};
+    const au=rd('unpa-audit-v1')||{v:1,days:{}}; au.days=au.days||{};
+    let pend=rd('unpa-pending-v1');
+    data.forEach(row=>{
+      if(row.month.indexOf('~ev:')===0) ev.months[row.month.slice(4)]=WorklogCore.mergeEvidence(ev.months[row.month.slice(4)],row.data);
+      else if(row.month.indexOf('~audit:')===0 && row.data && Array.isArray(row.data.items)){ const d=row.month.slice(7); au.days[d]=WorklogCore.mergeAudit(au.days[d],Object.assign({},row.data,{date:d})); }
+      else if(row.month==='~pending' && row.data && (!pend || String(row.data.at||'')>String(pend.at||''))) pend=row.data;
+    });
+    try{ localStorage.setItem('unpa-evidence-v1',JSON.stringify(ev)); localStorage.setItem('unpa-audit-v1',JSON.stringify(au)); if(pend) localStorage.setItem('unpa-pending-v1',JSON.stringify(pend)); }catch(e){}
+    if(typeof window.refreshEvidence==='function') window.refreshEvidence(true);
+  }catch(e){}
 }
 
 let PUSH_QUEUE=Promise.resolve();
@@ -976,7 +1043,7 @@ function pushMonth(m){
   const account=SB_USER&&SB_USER.id;
   const task=PUSH_QUEUE.then(()=>pushMonthNow(m,account));PUSH_QUEUE=task.catch(()=>false);return task;
 }
-async function pushMonthNow(m,account){
+async function pushMonthNow(m,account,retried){
   if (STORAGE_CONFLICT||!SB || !SB_USER || SB_USER.id!==account || SB_BUSY) return false;
   const revision=month(m)._u, storageKey=LS;
   try {
@@ -985,8 +1052,16 @@ async function pushMonthNow(m,account){
     const value={user_id:account,month:m,data:body,updated_at:at};
     const query=expected?SB.from('worklog_months').update(value).eq('user_id',account).eq('month',m).eq('updated_at',expected):SB.from('worklog_months').insert(value);
     const { data,error } = await query.select('month');
+    if((error&&error.code==='23505')||(!error&&(!data||data.length!==1))){
+      /* 다른 컴퓨터가 먼저 올렸다 — 서버 것을 받아 합친 뒤 한 번 더 올린다 (덮어쓰지 않는다) */
+      if(retried) throw Error('다른 기기에서 계속 수정 중');
+      const r=await SB.from('worklog_months').select('data,updated_at').eq('user_id',account).eq('month',m);
+      if(r.error) throw r.error;
+      const row=r.data&&r.data[0];
+      if(row){ ST[m]=Object.assign(WorklogCore.mergeMonth(month(m),row.data),{_u:new Date().toISOString(),_remote:row.updated_at}); persist(); renderAll(false); }
+      return pushMonthNow(m,account,true);
+    }
     if (error) throw error;
-    if(!data||data.length!==1)throw Error('다른 기기에서 수정됨 — 덮어쓰기 차단');
     if(LS!==storageKey)return false;
     month(m)._remote=at;
     if(month(m)._u===revision)dirty.delete(m);
@@ -1270,6 +1345,91 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
   });
 
   aLoad(); aRenderAll();
+  /* ═══ 작업 증빙 ═══
+     업무일지 숫자(자동 집계)의 근거 목록. 실제로 일한 날 기준이고, CMS 화면에서 직접 한 것도 들어 있다.
+     리뷰 ID 목록은 업무일지 장부(_auto)가 기준이고, 브랜드·제품·작성일은 작업 증빙 기록에서 붙인다. */
+  var EVK='unpa-evidence-v1', PK='unpa-pending-v1', evSel=null;
+  function jget(k){ try{ return JSON.parse(localStorage.getItem(k)||'null'); }catch(e){ return null; } }
+  function md(k){ return (+k.slice(5,7))+'/'+(+k.slice(8,10)); }
+  var ACT_LB={ register_product:'상품등록 필요 (브랜드 있음)', register_brand:'브랜드+상품 등록 필요', hold:'확인 필요 (보류)' };
+  function renderPending(){
+    var o=jget(PK), body=document.getElementById('pendBody'), hint=document.getElementById('pendHint');
+    if(!o||!Array.isArray(o.items)){ body.innerHTML='<div class="warn">아직 정보가 없습니다. CMS 에서 리뷰 콘솔을 열면 남은 상품등록·확인 건이 여기에 모입니다.</div>'; return; }
+    var at=new Date(o.at), p2=function(n){ return (n<10?'0':'')+n; };
+    hint.textContent='CMS 기준 · '+p2(at.getMonth()+1)+'-'+p2(at.getDate())+' '+p2(at.getHours())+':'+p2(at.getMinutes())+' 확인';
+    if(!o.items.length){ body.innerHTML='<div style="color:var(--mint-dk);font-weight:700">남은 수동 작업이 없습니다 🎉</div>'; return; }
+    var groups={}; o.items.forEach(function(x){ (groups[x.action]||(groups[x.action]=[])).push(x); });
+    body.innerHTML=['register_product','register_brand','hold'].filter(function(k){ return groups[k]; }).map(function(k){
+      return '<div class="pendgrp">'+ACT_LB[k]+' · '+groups[k].length+'건</div>'
+        +groups[k].map(function(x){
+          return '<div class="evrow"><a href="https://cms.unpa.me/review/detail/'+encodeURIComponent(x.id)+'" target="_blank" rel="noopener">#'+esc(x.id)+' ↗</a>'
+            +'<span><b>'+esc(x.brand||'')+'</b> / '+esc(x.product||'')+' <span style="color:var(--dim)">· '+esc((x.d||'').slice(5))+' 작성</span>'
+            +(x.why?'<br><span class="why">'+esc(x.why)+'</span>':'')+'</span>'
+            +'<span class="src">'+(x.st==='sent-manual'?'수정요청 보냄 · 유저 응답 대기':'대기')+'</span></div>';
+        }).join('');
+    }).join('');
+  }
+  function evDays(mm){
+    var m=(typeof ST!=='undefined'&&ST[mm])?ST[mm]:null; if(!m) return [];
+    return Object.keys(m.days).sort().filter(function(dd){ var a=m.days[dd].auto; return a&&(a.r||a.p); })
+      .map(function(dd){ return mm+'-'+dd; });
+  }
+  function renderEvidence(){
+    var today=(typeof TODAY_M!=='undefined')?TODAY_M+'-'+TODAY_D:'';
+    if(!evSel){ var ds=evDays((typeof cur!=='undefined'&&cur)||today.slice(0,7)); evSel=ds.indexOf(today)>=0?today:(ds[ds.length-1]||today); }
+    var mm=evSel.slice(0,7), dd=evSel.slice(8), days=evDays(mm);
+    document.getElementById('evDate').value=evSel;
+    document.getElementById('evDays').innerHTML=days.map(function(k){
+      var a=ST[mm].days[k.slice(8)].auto;
+      return '<button data-k="'+k+'" class="'+(k===evSel?'on':'')+'">'+md(k)+' · 리뷰 '+a.r+(a.p?' · 제품 '+a.p:'')+'</button>';
+    }).join('') || '<span style="color:var(--dim);font-size:12px">'+(+mm.slice(5))+'월에는 아직 자동 집계된 날이 없습니다.</span>';
+    document.querySelectorAll('#evDays button').forEach(function(b){ b.onclick=function(){ evSel=b.dataset.k; renderEvidence(); }; });
+    var m=(typeof ST!=='undefined'&&ST[mm])?ST[mm]:null, day=m&&m.days[dd], led=(m&&m._auto)||{};
+    var rIds=((led.r||{})[dd]||[]), pIds=((led.p||{})[dd]||[]);
+    var ev=jget(EVK)||{months:{}}, doc=(ev.months||{})[mm]||{r:{},p:{}};
+    var rInfo=(doc.r||{})[dd]||{}, pInfo=(doc.p||{})[dd]||{};
+    document.getElementById('evTitle').textContent='🧾 '+md(evSel)+' 작업 증빙';
+    if(!day||!day.auto){ document.getElementById('evBody').innerHTML='<div class="warn">이 날은 자동 집계 기록이 없습니다. (자동 집계는 2026-09-01 부터, 리뷰 콘솔을 열 때 채워집니다)</div>'; return; }
+    var nC=rIds.filter(function(id){ return rInfo[id]&&rInfo[id][3]==='c'; }).length;
+    var adjR=(day.r||0)-day.auto.r, adjP=(day.p||0)-day.auto.p;
+    var html='<div class="evsum">리뷰 검수완료 <b>'+rIds.length+'</b>건'
+      +(rIds.length?' <span style="color:var(--dim)">(콘솔 '+nC+' · CMS 직접 '+(rIds.length-nC)+')</span>':'')
+      +' · 제품 등록 <b>'+pIds.length+'</b>건'
+      +((adjR||adjP)?'<br><span style="color:var(--dim)">업무일지 값은 리뷰 '+(day.r||0)+' · 제품 '+(day.p||0)+' — 직접 조정 '+(adjR?(adjR>0?'+':'')+adjR+'(리뷰) ':'')+(adjP?(adjP>0?'+':'')+adjP+'(제품)':'')+'은 목록에 없습니다</span>':'')
+      +'</div>';
+    if(rIds.length){
+      var by={}; rIds.forEach(function(id){ var x=rInfo[id]; var c=(x&&x[2])||'?'; (by[c]||(by[c]=[])).push(id); });
+      Object.keys(by).sort().forEach(function(c){
+        html+='<div class="evgrp">'+(c==='?'?'작성일 정보 없음 (다음 동기화 때 채워짐)':md(c)+' 작성 리뷰')+' · '+by[c].length+'건</div>';
+        html+=by[c].sort().map(function(id){
+          var x=rInfo[id]||[];
+          return '<div class="evrow"><a href="https://cms.unpa.me/review/detail/'+encodeURIComponent(id)+'" target="_blank" rel="noopener">#'+esc(id)+' ↗</a>'
+            +'<span>'+((x[0]||x[1])?'<b>'+esc(x[0])+'</b> / '+esc(x[1]):'<span style="color:var(--dim)">상세 없음 (다음 동기화 때 채워짐)</span>')+'</span>'
+            +'<span class="src '+(x[3]==='c'?'c':'')+'">'+(x[3]==='c'?'콘솔':x.length?'CMS 직접':'')+'</span></div>';
+        }).join('');
+      });
+    }
+    if(pIds.length){
+      html+='<div class="evgrp">등록한 제품 · '+pIds.length+'건</div>'
+        +pIds.map(function(id){ var x=pInfo[id]||[];
+          return '<div class="evrow"><span style="min-width:74px;color:var(--dim)">#'+esc(id)+'</span><span>'+((x[0]||x[1])?'<b>'+esc(x[0])+'</b> / '+esc(x[1]):'<span style="color:var(--dim)">상세 없음 (다음 동기화 때 채워짐)</span>')+'</span></div>'; }).join('');
+    }
+    document.getElementById('evBody').innerHTML=html;
+  }
+  function refreshEvidence(){ try{ renderPending(); renderEvidence(); }catch(e){} }
+  window.refreshEvidence=refreshEvidence;
+  /* 업무일지 표의 ≡ 버튼 → 그 날 작업 증빙 */
+  window.openEvidence=function(k){
+    evSel=k;
+    var b=document.querySelector('.vtab[data-v="audit"]'); if(b) b.click();
+    refreshEvidence();
+    var c=document.getElementById('evCard'); if(c) c.scrollIntoView({block:'start',behavior:'smooth'});
+  };
+  document.getElementById('evDate').onchange=function(){ if(/^\d{4}-\d{2}-\d{2}$/.test(this.value)){ evSel=this.value; renderEvidence(); } };
+  document.querySelector('.vtab[data-v="audit"]').addEventListener('click', function(){ refreshEvidence(); });
+  window.addEventListener('storage', function(e){ if(e.key===EVK||e.key===PK||e.key===null||(e.key&&e.key.indexOf('unpa-worklog-v')===0)) setTimeout(refreshEvidence,0); });
+  refreshEvidence();
+
   /* 검수 콘솔 → 동기화 창(sync.html)이 검수 기록을 바꾸면 다시 읽는다 */
   function aHint(){
     var el=document.getElementById('aHint'); if(!el) return;

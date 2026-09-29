@@ -307,3 +307,105 @@ test('audit history keeps only recent days so the browser store does not fill up
   assert.deepEqual(Object.keys(JSON.parse(r.value).days).sort(),['2026-09-03','2026-09-04','2026-09-05']);
   assert.deepEqual(r.dropped,['2026-09-01','2026-09-02']);
 });
+
+/* ── 여러 컴퓨터 합치기 · 서버 동기화 ─────────────────────── */
+function fakeCloud(){
+  const rows={};
+  return { rows,
+    pull:async keys=>keys.filter(k=>rows[k]).map(k=>({month:k,data:JSON.parse(JSON.stringify(rows[k].data)),updated_at:rows[k].updated_at})),
+    push:async list=>{ for(const r of list) rows[r.month]={data:JSON.parse(JSON.stringify(r.data)),updated_at:r.updated_at}; } };
+}
+test('office and home ledgers are merged without losing either side',()=>{
+  const office=W.applyWork({},{v:1,from:'2026-09-01',to:'2026-09-27',reviews:[['1','2026-09-25'],['2','2026-09-25']],products:[['9','2026-09-25']]}).months['2026-09'];
+  const home=W.applyWork({},{v:1,from:'2026-09-01',to:'2026-09-27',reviews:[['2','2026-09-25'],['3','2026-09-25'],['4','2026-09-26']],products:[]}).months['2026-09'];
+  home.days['26'].memo='집에서 메모'; home.days['26']._t=Date.parse('2026-09-27T10:00:00Z');
+  home.days['25'].r+=2; home.days['25']._t=Date.parse('2026-09-27T11:00:00Z');   /* 집에서 +2 조정 */
+  office.days['25'].memo='회사 메모'; office.days['25']._t=Date.parse('2026-09-27T09:00:00Z');
+  const m=W.mergeMonth(office,home);
+  assert.equal(m.days['25'].auto.r,3,'장부는 합집합 (1,2,3)');
+  assert.equal(m.days['25'].r,5,'나중에 고친 집의 조정 +2 유지');
+  assert.equal(m.days['25'].memo,'회사 메모','메모가 비어 있지 않은 쪽을 남긴다');
+  assert.equal(m.days['26'].r,1); assert.equal(m.days['26'].memo,'집에서 메모');
+  assert.equal(m.days['25'].p,1);
+  assert.deepEqual(W.mergeMonth(home,office).days['25'].auto,m.days['25'].auto,'순서를 바꿔도 장부는 같다');
+});
+test('console experience from two computers merges: learned names, sends, done marks, fingerprints',()=>{
+  const a={alias:{'5|미러블러':{pid:1,name:'A',n:1,t:'2026-09-20'}},sent:{'100':{action:'revise_product',at:'2026-09-20T01:00:00Z',rn:1}},
+           done:{'7':{at:'2026-09-20T00:00:00Z'}},texts:{h1:{id:'10',d:'2026-09-10',t:'2026-09-10'}},gate:[{t:'2026-09-20',d:'x'}]};
+  const b={alias:{'5|미러블러':{pid:2,name:'B',n:3,t:'2026-09-19'},'6|x':{pid:3,name:'C',n:1,t:'2026-09-21'}},
+           sent:{'100':{action:'approve',at:'2026-09-25T01:00:00Z',u:'nick'},'101':{action:'hide',at:'2026-09-25T02:00:00Z'}},
+           done:{'7':{off:true,at:'2026-09-21T00:00:00Z'}},texts:{h1:{id:'11',d:'2026-09-12',t:'2026-09-12'}},gate:[{t:'2026-09-21',d:'y'}]};
+  const m=W.mergeConsole(a,b);
+  assert.equal(m.alias['5|미러블러'].pid,2,'더 여러 번 확인된 연결을 쓴다'); assert.ok(m.alias['6|x']);
+  assert.equal(m.sent['100'].action,'approve'); assert.equal(m.sent['100'].rn,1,'수정요청 횟수는 잃지 않는다'); assert.equal(m.sent['100'].u,'nick');
+  assert.ok(m.sent['101']);
+  assert.equal(m.done['7'].off,true,'나중에 해제한 것이 이긴다');
+  assert.equal(m.texts.h1.id,'10','먼저 올라온 리뷰가 원본'); assert.equal(m.gate.length,2);
+});
+test('cloud sync: two computers converge through the server and nothing is lost',async()=>{
+  const cloud=fakeCloud();
+  const now1='2026-09-27T09:00:00.000Z', now2='2026-09-27T20:00:00.000Z';
+  const offWork={v:1,from:'2026-09-01',to:'2026-09-27',reviews:[['1','2026-09-27','라운드랩','독도 토너','2026-09-24','c']],products:[['9','2026-09-27','오릭스','라데나 로션']]};
+  const off=W.applyWork({},offWork);
+  const r1=await W.cloudSync(cloud,{now:now1,months:off.months,touchedMonths:off.touched,evidence:W.evidenceFrom(offWork),touchedEv:['2026-09'],
+    audit:{'2026-09-24':{date:'2026-09-24',items:[{id:1,action:'approve',applied:true}]}},pending:[{id:5,brand:'b',product:'p',action:'register_product'}],
+    console:{alias:{'5|a':{pid:1,name:'A',n:1,t:now1}},sent:{'1':{action:'approve',at:now1}}},sentMonths:['2026-09','2026-08']});
+  assert.ok(r1.pushed.includes('2026-09')&&r1.pushed.includes('~ev:2026-09')&&r1.pushed.includes('~audit:2026-09-24')&&r1.pushed.includes('~learn')&&r1.pushed.includes('~sent:2026-09'));
+  /* 집: 다른 리뷰를 처리했고 콘솔 경험도 따로 있다 */
+  const homeWork={v:1,from:'2026-09-01',to:'2026-09-27',reviews:[['2','2026-09-27','헤라','글로스','2026-09-26','m']],products:[]};
+  const home=W.applyWork({},homeWork);
+  const r2=await W.cloudSync(cloud,{now:now2,months:home.months,touchedMonths:home.touched,evidence:W.evidenceFrom(homeWork),touchedEv:['2026-09'],
+    audit:{'2026-09-24':{date:'2026-09-24',items:[{id:2,action:'hold',applied:false}]}},
+    console:{alias:{'6|b':{pid:2,name:'B',n:1,t:now2}},sent:{'2':{action:'approve',at:now2}}},sentMonths:['2026-09','2026-08']});
+  assert.equal(r2.months['2026-09'].days['27'].r,2,'회사 1 + 집 1');
+  assert.equal(r2.months['2026-09'].days['27'].p,1);
+  assert.deepEqual(Object.keys(r2.evidence['2026-09'].r['27']).sort(),['1','2']);
+  assert.equal(r2.evidence['2026-09'].r['27']['1'][3],'c');
+  assert.equal(r2.audit['2026-09-24'].items.length,2);
+  assert.ok(r2.console.alias['5|a']&&r2.console.alias['6|b'],'배운 것이 합쳐져 돌아온다');
+  assert.ok(r2.console.sent['1']&&r2.console.sent['2'],'다른 컴퓨터의 전송 기록도 돌아온다');
+  assert.equal(cloud.rows['2026-09'].data.days['27'].r,2,'서버에도 합친 값');
+  assert.equal(cloud.rows['~pending'].data.items.length,1);
+});
+function fakeStore(){ const m={}; return { m, getItem:k=>m[k]==null?null:m[k], setItem:(k,v)=>{m[k]=String(v);}, removeItem:k=>{delete m[k];} }; }
+test('sync window: office and home browsers end up with the same worklog through the server',async()=>{
+  const cloud=fakeCloud(), office=fakeStore(), home=fakeStore();
+  /* 집 브라우저는 로그인 전에 직접 적어 둔 8월 기록이 있다 */
+  home.setItem('unpa-worklog-v1',JSON.stringify({v:1,months:{'2026-08':monthOf('2026-08',{'20':{r:150,p:3,memo:'직접',unreg:''}})},dirty:[]}));
+  const payload=(rv,con)=>({v:1,seq:1,work:{v:1,from:'2026-09-01',to:'2026-09-27',reviews:rv,products:[]},audit:{},pending:[{id:'9',d:'2026-09-24',brand:'b',product:'p',action:'register_product'}],console:con});
+  const r1=await W.syncWindow(office,payload([['1','2026-09-27','A','a','2026-09-24','c']],{alias:{'1|x':{pid:1,name:'X',n:1,t:'t1'}},sent:{'1':{action:'approve',at:'2026-09-27T01:00:00Z'}}}),cloud,{uid:'u1',now:new Date('2026-09-27T10:00:00Z')});
+  assert.equal(r1.cloud,'on');
+  const r2=await W.syncWindow(home,payload([['2','2026-09-27','B','b','2026-09-24','m']],{alias:{'2|y':{pid:2,name:'Y',n:1,t:'t2'}},sent:{}}),cloud,{uid:'u1',now:new Date('2026-09-27T20:00:00Z')});
+  assert.equal(r2.today.r,1,'집 화면 오늘 값(이 브라우저 집계)'); 
+  const homeStore=JSON.parse(home.getItem('unpa-worklog-v2:u1'));
+  assert.equal(homeStore.months['2026-09'].days['27'].r,2,'서버와 합친 뒤 회사 1 + 집 1');
+  assert.equal(homeStore.months['2026-08'].days['20'].r,150,'로그인 전 기록이 계정으로 옮겨졌다');
+  assert.equal(cloud.rows['2026-08'].data.days['20'].memo,'직접','옮긴 기록이 서버에도 올라간다');
+  assert.ok(r2.console.alias['1|x']&&r2.console.alias['2|y'],'콘솔 경험이 합쳐져 돌아온다');
+  assert.equal(home.getItem('unpa-worklog-active'),'unpa-worklog-v2:u1');
+  /* 회사가 다시 동기화하면 집의 것도 받아 온다 */
+  await W.syncWindow(office,payload([],{}),cloud,{uid:'u1',now:new Date('2026-09-28T09:00:00Z')});
+  const off=JSON.parse(office.getItem('unpa-worklog-v2:u1'));
+  assert.equal(off.months['2026-09'].days['27'].r,2);
+  const ev=JSON.parse(office.getItem('unpa-evidence-v1'));
+  assert.deepEqual(Object.keys(ev.months['2026-09'].r['27']).sort(),['1','2'],'작업 증빙도 양쪽 것이 모인다');
+  assert.equal(JSON.parse(office.getItem('unpa-pending-v1')).items.length,1);
+});
+test('sync window without login keeps everything on this browser and says so',async()=>{
+  const s=fakeStore();
+  const r=await W.syncWindow(s,{v:1,seq:1,work:{v:1,from:'2026-09-01',to:'2026-09-27',reviews:[['1','2026-09-27','A','a','2026-09-24','c']],products:[]},audit:{'2026-09-24':{items:[{id:1,action:'approve',applied:true}]}}},null,{now:new Date('2026-09-27T10:00:00Z')});
+  assert.equal(r.cloud,'off'); assert.equal(r.console,null);
+  assert.equal(JSON.parse(s.getItem('unpa-worklog-v1')).months['2026-09'].days['27'].r,1);
+  assert.ok(JSON.parse(s.getItem('unpa-audit-v1')).days['2026-09-24']);
+  const failing={pull:async()=>{throw Error('network down');},push:async()=>{}};
+  const r2=await W.syncWindow(s,{v:1,seq:2,work:{v:1,from:'2026-09-01',to:'2026-09-27',reviews:[],products:[]}},failing,{uid:'u1',now:new Date('2026-09-27T11:00:00Z')});
+  assert.match(r2.cloud,/^error: network down/,'서버가 안 돼도 이 브라우저 반영은 된다'); assert.equal(r2.ok,true);
+});
+test('abbreviated words find the registered product; different types or two candidates do not',async()=>{
+  const run=async(user,names)=>{const c=consoleRules();c.mock('get',async()=>({status:200,json:{total:names.length,results:names.map((n,i)=>({id:i+1,name:n}))}}));return c.rules.findProduct(9,user);};
+  let r=await run('미러 블러 멜팅 에센스',['미러링 블러 멜팅팟 에센스','미러링 블러 쿠션']);
+  assert.equal(r.confident,true); assert.equal(r.pick.name,'미러링 블러 멜팅팟 에센스'); assert.match(r.why,/줄여/);
+  r=await run('수분 크림',['수분충전 크림젤']); assert.notEqual(r.confident,true,'종류가 다르면(크림↔젤) 붙이지 않는다');
+  r=await run('블루 세럼',['블루베리 세럼','블루라인 세럼']); assert.notEqual(r.confident,true,'후보가 둘이면 사람이');
+  r=await run('블루 세럼',['블루베리 세럼','블루베리 크림']); assert.equal(r.confident,true);
+});
