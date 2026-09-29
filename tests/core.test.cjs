@@ -409,3 +409,15 @@ test('abbreviated words find the registered product; different types or two cand
   r=await run('블루 세럼',['블루베리 세럼','블루라인 세럼']); assert.notEqual(r.confident,true,'후보가 둘이면 사람이');
   r=await run('블루 세럼',['블루베리 세럼','블루베리 크림']); assert.equal(r.confident,true);
 });
+test('remaining CMS reviews get their old verdicts back, so registration work is never shown as done',async()=>{
+  const audit={days:{'2026-09-20':{items:[{id:475207,action:'register_brand',brand:'새브랜드',product:'새 크림',reason:'브랜드 없음',applied:false,manual_done:'t'},
+                                        {id:475198,action:'approve',applied:false},{id:1,action:'approve',applied:true}]},
+                     '2026-09-18':{items:[{id:475207,action:'hold',applied:false}]}}};
+  const v=W.verdictsFor(audit,[{id:'475207',d:'2026-09-20'},{id:'475198',d:'2026-09-20'},{id:'477410',d:'2026-09-28'}]);
+  assert.equal(v['475207'].action,'register_brand','가장 최근 판정'); assert.equal(v['475207'].manual_done,'t');
+  assert.equal(v['475198'].action,'approve'); assert.equal(v['477410'],undefined,'판정 전');
+  const s=fakeStore(); s.setItem('unpa-audit-v1',JSON.stringify({v:1,days:audit.days}));
+  const r=await W.syncWindow(s,{v:1,seq:1,work:{v:1,from:'2026-09-01',to:'2026-09-29',reviews:[],products:[]},pending:[],backlog:[{id:'475207',d:'2026-09-20',brand:'b',product:'p',status:'PENDING',blocked:false}]},null,{now:new Date('2026-09-29T12:00:00Z')});
+  assert.equal(r.verdicts['475207'].action,'register_brand');
+  assert.equal(JSON.parse(s.getItem('unpa-pending-v1')).backlog.length,1,'CMS 남은 목록을 업무일지에 둔다');
+});

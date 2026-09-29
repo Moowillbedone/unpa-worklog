@@ -2074,7 +2074,7 @@
     (ob.reviews||[]).forEach(function(x){ if(x && validDate(x[1]) && x[1]>=AUTO_FROM) rv.push([String(x[0])].concat(x.slice(1))); });
     return { v:1, seq:ob.seq||0,
              work:{ v:1, from:AUTO_FROM, to:ymd(new Date()), reviews:rv, products:pv, partial:!!(WORK && WORK.failed.length) },
-             audit:ob.audit||{}, pending:pendingList(), console:consoleState() };
+             audit:ob.audit||{}, pending:pendingList(), backlog:backlogList(), console:consoleState() };
   }
   function syncNonce(){
     try{ return Array.prototype.map.call(crypto.getRandomValues(new Uint8Array(16)),function(x){ return (x<16?'0':'')+x.toString(16); }).join(''); }
@@ -2109,6 +2109,7 @@
       finish();
       if(!ev.data.ok){ syncButton('<span style="color:#ff8f6b">⚠ 업무일지 반영 실패 — '+esc(String(ev.data.error||'').slice(0,80))+'</span>'); return; }
       if(ev.data.console) applyConsoleState(ev.data.console);
+      if(ev.data.verdicts && seedFromVerdicts(ev.data.verdicts)) matchPending();   /* 예전 판정으로 채운 건도 바로 짝지어 본다 */
       /* 보낸 뒤로 보관함에 새로 쌓인 게 없으면 비운다 (새로 쌓였으면 다음에 함께 다시 보낸다 — 합칠 때 중복은 걸러진다) */
       if((outboxLoad().seq||0)===payload.seq){ try{ localStorage.removeItem(OUTBOX_KEY); }catch(e){} }
       var t=ev.data.today||{}, hm=new Date().toTimeString().slice(0,5);
@@ -2139,6 +2140,13 @@
   async function learnAndMatch(){
     if(!WORK || !ME) return;
     var lw=await learnFromWatch(WORK.watch, ME);
+    var silent=matchPending();
+    var n=lw.learned+silent;
+    LEARN_NOTE = n ? '<span style="color:#9fe3c4">🧠 제품명 연결 '+n+'건 새로 배움</span>' : '';
+  }
+  /* 대기 목록 ↔ 내가 등록한 제품 짝짓기 (CMS 를 다시 부르지 않는다) */
+  function matchPending(){
+    if(!WORK) return 0;
     var o=pendingLoad(), list=Object.keys(o).map(function(k){ return o[k]; });
     var as=associate(list, WORK.mine||[]), silent=0;
     /* CMS 에서 이미 직접 수정요청을 보낸 건은 보낸 제품을 배우기만 한다 */
@@ -2146,9 +2154,8 @@
       learnAlias(x.p.bid, x.e.p, x.p.id, x.p.name); pendingMark(x.e.id, 'learned', { pid:x.p.id, pname:x.p.name }); silent++; });
     var open=pendingIds();
     ASSOC=as.filter(function(x){ return x.e.st==='open' && (!open || open[x.e.id]); });
-    var n=lw.learned+silent;
-    LEARN_NOTE = n ? '<span style="color:#9fe3c4">🧠 제품명 연결 '+n+'건 새로 배움</span>' : '';
     renderAssoc();
+    return silent;
   }
   /* 지금 CMS 에서 아직 검수 대기인 리뷰 (시작 화면에서 불러온 남은 일) */
   function pendingIds(){
@@ -2156,6 +2163,31 @@
     var m={}; BACKLOG.forEach(function(b){ b.rows.forEach(function(x){ m[String(x.id)]=1; }); }); return m;
   }
   /* 업무일지 "아직 안 끝난 일" 목록 */
+  /* CMS 에 지금 남은 검수 대기 (짝수일 최근 60일) — 업무일지 "아직 안 끝난 일"의 기준.
+     콘솔을 연 뒤 처리한 것은 전송 기록으로 빼서 넘긴다. */
+  function backlogList(){
+    if(!BACKLOG) return null;
+    var sent=sentLoad(), out=[];
+    BACKLOG.forEach(function(b){ backlogTodo(b.rows, sent).forEach(function(x){
+      out.push({ id:String(x.id), d:b.date, brand:x.brandName||'', product:x.productName||'', status:x.status||'', blocked:x.userBlocked===true });
+    }); });
+    return out;
+  }
+  /* 업무일지에 남아 있는 예전 판정으로 대기 목록을 채운다 — 새 콘솔로 스캔하기 전 건도
+     "내가 그 브랜드·제품을 등록하면 자동 짝짓기"가 되도록 */
+  function seedFromVerdicts(v){
+    var o=pendingLoad(), n=0, now=new Date().toISOString();
+    Object.keys(v||{}).forEach(function(k){
+      var x=v[k]; if(!x || o[k] || x.applied || !MANUAL_KINDS[x.action]) return;
+      var d=validDate(x.d)?x.d:null; if(!d) return;
+      o[k]={ id:k, d:d, b:String(x.brand||''), p:String(x.product||''), bid:null, a:x.action,
+             ex:x.action==='register_product' || x.action==='register_brand', why:String(x.reason||'').slice(0,90),
+             since:new Date(+d.slice(0,4), +d.slice(5,7)-1, +d.slice(8,10)).toISOString(), u:now, st:'open', seeded:true };
+      n++;
+    });
+    if(n) pendingSave(o);
+    return n;
+  }
   function pendingList(){
     var o=pendingLoad(), open=pendingIds();
     return Object.keys(o).map(function(k){ return o[k]; })

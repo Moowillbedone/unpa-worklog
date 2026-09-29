@@ -170,7 +170,7 @@
     for(const m of st.touchedMonths||[]){const merged=mergeMonth(st.months[m],rd(m));months({[m]:merged});out.months[m]=merged;push.push({month:m,data:merged});}
     for(const m of st.touchedEv||[]){const merged=mergeEvidence(rd('~ev:'+m),st.evidence[m]);out.evidence[m]=merged;push.push({month:'~ev:'+m,data:merged});}
     for(const d of Object.keys(st.audit||{})){const r=rd('~audit:'+d);const merged=(r&&Array.isArray(r.items))?mergeAudit(r,Object.assign({},st.audit[d],{date:d})):st.audit[d];out.audit[d]=merged;push.push({month:'~audit:'+d,data:merged});}
-    if(Array.isArray(st.pending))push.push({month:'~pending',data:{at:now,items:st.pending.slice(0,500)}});
+    if(Array.isArray(st.pending))push.push({month:'~pending',data:{at:now,items:st.pending.slice(0,500),backlog:Array.isArray(st.backlog)?st.backlog.slice(0,3000):null}});
     if(st.console){
       const L=rd('~learn')||{},sentR={};
       sentMonths.forEach(m=>Object.assign(sentR,rd('~sent:'+m)||{}));
@@ -198,6 +198,19 @@
     for(const keep of [60,40,25,12]){try{const ds=Object.keys(obj.days||{}).sort();ds.slice(0,Math.max(0,ds.length-keep)).forEach(d=>{delete obj.days[d];});store.setItem(AUDIT_KEY,JSON.stringify(obj));return null;}catch(e){var err=String(e&&e.message||e);}}
     return err||'저장 실패';
   }
+  /* CMS 에 아직 남은 리뷰마다 예전 스캔에서 내린 판정 — 새 콘솔이 스캔하기 전에도 무엇이 상품등록인지 알 수 있게 */
+  function latestVerdicts(audit){
+    const out={};
+    Object.keys((audit&&audit.days)||{}).sort().forEach(d=>{((audit.days[d]||{}).items||[]).forEach(it=>{if(it&&it.id!=null)out[String(it.id)]=Object.assign({d},it);});});
+    return out;
+  }
+  function verdictsFor(audit,backlog){
+    if(!Array.isArray(backlog))return null;
+    const all=latestVerdicts(audit),out={};
+    backlog.forEach(b=>{const v=all[String(b.id)];if(v)out[String(b.id)]={action:v.action||null,verdict:v.verdict||null,brand:v.brand||'',product:v.product||'',
+      reason:String(v.reason||'').slice(0,90),d:v.d,applied:!!v.applied,manual_done:v.manual_done||null};});
+    return out;
+  }
   async function syncWindow(store,p,io,opts){
     opts=opts||{};
     if(!p||p.v!==1||!p.work)throw Error('받은 자료 형식 오류');
@@ -219,7 +232,7 @@
     const audit=readJSON(store,AUDIT_KEY,null)||{v:1,days:{}};audit.days=audit.days||{};
     let auditDays=0;
     Object.keys(p.audit||{}).forEach(d=>{const day=p.audit[d];if(!date(d)||!day||!Array.isArray(day.items))return;audit.days[d]=mergeAudit(audit.days[d],Object.assign({},day,{date:d}));auditDays++;});
-    if(Array.isArray(p.pending))store.setItem(PENDING_KEY,JSON.stringify({at:iso,items:p.pending}));
+    if(Array.isArray(p.pending))store.setItem(PENDING_KEY,JSON.stringify({at:iso,items:p.pending,backlog:Array.isArray(p.backlog)?p.backlog:null}));
     let cloud='off',consoleOut=null;
     if(io&&uid){
       try{
@@ -229,7 +242,7 @@
         const touchedMonths=[...new Set([...(snap.dirty||[]),...res.touched,...range])].filter(m=>snap.months[m]);
         const days={};Object.keys(p.audit||{}).forEach(d=>{if(audit.days[d])days[d]=audit.days[d];});
         const out=await cloudSync(io,{now:iso,months:snap.months,touchedMonths,evidence:ev.months,touchedEv:[...new Set([...Object.keys(fresh),...range])],
-          audit:days,pending:Array.isArray(p.pending)?p.pending:null,console:p.console||null,sentMonths:monthsBack(now,5)});
+          audit:days,pending:Array.isArray(p.pending)?p.pending:null,backlog:Array.isArray(p.backlog)?p.backlog:null,console:p.console||null,sentMonths:monthsBack(now,5)});
         /* 서버와 주고받는 사이에 업무일지 탭에서 고친 것이 있어도 잃지 않도록 한 번 더 합쳐서 쓴다 */
         const cur=JSON.parse(store.getItem(key));
         touchedMonths.forEach(m=>{cur.months[m]=Object.assign(mergeMonth(cur.months[m],out.months[m]),{_u:iso,_remote:iso});});
@@ -247,8 +260,9 @@
     const info={at:iso,from:p.work.from,today:res.today,partial:!!p.work.partial,changes:res.changes.slice(0,60),nChanges:res.changes.length,
                 auditDays,auditError,evError,cloud};
     try{store.setItem('unpa-worklog-sync-v1',JSON.stringify(info));}catch(e){}
-    return {ok:true,today:res.today,changes:res.changes.slice(0,20),nChanges:res.changes.length,auditDays,auditError,cloud,console:consoleOut};
+    return {ok:true,today:res.today,changes:res.changes.slice(0,20),nChanges:res.changes.length,auditDays,auditError,cloud,console:consoleOut,
+            verdicts:verdictsFor(audit,p.backlog)};
   }
-  return {date,months,mergeAudit,unappliedIds,applyWork,syncStore,syncAudit,syncWindow,
+  return {date,months,mergeAudit,unappliedIds,applyWork,syncStore,syncAudit,syncWindow,latestVerdicts,verdictsFor,
           evidenceFrom,mergeEvidence,mergeMonth,mergeAlias,mergeSent,mergeTexts,mergeGate,mergeConsole,mergeByTime,monthsBack,cloudSync};
 });

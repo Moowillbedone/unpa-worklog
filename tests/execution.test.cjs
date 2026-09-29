@@ -45,7 +45,7 @@ function harness(){
                      evenDates,backlogTodo,sentApply,auditDays,scanDates,
                      collectWork,workPayload,outboxLoad,outboxAudit,outboxRun,syncNow,lastActor,
                      pendingRecord,pendingLoad,learnFromWatch,associate,consoleState,applyConsoleState,doneRaw,
-                     setBacklog:b=>{BACKLOG=b;},
+                     setBacklog:b=>{BACKLOG=b;},backlogList,seedFromVerdicts,
                      setMe:e=>{ME=e;},setWork:w=>{WORK=w;},getSyncHtml:()=>SYNC_HTML,
                      listAll,loadBacklog,scanRows,capOf,canSend,sentMark,
                      getAbort:()=>SCAN_ABORT,
@@ -565,4 +565,19 @@ test('experience coming back from the server is merged, not overwritten',()=>{
   const h2=api.histLoad(); assert.ok(h2.alias['1|a']&&h2.alias['2|b'],'이 컴퓨터에서 배운 것도, 다른 컴퓨터 것도');
   const sent=api.sentLoad(); assert.ok(sent['7']&&sent['9'],'다른 컴퓨터에서 보낸 것은 다시 안 보낸다');
   assert.equal(api.doneLoad()['8'],undefined,'다른 컴퓨터에서 해제한 완료 표시'); assert.equal(api.doneRaw()['8'].off,true);
+});
+
+test('remaining list follows CMS and old verdicts refill the waiting list for auto pairing',()=>{
+  const {api,store}=harness();
+  api.setBacklog([{date:'2026-09-20',rows:[{id:1,status:'PENDING',visible:true,brandName:'b',productName:'p'},{id:2,status:'PENDING',visible:true,brandName:'b',productName:'q',userBlocked:true}]}]);
+  store['unpa-console-sent-v1']=JSON.stringify({'1':{action:'approve',at:new Date().toISOString()}});   /* 콘솔을 연 뒤 처리함 */
+  const bl=api.backlogList();
+  assert.equal(JSON.stringify(bl.map(x=>[x.id,x.blocked])),JSON.stringify([['2',true]]),'처리한 것은 빼고 넘긴다');
+  const n=api.seedFromVerdicts({'10':{action:'register_brand',brand:'새브랜드',product:'새 크림',d:'2026-09-20',applied:false},
+                                '11':{action:'approve',d:'2026-09-20'},'12':{action:'register_product',d:'2026-09-20',applied:true}});
+  assert.equal(n,1);
+  const e=api.pendingLoad()['10'];
+  assert.equal(e.a,'register_brand'); assert.equal(e.ex,true); assert.equal(e.st,'open');
+  assert.equal(e.since.slice(0,10)<= '2026-09-20',true,'리뷰 작성일 뒤에 등록한 제품과 짝지을 수 있게');
+  assert.equal(api.seedFromVerdicts({'10':{action:'register_brand',d:'2026-09-20'}}),0,'이미 있으면 덮지 않는다');
 });

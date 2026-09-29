@@ -179,7 +179,7 @@
     for(const m of st.touchedMonths||[]){const merged=mergeMonth(st.months[m],rd(m));months({[m]:merged});out.months[m]=merged;push.push({month:m,data:merged});}
     for(const m of st.touchedEv||[]){const merged=mergeEvidence(rd('~ev:'+m),st.evidence[m]);out.evidence[m]=merged;push.push({month:'~ev:'+m,data:merged});}
     for(const d of Object.keys(st.audit||{})){const r=rd('~audit:'+d);const merged=(r&&Array.isArray(r.items))?mergeAudit(r,Object.assign({},st.audit[d],{date:d})):st.audit[d];out.audit[d]=merged;push.push({month:'~audit:'+d,data:merged});}
-    if(Array.isArray(st.pending))push.push({month:'~pending',data:{at:now,items:st.pending.slice(0,500)}});
+    if(Array.isArray(st.pending))push.push({month:'~pending',data:{at:now,items:st.pending.slice(0,500),backlog:Array.isArray(st.backlog)?st.backlog.slice(0,3000):null}});
     if(st.console){
       const L=rd('~learn')||{},sentR={};
       sentMonths.forEach(m=>Object.assign(sentR,rd('~sent:'+m)||{}));
@@ -207,6 +207,19 @@
     for(const keep of [60,40,25,12]){try{const ds=Object.keys(obj.days||{}).sort();ds.slice(0,Math.max(0,ds.length-keep)).forEach(d=>{delete obj.days[d];});store.setItem(AUDIT_KEY,JSON.stringify(obj));return null;}catch(e){var err=String(e&&e.message||e);}}
     return err||'저장 실패';
   }
+  /* CMS 에 아직 남은 리뷰마다 예전 스캔에서 내린 판정 — 새 콘솔이 스캔하기 전에도 무엇이 상품등록인지 알 수 있게 */
+  function latestVerdicts(audit){
+    const out={};
+    Object.keys((audit&&audit.days)||{}).sort().forEach(d=>{((audit.days[d]||{}).items||[]).forEach(it=>{if(it&&it.id!=null)out[String(it.id)]=Object.assign({d},it);});});
+    return out;
+  }
+  function verdictsFor(audit,backlog){
+    if(!Array.isArray(backlog))return null;
+    const all=latestVerdicts(audit),out={};
+    backlog.forEach(b=>{const v=all[String(b.id)];if(v)out[String(b.id)]={action:v.action||null,verdict:v.verdict||null,brand:v.brand||'',product:v.product||'',
+      reason:String(v.reason||'').slice(0,90),d:v.d,applied:!!v.applied,manual_done:v.manual_done||null};});
+    return out;
+  }
   async function syncWindow(store,p,io,opts){
     opts=opts||{};
     if(!p||p.v!==1||!p.work)throw Error('받은 자료 형식 오류');
@@ -228,7 +241,7 @@
     const audit=readJSON(store,AUDIT_KEY,null)||{v:1,days:{}};audit.days=audit.days||{};
     let auditDays=0;
     Object.keys(p.audit||{}).forEach(d=>{const day=p.audit[d];if(!date(d)||!day||!Array.isArray(day.items))return;audit.days[d]=mergeAudit(audit.days[d],Object.assign({},day,{date:d}));auditDays++;});
-    if(Array.isArray(p.pending))store.setItem(PENDING_KEY,JSON.stringify({at:iso,items:p.pending}));
+    if(Array.isArray(p.pending))store.setItem(PENDING_KEY,JSON.stringify({at:iso,items:p.pending,backlog:Array.isArray(p.backlog)?p.backlog:null}));
     let cloud='off',consoleOut=null;
     if(io&&uid){
       try{
@@ -238,7 +251,7 @@
         const touchedMonths=[...new Set([...(snap.dirty||[]),...res.touched,...range])].filter(m=>snap.months[m]);
         const days={};Object.keys(p.audit||{}).forEach(d=>{if(audit.days[d])days[d]=audit.days[d];});
         const out=await cloudSync(io,{now:iso,months:snap.months,touchedMonths,evidence:ev.months,touchedEv:[...new Set([...Object.keys(fresh),...range])],
-          audit:days,pending:Array.isArray(p.pending)?p.pending:null,console:p.console||null,sentMonths:monthsBack(now,5)});
+          audit:days,pending:Array.isArray(p.pending)?p.pending:null,backlog:Array.isArray(p.backlog)?p.backlog:null,console:p.console||null,sentMonths:monthsBack(now,5)});
         /* 서버와 주고받는 사이에 업무일지 탭에서 고친 것이 있어도 잃지 않도록 한 번 더 합쳐서 쓴다 */
         const cur=JSON.parse(store.getItem(key));
         touchedMonths.forEach(m=>{cur.months[m]=Object.assign(mergeMonth(cur.months[m],out.months[m]),{_u:iso,_remote:iso});});
@@ -256,9 +269,10 @@
     const info={at:iso,from:p.work.from,today:res.today,partial:!!p.work.partial,changes:res.changes.slice(0,60),nChanges:res.changes.length,
                 auditDays,auditError,evError,cloud};
     try{store.setItem('unpa-worklog-sync-v1',JSON.stringify(info));}catch(e){}
-    return {ok:true,today:res.today,changes:res.changes.slice(0,20),nChanges:res.changes.length,auditDays,auditError,cloud,console:consoleOut};
+    return {ok:true,today:res.today,changes:res.changes.slice(0,20),nChanges:res.changes.length,auditDays,auditError,cloud,console:consoleOut,
+            verdicts:verdictsFor(audit,p.backlog)};
   }
-  return {date,months,mergeAudit,unappliedIds,applyWork,syncStore,syncAudit,syncWindow,
+  return {date,months,mergeAudit,unappliedIds,applyWork,syncStore,syncAudit,syncWindow,latestVerdicts,verdictsFor,
           evidenceFrom,mergeEvidence,mergeMonth,mergeAlias,mergeSent,mergeTexts,mergeGate,mergeConsole,mergeByTime,monthsBack,cloudSync};
 });
 </script>
@@ -1606,12 +1620,58 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
   function jget(k){ try{ return JSON.parse(localStorage.getItem(k)||'null'); }catch(e){ return null; } }
   function md(k){ return (+k.slice(5,7))+'/'+(+k.slice(8,10)); }
   var ACT_LB={ register_product:'상품등록 필요 (브랜드 있음)', register_brand:'브랜드+상품 등록 필요', hold:'확인 필요 (보류)' };
+  /* CMS 에 아직 남은 리뷰(콘솔이 연 순간 확인)를 기준으로, 판정은 새 스캔 → 예전 판정 기록 순으로 붙인다.
+     CMS 에 남은 게 있으면 "없다"고 하지 않는다 — 판정 전인 건은 따로 센다. */
+  var GROUPS=[
+    ['register_product','상품등록 필요 (브랜드 있음)',true],
+    ['register_brand','브랜드+상품 등록 필요',true],
+    ['hold','확인 필요 (보류)',true],
+    ['revise','수정요청 보낼 것 — 콘솔에서 실행',false],
+    ['approve','승인 대기 — 콘솔 그리드에서',false],
+    ['updated','✏️ 유저 수정완료 — 다시 검수',false],
+    ['hide','미노출 대상 (정지 사용자 등)',false],
+    ['unknown','콘솔 판정 전 — ▶ 남은 것 전부 스캔하면 나뉩니다',false]];
+  function pendRow(x){
+    var tag = x.st==='sent-manual' ? '수정요청 보냄 · 유저 응답 대기' : x.done ? '등록 완료 체크됨 → 콘솔에서 ↻ 다시 찾기' : x.status==='UPDATED' ? '✏️ 수정완료' : '';
+    return '<div class="evrow"><a href="https://cms.unpa.me/review/detail/'+encodeURIComponent(x.id)+'" target="_blank" rel="noopener">#'+esc(x.id)+' ↗</a>'
+      +'<span><b>'+esc(x.brand||'')+'</b> / '+esc(x.product||'')+' <span style="color:var(--dim)">· '+esc((x.d||'').slice(5))+' 작성</span>'
+      +(x.why?'<br><span class="why">'+esc(x.why)+'</span>':'')+'</span>'
+      +'<span class="src">'+esc(tag)+'</span></div>';
+  }
   function renderPending(){
     var o=jget(PK), body=document.getElementById('pendBody'), hint=document.getElementById('pendHint');
-    if(!o||!Array.isArray(o.items)){ body.innerHTML='<div class="warn">아직 정보가 없습니다. CMS 에서 리뷰 콘솔을 열면 남은 상품등록·확인 건이 여기에 모입니다.</div>'; return; }
+    if(!o||!Array.isArray(o.items)){ body.innerHTML='<div class="warn">아직 정보가 없습니다. CMS 에서 리뷰 콘솔을 열면 CMS 에 남은 검수 대기가 여기에 모입니다.</div>'; return; }
     var at=new Date(o.at), p2=function(n){ return (n<10?'0':'')+n; };
-    hint.textContent='CMS 기준 · '+p2(at.getMonth()+1)+'-'+p2(at.getDate())+' '+p2(at.getHours())+':'+p2(at.getMinutes())+' 확인';
-    if(!o.items.length){ body.innerHTML='<div style="color:var(--mint-dk);font-weight:700">남은 수동 작업이 없습니다 🎉</div>'; return; }
+    var when=p2(at.getMonth()+1)+'-'+p2(at.getDate())+' '+p2(at.getHours())+':'+p2(at.getMinutes());
+    if(Array.isArray(o.backlog)){
+      var cls={}; o.items.forEach(function(x){ cls[String(x.id)]=x; });
+      var old=(window.WorklogCore&&WorklogCore.latestVerdicts)?WorklogCore.latestVerdicts(jget('unpa-audit-v1')||{}):{};
+      var G={}; GROUPS.forEach(function(g){ G[g[0]]=[]; });
+      o.backlog.forEach(function(b){
+        var c=cls[String(b.id)], v=old[String(b.id)];
+        var act=c ? c.action : (v && !v.applied ? v.action : null);
+        var x={ id:b.id, d:b.d, status:b.status, st:c&&c.st, done:v&&v.manual_done,
+                brand:(c&&c.brand)||(v&&v.brand)||b.brand, product:(c&&c.product)||(v&&v.product)||b.product, why:(c&&c.why)||(v&&v.reason)||'' };
+        var k = act==='register_product'||act==='register_brand'||act==='hold' ? act
+              : act==='revise_product'||act==='revise_swatch' ? 'revise'
+              : (b.blocked || act==='hide') ? 'hide'
+              : b.status==='UPDATED' ? 'updated'
+              : act==='approve' ? 'approve' : 'unknown';
+        G[k].push(x);
+      });
+      hint.textContent='CMS 기준 · 검수 대기 '+o.backlog.length+'건 (짝수일 최근 60일) · '+when+' 확인';
+      if(!o.backlog.length){ body.innerHTML='<div style="color:var(--mint-dk);font-weight:700">CMS 에 남은 검수 대기가 없습니다 🎉</div>'; return; }
+      var byDate=function(list){ var m={}; list.forEach(function(x){ m[x.d]=(m[x.d]||0)+1; }); return Object.keys(m).sort().map(function(d){ return md(d)+' '+m[d]+'건'; }).join(' · '); };
+      body.innerHTML=GROUPS.filter(function(g){ return G[g[0]].length; }).map(function(g){
+        var list=G[g[0]].sort(function(a,b){ return a.d<b.d?-1:a.d>b.d?1:0; });
+        var head=g[1]+' · '+list.length+'건 <span style="font-weight:400;color:var(--dim);font-size:12px">('+byDate(list)+')</span>';
+        return g[2] ? '<div class="pendgrp">'+head+'</div>'+list.map(pendRow).join('')
+                    : '<details><summary class="pendgrp" style="cursor:pointer">'+head+'</summary>'+list.map(pendRow).join('')+'</details>';
+      }).join('');
+      return;
+    }
+    hint.textContent='CMS 기준 · '+when+' 확인';
+    if(!o.items.length){ body.innerHTML='<div class="warn">콘솔이 분류한 수동 작업은 없습니다. CMS 에 남은 전체 대기는 리뷰 콘솔을 한 번 더 열면 여기 표시됩니다.</div>'; return; }
     var groups={}; o.items.forEach(function(x){ (groups[x.action]||(groups[x.action]=[])).push(x); });
     body.innerHTML=['register_product','register_brand','hold'].filter(function(k){ return groups[k]; }).map(function(k){
       return '<div class="pendgrp">'+ACT_LB[k]+' · '+groups[k].length+'건</div>'
