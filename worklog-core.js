@@ -46,7 +46,9 @@
     }
     const target=(opts&&opts.target)||1450000;
     const out=JSON.parse(JSON.stringify(input||{}));
-    const mon=m=>{if(!out[m])out[m]=blankMonth(m,target);const t=out[m];if(!t.days)t.days={};const n=new Date(Date.UTC(+m.slice(0,4),+m.slice(5,7),0)).getUTCDate();for(let i=1;i<=n;i++)if(!t.days[pad2(i)])t.days[pad2(i)]={r:0,p:0,memo:'',unreg:''};if(t.target==null)t.target=target;return t;};
+    /* 새 달의 목표는 직전 달 것을 이어받는다 (사람이 바꾼 목표가 다음 달에도 그대로) */
+    const carry=m=>{const prev=Object.keys(out).filter(k=>k<m&&out[k]&&integer(out[k].target)).sort().pop();return prev?out[prev].target:target;};
+    const mon=m=>{if(!out[m])out[m]=blankMonth(m,carry(m));const t=out[m];if(!t.days)t.days={};const n=new Date(Date.UTC(+m.slice(0,4),+m.slice(5,7),0)).getUTCDate();for(let i=1;i<=n;i++)if(!t.days[pad2(i)])t.days[pad2(i)]={r:0,p:0,memo:'',unreg:''};if(t.target==null)t.target=carry(m);return t;};
     for(const k of ['r','p'])for(const [id,d] of lists[k]){
       if(d<p.from||d>p.to)continue;
       const t=mon(d.slice(0,7));t._auto=t._auto||{r:{},p:{}};t._auto[k]=t._auto[k]||{};

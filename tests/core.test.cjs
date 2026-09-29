@@ -421,3 +421,11 @@ test('remaining CMS reviews get their old verdicts back, so registration work is
   assert.equal(r.verdicts['475207'].action,'register_brand');
   assert.equal(JSON.parse(s.getItem('unpa-pending-v1')).backlog.length,1,'CMS 남은 목록을 업무일지에 둔다');
 });
+test('a changed monthly target carries into new months and wins on the computer that changed it last',()=>{
+  const base={'2026-09':Object.assign(monthOf('2026-09'),{target:1800000,_t:5})};
+  const r=W.applyWork(base,{v:1,from:'2026-09-01',to:'2026-10-02',reviews:[['1','2026-10-01']],products:[]});
+  assert.equal(r.months['2026-10'].target,1800000,'새로 생긴 10월도 9월 목표를 이어받는다');
+  assert.equal(W.applyWork({},{v:1,from:'2026-09-01',to:'2026-09-02',reviews:[],products:[]}).months['2026-09'].target,1450000,'처음에만 기본값');
+  const a=Object.assign(monthOf('2026-10'),{target:1800000,_t:10}), b=Object.assign(monthOf('2026-10'),{target:2000000,_t:20});
+  assert.equal(W.mergeMonth(a,b).target,2000000,'나중에 고친 목표'); assert.equal(W.mergeMonth(b,a).target,2000000);
+});

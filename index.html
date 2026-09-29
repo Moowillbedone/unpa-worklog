@@ -539,17 +539,50 @@ const mLabel = m => +m.slice(5,7) + '월';
 const mFull = m => m.slice(0,4) + '년 ' + (+m.slice(5,7)) + '월';
 const income = d => (d.r||0)*R_RATE + (d.p||0)*P_RATE;
 
+/* 월 목표는 직전 달 것을 이어받는다 — 한 번 바꾸면 다시 바꿀 때까지 매월 그 값 (처음에만 기본값) */
+function carryTarget(m){
+  const prev = Object.keys(ST).filter(k => k < m && ST[k] && Number.isSafeInteger(ST[k].target)).sort().pop();
+  return prev ? ST[prev].target : DEF_TARGET;
+}
 function blank(m){
   const days = {};
   for (let i = 1; i <= daysIn(m); i++) days[pad(i)] = { r:0, p:0, memo:'', unreg:'' };
-  return { month:m, target:DEF_TARGET, days };
+  return { month:m, target:carryTarget(m), days };
 }
 function month(m){
   if (!ST[m]) ST[m] = blank(m);
   const t = ST[m];
   for (let i = 1; i <= daysIn(m); i++) if (!t.days[pad(i)]) t.days[pad(i)] = { r:0, p:0, memo:'', unreg:'' };
-  if (t.target == null) t.target = DEF_TARGET;
+  if (t.target == null) t.target = carryTarget(m);
   return t;
+}
+/* 월 목표 수정 — from 달부터 그 뒤의 모든 달을 이 값으로. 앞으로 새로 생기는 달도 이어받는다.
+   _t 는 고친 시각 — 다른 컴퓨터 기록과 합칠 때 나중에 고친 쪽을 쓴다 */
+function setTarget(from, value){
+  month(from);
+  const at = Date.now(), changed = Object.keys(ST).filter(k => k >= from).sort();
+  changed.forEach(k => { ST[k].target = value; ST[k]._t = at; });
+  let ok = true; changed.forEach(k => { if (!save(k)) ok = false; });
+  renderAll();
+  return ok ? changed : null;
+}
+function parseWon(s){
+  let t = String(s == null ? '' : s).replace(/[\s,₩원]/g, '');
+  let mul = 1;
+  if (/만$/.test(t)) { mul = 10000; t = t.slice(0, -1); }
+  if (!/^\d+(\.\d+)?$/.test(t)) return null;
+  const v = Math.round(parseFloat(t) * mul);
+  return Number.isSafeInteger(v) ? v : null;
+}
+function editTarget(){
+  const now = month(cur).target;
+  const input = prompt(mFull(cur) + '부터 앞으로 매월 쓸 목표 수입을 입력하세요.\n(예: 1500000 또는 150만)\n\n다시 바꾸기 전까지 이후 모든 달이 이 값으로 고정됩니다. 그 이전 달의 목표는 그대로 둡니다.', String(now));
+  if (input == null) return;
+  const v = parseWon(input);
+  if (v == null || v < 10000 || v > 1000000000) { toast('금액을 확인해 주세요 (예: 1500000 또는 150만)', true); return; }
+  const done = setTarget(cur, v);
+  if (!done) { toast('저장 실패 — 브라우저 저장공간을 확인하세요', true); return; }
+  toast(mFull(cur) + '부터 월 목표 ' + won(v) + ' · 이후 매월 동일');
 }
 function totals(m){
   const t = month(m); let r=0,p=0,act=0;
@@ -631,11 +664,13 @@ function renderKpi(){
     `<div class="sb">${sb}</div>${extra||''}</div>`;
   $('#kpis').innerHTML =
     k(C.mint, '당월 예상 수입', won(t.inc),
-      rest > 0 ? `목표까지 <b style="color:${C.amber}">${won(rest)}</b>` : `목표 <b style="color:${C.blue}">${won(-rest)} 초과</b>`,
+      (rest > 0 ? `목표까지 <b style="color:${C.amber}">${won(rest)}</b>` : `목표 <b style="color:${C.blue}">${won(-rest)} 초과</b>`)
+        + `<br>월 목표 <b>${won(t.target)}</b> <button class="evl" id="tgtEdit" title="이 달부터 앞으로 매월 적용할 목표 수입">수정</button>`,
       `<div class="bar"><i class="${pct>=100?'over':''}" style="width:${Math.min(100,pct)}%"></i></div>`) +
     k(C.blue, '리뷰 검수 완료', num(t.r) + '<small>건</small>', `건당 ${won(R_RATE)} · ${won(t.r*R_RATE)}`) +
     k(C.violet, '제품 등록 완료', num(t.p) + '<small>건</small>', `건당 ${won(P_RATE)} · ${won(t.p*P_RATE)}`) +
     k(C.amber, '가동일 / 일평균', t.act + '<small>일</small>', `작업일 기준 일평균 ${won(avg)}`);
+  const te = $('#tgtEdit'); if (te) te.onclick = editTarget;
 }
 
 /* ── 렌더: 오늘 입력 ── */
