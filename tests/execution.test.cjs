@@ -46,6 +46,7 @@ function harness(){
                      collectWork,workPayload,outboxLoad,outboxAudit,outboxRun,syncNow,lastActor,
                      pendingRecord,pendingLoad,learnFromWatch,associate,consoleState,applyConsoleState,doneRaw,
                      setBacklog:b=>{BACKLOG=b;},backlogList,seedFromVerdicts,
+                     budget,planApprovals,goalSave,openGrid,
                      setMe:e=>{ME=e;},setWork:w=>{WORK=w;},getSyncHtml:()=>SYNC_HTML,
                      listAll,loadBacklog,scanRows,capOf,canSend,sentMark,
                      getAbort:()=>SCAN_ABORT,
@@ -580,4 +581,46 @@ test('remaining list follows CMS and old verdicts refill the waiting list for au
   assert.equal(e.a,'register_brand'); assert.equal(e.ex,true); assert.equal(e.st,'open');
   assert.equal(e.since.slice(0,10)<= '2026-09-20',true,'리뷰 작성일 뒤에 등록한 제품과 짝지을 수 있게');
   assert.equal(api.seedFromVerdicts({'10':{action:'register_brand',d:'2026-09-20'}}),0,'이미 있으면 덮지 않는다');
+});
+
+/* ── 월 목표에 맞춰 승인 (2026-09-30) ─────────────────────── */
+function goalCase(api){
+  const now=new Date(), m=localYmd(now).slice(0,7), d=localYmd(now);
+  const reviews={}; for(let i=0;i<2554;i++) reviews[String(100000+i)]=[d,'b','p',d];
+  const products={}; for(let i=0;i<137;i++) products[String(500000+i)]=[d,'b','n'];
+  api.setWork({reviews,products,failed:[],watch:{},mine:[],at:new Date().toISOString()});     /* 2554×500 + 137×600 = 1,359,200 */
+  api.goalSave({month:m,target:1430000,won:1359200});
+  const rows=[];
+  for(let i=0;i<89;i++) rows.push({id:1000+i,action:'approve',approvable:true,conf:'high',date:'2026-09-2'+(i%9),reasons:[],user:'u'+i});
+  for(let i=0;i<77;i++) rows.push({id:2000+i,action:'approve',approvable:true,conf:'check',date:(i<40?'2026-09-20':'2026-09-28'),reasons:[],user:'c'+i});
+  rows.push({id:3000,action:'revise_product',product_exact:'X',product:'x',reasons:[]});
+  api.setResults(rows);
+  return rows;
+}
+test('only the approvals that fit the monthly target are planned: high confidence first, then the oldest',()=>{
+  const {api}=harness(); const rows=goalCase(api);
+  const b=api.budget();
+  assert.equal(b.won,1359200); assert.equal(b.left,70800); assert.equal(b.approvals,141,'70,800원 ÷ 500 = 141건 (142건이면 초과)');
+  api.planApprovals();
+  const inPlan=rows.filter(r=>r.action==='approve'&&!r.deferred), out=rows.filter(r=>r.deferred);
+  assert.equal(inPlan.length,141); assert.equal(out.length,25);
+  assert.equal(inPlan.filter(r=>r.conf==='high').length,89,'고신뢰는 전부');
+  assert.ok(out.every(r=>r.conf==='check'&&r.date==='2026-09-28'),'모자란 만큼 사람 확인 건을 오래된 작성일부터 채운다');
+});
+test('the run itself never crosses the target, and nothing is approved once it is reached',async()=>{
+  const {api,sent}=harness(); api.setTpl(TPL); const rows=goalCase(api);
+  const jobs=rows.filter(r=>r.action==='approve').concat(rows.filter(r=>r.action==='revise_product'));
+  await api.runJobs(jobs);
+  const approves=sent.filter(x=>/\/approve$/.test(x.url)).length, revises=sent.filter(x=>/\/revise$/.test(x.url)).length;
+  assert.equal(approves,141,'166건 중 목표 안의 141건만 승인'); assert.equal(revises,1,'수정요청은 수입과 무관해 그대로');
+  const after=api.budget();
+  assert.equal(after.won,1429700,'방금 승인한 141건이 바로 수입에 반영'); assert.equal(after.left,300); assert.equal(after.approvals,0,'남은 300원으로는 더 승인하지 않는다');
+});
+test('with the target already reached, approvals are refused and kept for next month',async()=>{
+  const {api,sent,ctx}=harness(); api.setTpl(TPL); const rows=goalCase(api);
+  api.goalSave({month:localYmd(new Date()).slice(0,7),target:1359200,won:1359200});
+  await api.runJobs(rows.filter(r=>r.action==='approve').slice(0,5));
+  assert.equal(sent.length,0); assert.match(ctx.__alert,/목표/);
+  api.goalSave({month:localYmd(new Date()).slice(0,7),target:1430000,won:1400000});   /* 업무일지가 더 크게 알면 그 값 */
+  assert.equal(api.budget().won,1400000); assert.equal(api.budget().approvals,60);
 });

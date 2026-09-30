@@ -273,8 +273,12 @@
     const info={at:iso,from:p.work.from,today:res.today,partial:!!p.work.partial,changes:res.changes.slice(0,60),nChanges:res.changes.length,
                 auditDays,auditError,evError,cloud};
     try{store.setItem('unpa-worklog-sync-v1',JSON.stringify(info));}catch(e){}
+    /* 이번 달 목표·수입 — 콘솔이 목표 금액 안에서만 승인하도록 (단가는 업무일지와 같게 리뷰 500 · 제품 600) */
+    let goal=null;
+    try{const fin=JSON.parse(store.getItem(key)),mk=p.work.to.slice(0,7),md=fin&&fin.months&&fin.months[mk];
+      if(md&&integer(md.target)){let r=0,pp=0;Object.values(md.days||{}).forEach(d=>{r+=d.r||0;pp+=d.p||0;});goal={month:mk,target:md.target,r,p:pp,won:r*500+pp*600};}}catch(e){}
     return {ok:true,today:res.today,changes:res.changes.slice(0,20),nChanges:res.changes.length,auditDays,auditError,cloud,console:consoleOut,
-            verdicts:verdictsFor(audit,p.backlog)};
+            verdicts:verdictsFor(audit,p.backlog),goal};
   }
   return {date,months,mergeAudit,unappliedIds,applyWork,syncStore,syncAudit,syncWindow,latestVerdicts,verdictsFor,
           evidenceFrom,mergeEvidence,mergeMonth,mergeAlias,mergeSent,mergeTexts,mergeGate,mergeConsole,mergeByTime,monthsBack,cloudSync};

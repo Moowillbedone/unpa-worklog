@@ -1135,11 +1135,10 @@
       r.conf=c.level; r.confWhy=c.why; r.sample=false;
       if(c.level==='high') highs.push(r);
     });
-    /* 고신뢰 중 10%(최소 3건)를 무작위로 골라 사람이 확인한다.
+    /* 이번 달 목표 안에서 할 승인만 고르고(planApprovals), 그 고신뢰 중 10%(최소 3건)를 표본으로 사람이 확인한다.
        표본이 하나라도 탈락하면 그날 고신뢰 자동 승인은 통째로 보류된다. */
-    var k=Math.min(highs.length, Math.max(3, Math.ceil(highs.length*0.1)));
-    var pool=highs.slice();
-    for(var n=0;n<k;n++){ var idx=Math.floor(Math.random()*pool.length); pool.splice(idx,1)[0].sample=true; }
+    planApprovals();
+    fixSamples();
 
     histSave(h);
   }
@@ -1552,6 +1551,7 @@
 
   function renderQueue(sd){
     sd = SCAN_LABEL || sd;          /* 실행·체크 뒤 다시 그려도 "09-20 ~ 09-26 (3일)" 표시를 유지한다 */
+    var B=planApprovals(); fixSamples();
     var done=doneLoad();
     var multiDay=scanDates().length>1;
     var groups={revise:[],hide:[],register:[],hold:[]};
@@ -1559,7 +1559,10 @@
     var order=['revise_product','hide','register_product','register_brand','hold','revise_swatch','approve'];
 
     var html='<div style="margin-top:8px;color:#9fb4ab">'+esc(sd)+' · 총 <b style="color:#fff">'+results.length+'</b>건 판정 완료</div>'
-      +(SCAN_ABORT?'<div style="margin-top:6px;font-size:11.5px;color:#ff8f6b">⚠ '+esc(SCAN_ABORT)+'</div>':'');
+      +(SCAN_ABORT?'<div style="margin-top:6px;font-size:11.5px;color:#ff8f6b">⚠ '+esc(SCAN_ABORT)+'</div>':'')
+      +(results.some(function(r){ return r.action==='approve' && !r.applied; })
+         ? '<div style="margin-top:6px;font-size:11.5px;color:'+(B.known?'#f5c451':'#6b7f77')+'">'+esc(budgetLine(B))
+           +(B.known && B.deferredN ? ' · <b>'+B.deferredN+'건은 남겨 둠</b>(다음 달)' : '')+'</div>' : '');
     html+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">';
     order.forEach(function(k){ if(!groups[k]||!groups[k].length) return;
       var nDone = MANUAL_TODO[k] ? groups[k].filter(function(r){ return done[String(r.id)]; }).length : 0;
@@ -1598,7 +1601,8 @@
           +(r.reviewStatus==='UPDATED'?'<span style="font-size:10.5px;color:#f5c451;font-weight:800">✏️수정완료</span> ':'')
           +'<span style="color:#9fb4ab;'+strike+'">'+esc(r.brand||'')+' / '+esc(r.product||'')+'</span>'
           +(dn?' <span style="color:#3ddc97;font-size:10.5px;font-weight:800">✓ 완료 '+esc(doneStamp(dn.at))+'</span>':'')
-          +(k==='approve' && !r.applied && r.conf
+          +(k==='approve' && !r.applied && r.deferred ? ' <span style="font-size:10.5px;color:#f5c451;font-weight:800">⏸ 목표 도달 — 남겨 둠</span>' : '')
+          +(k==='approve' && !r.applied && !r.deferred && r.conf
               ? (r.conf==='high'
                   ? ' <span style="font-size:10.5px;color:#9fe3c4;font-weight:800">⚡고신뢰'+(r.sample?' · 🎯표본':'')+'</span>'
                   : ' <span style="font-size:10.5px;color:#9fb4ab">👀 '+esc((r.confWhy||[])[0]||'확인')+'</span>')
@@ -1632,7 +1636,7 @@
     if(pendingRe.length) html+='<button id="csRecheck" style="width:100%;margin-top:14px;background:#1b3329;color:#9fe3c4;'
       +'border:1px solid #3ddc97;border-radius:9px;padding:10px;font:inherit;font-weight:800;cursor:pointer">'
       +'↻ 등록 완료 '+pendingRe.length+'건 다시 찾아 수정요청</button>';
-    var cand = results.filter(function(r){ return r.approvable && !r.applied; });
+    var cand = results.filter(function(r){ return r.approvable && !r.applied && !r.deferred; });
     var nGrid = cand.length;
     var nHigh = cand.filter(function(r){ return r.conf==='high' && !r.sample; }).length;
     var nLook = nGrid - nHigh;
@@ -1810,6 +1814,27 @@
       jobs=jobs.filter(function(r){ return !!buildReq(r); });
       if(!jobs.length) return;
     }
+    /* 이번 달 목표를 넘는 승인은 실행 직전에 한 번 더 잘라 낸다 (CMS 집계가 10분 넘게 지났으면 다시 센다) */
+    var appr=jobs.filter(function(r){ return r.action==='approve'; }), goalNote='';
+    if(appr.length){
+      var B=budget();
+      if(B.known && WORK && ME && Date.now()-(Date.parse(WORK.at)||0)>10*60000){
+        log('🎯 목표 확인 — CMS 이번 달 승인 다시 집계 중…');
+        try{ WORK=await collectWork(ME); }catch(e){}
+        B=budget();
+      }
+      if(B.known){
+        if(appr.length>B.approvals){
+          var keep={}; appr.slice().sort(approvalOrder).slice(0, B.approvals).forEach(function(r){ keep[String(r.id)]=1; });
+          appr.forEach(function(r){ if(!keep[String(r.id)]) r.deferred=true; });
+          jobs=jobs.filter(function(r){ return r.action!=='approve' || keep[String(r.id)]; });
+          goalNote='\n\n🎯 목표 '+wonFmt(B.target)+'까지 남은 '+wonFmt(Math.max(0,B.left))+' — 승인은 '+B.approvals+'건만 하고 '+(appr.length-B.approvals)+'건은 남겨 둡니다.';
+          if(!jobs.length){ alert('이번 달 목표('+wonFmt(B.target)+')에 이미 닿았습니다 (이번 달 '+wonFmt(B.won)+').\n승인은 하지 않고 남겨 둡니다.'); if(results.length) renderQueue(SCAN_DATE); return; }
+        } else {
+          goalNote='\n\n🎯 승인 '+appr.length+'건 뒤 이번 달 '+wonFmt(B.won+appr.length*RATE_R)+' / 목표 '+wonFmt(B.target);
+        }
+      } else goalNote='\n\n⚠ '+B.why+' — 목표 금액 제한 없이 승인합니다.';
+    }
     var byAct={}; jobs.forEach(function(r){ byAct[r.action]=(byAct[r.action]||0)+1; });
     var over=Object.keys(byAct).filter(function(k){ return byAct[k] > capOf(k); });
     if(over.length){
@@ -1818,7 +1843,7 @@
       return;
     }
     var summ=Object.keys(byAct).map(function(k){ return ACT[k].t+' '+byAct[k]+'건'; }).join(' · ');
-    if(!confirm('실제로 '+jobs.length+'건을 처리합니다.\n\n'+summ+'\n\n진행할까요?')) return;
+    if(!confirm('실제로 '+jobs.length+'건을 처리합니다.\n\n'+summ+goalNote+'\n\n진행할까요?')) return;
 
     window.__CONSOLE_RUNNING=true;
     var run=document.getElementById('csRun'); if(run){ run.disabled=true; run.textContent='실행 중…'; }
@@ -1845,6 +1870,7 @@
                    told:r.action==='revise_product'?(r.product_exact||null):null,
                    conf:r.conf||null, sample:!!r.sample, why:(r.reasons||[]).slice(-2)});
         if(ok){
+          if(r.action==='approve') SESSION_APPROVED[String(r.id)]=ymd(new Date());   /* 목표 계산에 바로 반영 */
           if(pendingLoad()[String(r.id)]) pendingMark(r.id, r.action==='revise_product' ? 'learned' : isRevise(r.action) ? 'sent' : 'resolved',
                                                      r.action==='revise_product' ? { pid:r.product_id, pname:r.product_exact } : null);
           if(!sentMark(r)) log('&nbsp;&nbsp;<span style="color:#ff8f6b">⚠ 전송 기록 저장 실패 — 브라우저 저장공간을 확인하세요 (재스캔 때 다시 보낼 수 있음)</span>');
@@ -1931,6 +1957,60 @@
   function auditDays(){
     var days={}; scanDates().forEach(function(d){ days[d]=auditPayload(d); });
     return { v:1, at:new Date().toISOString(), days:days };
+  }
+
+  /* ── 월 목표에 맞춰 승인 ─────────────────────────────────
+     업무일지 수입 = 리뷰 검수완료 500원 + 제품 등록 600원 (업무일지와 같은 단가). 목표를 넘기면 안 된다.
+     목표 금액은 업무일지에서(동기화 때 받아 이 브라우저에 둔다), 이번 달 수입은 CMS 실데이터로 센다.
+     업무일지가 이번 달을 더 크게 알고 있으면 그 값을 쓴다 — 목표를 넘는 쪽으로는 틀리지 않게.
+     남은 금액으로 할 수 있는 승인만 고른다: 고신뢰 먼저, 모자라면 사람 확인 건을 오래된 작성일부터.
+     수정요청·미노출은 수입(리뷰 수)에 들어가지 않으므로 막지 않는다. */
+  var RATE_R=500, RATE_P=600;
+  var GOAL_KEY='unpa-console-goal-v1', SESSION_APPROVED={};
+  function goalLoad(){ try{ var g=JSON.parse(localStorage.getItem(GOAL_KEY)||'null'); return (g && typeof g==='object') ? g : null; }catch(e){ return null; } }
+  function goalSave(g){ try{ localStorage.setItem(GOAL_KEY, JSON.stringify(g)); }catch(e){} }
+  function wonFmt(n){ return '₩'+Math.round(n||0).toLocaleString('ko-KR'); }
+  function dayOf(v){ var d=Array.isArray(v) ? v[0] : v; return typeof d==='string' ? d : ''; }
+  function budget(){
+    var m=ymd(new Date()).slice(0,7), g=goalLoad();
+    if(!g || !(g.target>0)) return { known:false, why:'업무일지 목표 금액을 아직 모름 (동기화 뒤 적용)' };
+    if(!WORK) return { known:false, why:'이번 달 수입 계산 중 (CMS 집계 전)' };
+    var r=0, p=0, seen={};
+    Object.keys(WORK.reviews||{}).forEach(function(id){ if(dayOf(WORK.reviews[id]).slice(0,7)===m){ r++; seen[id]=1; } });
+    Object.keys(SESSION_APPROVED).forEach(function(id){ if(!seen[id] && SESSION_APPROVED[id].slice(0,7)===m) r++; });
+    Object.keys(WORK.products||{}).forEach(function(id){ if(dayOf(WORK.products[id]).slice(0,7)===m) p++; });
+    var won=r*RATE_R+p*RATE_P, src='CMS';
+    if(g.month===m && typeof g.won==='number' && g.won>won){ won=g.won; src='업무일지'; }
+    var left=g.target-won;      /* 달이 바뀌어도 목표는 이어진다 (업무일지와 같은 규칙) */
+    return { known:true, month:m, target:g.target, won:won, src:src, r:r, p:p, left:left, approvals:Math.max(0, Math.floor(left/RATE_R)) };
+  }
+  function approvalOrder(a, b){
+    var ha=a.conf==='high' ? 0 : 1, hb=b.conf==='high' ? 0 : 1;
+    return ha-hb || String(a.date||'').localeCompare(String(b.date||'')) || (Number(a.id)||0)-(Number(b.id)||0);
+  }
+  /* 승인 후보 중 이번 달 목표 안에서 할 것만 남기고 나머지는 "남겨 둠" 표시 */
+  function planApprovals(){
+    var b=budget();
+    var c=results.filter(function(r){ return r.action==='approve' && r.approvable && !r.applied; });
+    c.forEach(function(r){ r.deferred=false; });
+    if(!b.known) return b;
+    c.sort(approvalOrder).forEach(function(r, i){ r.deferred = i>=b.approvals; });
+    b.cand=c.length; b.deferredN=Math.max(0, c.length-b.approvals);
+    return b;
+  }
+  /* 표본은 이번에 승인할 고신뢰 중에서 10%(최소 3건) */
+  function fixSamples(){
+    results.forEach(function(r){ if(r.sample && r.deferred) r.sample=false; });
+    var inHighs=results.filter(function(r){ return r.action==='approve' && r.approvable && !r.applied && r.conf==='high' && !r.deferred; });
+    var need=Math.min(inHighs.length, Math.max(3, Math.ceil(inHighs.length*0.1)));
+    var have=inHighs.filter(function(r){ return r.sample; }).length;
+    var rest=inHighs.filter(function(r){ return !r.sample; });
+    while(have<need && rest.length){ rest.splice(Math.floor(Math.random()*rest.length), 1)[0].sample=true; have++; }
+  }
+  function budgetLine(b){
+    if(!b) return '';
+    if(!b.known) return '🎯 '+b.why;
+    return '🎯 목표 '+wonFmt(b.target)+' · 이번 달 '+wonFmt(b.won)+' · 남은 '+wonFmt(Math.max(0,b.left))+' → 승인 '+b.approvals+'건까지';
   }
 
   /* ── 업무일지 자동 동기화 ─────────────────────────────────
@@ -2109,6 +2189,7 @@
       finish();
       if(!ev.data.ok){ syncButton('<span style="color:#ff8f6b">⚠ 업무일지 반영 실패 — '+esc(String(ev.data.error||'').slice(0,80))+'</span>'); return; }
       if(ev.data.console) applyConsoleState(ev.data.console);
+      if(ev.data.goal && ev.data.goal.target>0){ goalSave(Object.assign({ at:new Date().toISOString() }, ev.data.goal)); if(results.length) renderQueue(SCAN_DATE); }
       if(ev.data.verdicts && seedFromVerdicts(ev.data.verdicts)) matchPending();   /* 예전 판정으로 채운 건도 바로 짝지어 본다 */
       /* 보낸 뒤로 보관함에 새로 쌓인 게 없으면 비운다 (새로 쌓였으면 다음에 함께 다시 보낸다 — 합칠 때 중복은 걸러진다) */
       if((outboxLoad().seq||0)===payload.seq){ try{ localStorage.removeItem(OUTBOX_KEY); }catch(e){} }
@@ -2121,7 +2202,8 @@
         +(ev.data.cloud==='on' ? ' · <span style="color:#9fe3c4">☁ 다른 컴퓨터와 합침</span>'
           : ev.data.cloud==='off' ? ' · <span style="color:#6b7f77">☁ 업무일지 로그인 전 — 이 컴퓨터에만</span>'
           : ev.data.cloud ? ' · <span style="color:#f5c451">☁ 서버 합치기 실패 — 다음에 다시</span>' : '')
-        +(LEARN_NOTE?' · '+LEARN_NOTE:''));
+        +(LEARN_NOTE?' · '+LEARN_NOTE:'')
+        +(function(){ var b=budget(); return b.known ? '<br><span style="color:#f5c451">'+esc(budgetLine(b))+'</span>' : ''; })());
     };
     window.addEventListener('message', onMsg);
     timer=setTimeout(function(){ finish(); syncButton('<span style="color:#ff8f6b">⚠ 업무일지 창 응답 없음</span>'); }, 45000);
@@ -2242,7 +2324,8 @@
      눈으로 봐야 한다. 한 화면에 깔아놓고 이상한 것만 체크를 풀어
      나머지를 한 번에 승인한다. */
   function openGrid(){
-    var all=results.filter(function(r){ return r.approvable && !r.applied; });
+    planApprovals(); fixSamples();
+    var all=results.filter(function(r){ return r.approvable && !r.applied && !r.deferred; });
     /* 고신뢰(표본 아님)는 사람이 보지 않는다 — 표본이 전부 통과하면 함께 승인된다 */
     var highs=all.filter(function(r){ return r.conf==='high' && !r.sample; });
     var pool=all.filter(function(r){ return !(r.conf==='high' && !r.sample); });

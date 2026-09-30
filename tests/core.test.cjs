@@ -450,3 +450,10 @@ test('a wrong number typed by hand is corrected to the CMS count on the next syn
   const merged=W.mergeMonth(typed,first.months['2026-09']);
   assert.equal(merged.days['30'].r,47); assert.deepEqual(merged.days['30'].manual,{r:200,p:0});
 });
+
+test('the sync window hands the console this month\'s target and income',async()=>{
+  const s=fakeStore();
+  s.setItem('unpa-worklog-v1',JSON.stringify({v:1,months:{'2026-09':Object.assign(monthOf('2026-09'),{target:1430000})},dirty:[]}));
+  const r=await W.syncWindow(s,{v:1,seq:1,work:{v:1,from:'2026-09-01',to:'2026-09-30',reviews:[['1','2026-09-30'],['2','2026-09-29']],products:[['9','2026-09-29']]}},null,{now:new Date('2026-09-30T12:00:00Z')});
+  assert.deepEqual(r.goal,{month:'2026-09',target:1430000,r:2,p:1,won:1600});
+});
