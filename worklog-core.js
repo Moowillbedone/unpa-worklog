@@ -135,6 +135,9 @@
       /* 숫자: 자동 집계 날은 합친 장부 건수(CMS 기준) 그대로 */
       if(win.auto||(other&&other.auto)){
         const ar=((led.r||{})[dd]||[]).length,ap=((led.p||{})[dd]||[]).length;
+        /* 칸에 CMS 와 다른 숫자가 적혀 있었으면 무엇을 바로잡았는지 남긴다 */
+        const src=win.auto?win:other;
+        if((src.r||0)!==(src.auto.r||0)||(src.p||0)!==(src.auto.p||0))d.manual={r:src.r||0,p:src.p||0};
         d.r=ar;d.p=ap;d.auto={r:ar,p:ap};
       }
       out.days[dd]=d;

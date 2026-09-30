@@ -445,4 +445,8 @@ test('a wrong number typed by hand is corrected to the CMS count on the next syn
   /* 다른 컴퓨터 기록과 합칠 때도 200 이 되살아나지 않는다 */
   const other=JSON.parse(JSON.stringify(m['2026-09'])); other.days['30']._t=Date.now()+1000;
   assert.equal(W.mergeMonth(again.months['2026-09'],other).days['30'].r,47);
+  /* 서버 기록과 합치는 단계에서 바로잡혀도 무엇을 고쳤는지 남긴다 */
+  const typed=JSON.parse(JSON.stringify(first.months['2026-09'])); typed.days['30'].r=200; typed.days['30']._t=Date.now()+5000;
+  const merged=W.mergeMonth(typed,first.months['2026-09']);
+  assert.equal(merged.days['30'].r,47); assert.deepEqual(merged.days['30'].manual,{r:200,p:0});
 });
