@@ -46,7 +46,7 @@ function harness(){
                      collectWork,workPayload,outboxLoad,outboxAudit,outboxRun,syncNow,lastActor,
                      pendingRecord,pendingLoad,learnFromWatch,associate,consoleState,applyConsoleState,doneRaw,
                      setBacklog:b=>{BACKLOG=b;},backlogList,seedFromVerdicts,
-                     budget,planApprovals,goalSave,openGrid,
+                     budget,planApprovals,goalSave,openGrid,refreshSkipped,
                      setMe:e=>{ME=e;},setWork:w=>{WORK=w;},getSyncHtml:()=>SYNC_HTML,
                      listAll,loadBacklog,scanRows,capOf,canSend,sentMark,
                      getAbort:()=>SCAN_ABORT,
@@ -623,4 +623,26 @@ test('with the target already reached, approvals are refused and kept for next m
   assert.equal(sent.length,0); assert.match(ctx.__alert,/목표/);
   api.goalSave({month:localYmd(new Date()).slice(0,7),target:1430000,won:1400000});   /* 업무일지가 더 크게 알면 그 값 */
   assert.equal(api.budget().won,1400000); assert.equal(api.budget().approvals,60);
+});
+
+test('skipped cards are not offered again; the remaining slots go to other clean reviews',async()=>{
+  const {api,ctx}=harness();
+  const now=new Date(), m=localYmd(now).slice(0,7), d=localYmd(now);
+  api.setWork({reviews:{},products:{},failed:[],watch:{},mine:[],at:new Date().toISOString()});
+  api.goalSave({month:m,target:2000,won:0});                    /* 남은 2,000원 → 승인 4건 */
+  const rows=[];
+  for(let i=0;i<4;i++) rows.push({id:10+i,action:'approve',approvable:true,conf:'check',date:'2026-09-20',confWhy:['고해상도 직접촬영 사진 없음'],reasons:[],_gridSt:'skip'});   /* 사람이 건너뜀(따로 수정요청) */
+  rows.push({id:20,action:'approve',approvable:true,conf:'check',date:'2026-09-22',confWhy:['다른 리뷰(#1)와 본문 거의 동일 — 복붙 의심','발색 제품 — 발색샷 확인'],reasons:[]});
+  for(let i=0;i<5;i++) rows.push({id:30+i,action:'approve',approvable:true,conf:'check',date:'2026-09-28',confWhy:['본문 짧음(30자)'],reasons:[]});
+  api.setResults(rows);
+  const b=api.planApprovals();
+  const chosen=rows.filter(r=>!r.deferred).map(r=>r.id).sort();
+  assert.deepEqual(chosen,[30,31,32,33],'건너뛴 4건 대신, 이슈 적은 다른 4건 (복붙·발색 의심 #20 은 뒤로)');
+  assert.ok(rows.filter(r=>r._gridSt==='skip').every(r=>r.deferred&&r.skipOut));
+  assert.equal(b.skippedN,4);
+  /* 그리드를 다시 열 때: 건너뛴 것 중 CMS 에서 수정요청된 것은 후보에서 아예 뺀다 */
+  ctx.__route=url=> /\/reviews\/1[0-1]$/.test(url) ? {status:200,body:{status:'REVISED',visible:true}} : /\/reviews\/1[2-3]$/.test(url) ? {status:200,body:{status:'PENDING',visible:true}} : {status:404,body:{}};
+  const n=await api.refreshSkipped();
+  assert.equal(n,2); assert.equal(rows[0].approvable,false); assert.match(rows[0].reasons.join(' '),/이미 수정요청/);
+  assert.equal(rows[2].approvable,true,'아직 대기 중인 건은 그대로(건너뜀 상태 유지)');
 });

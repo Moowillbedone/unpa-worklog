@@ -1562,7 +1562,8 @@
       +(SCAN_ABORT?'<div style="margin-top:6px;font-size:11.5px;color:#ff8f6b">⚠ '+esc(SCAN_ABORT)+'</div>':'')
       +(results.some(function(r){ return r.action==='approve' && !r.applied; })
          ? '<div style="margin-top:6px;font-size:11.5px;color:'+(B.known?'#f5c451':'#6b7f77')+'">'+esc(budgetLine(B))
-           +(B.known && B.deferredN ? ' · <b>'+B.deferredN+'건은 남겨 둠</b>(다음 달)' : '')+'</div>' : '');
+           +(B.known && B.deferredN ? ' · <b>'+B.deferredN+'건은 남겨 둠</b>(다음 달)' : '')
+           +(B.known && B.skippedN ? ' · 건너뛴 '+B.skippedN+'건은 빼고 다른 리뷰로 채움' : '')+'</div>' : '');
     html+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">';
     order.forEach(function(k){ if(!groups[k]||!groups[k].length) return;
       var nDone = MANUAL_TODO[k] ? groups[k].filter(function(r){ return done[String(r.id)]; }).length : 0;
@@ -1601,7 +1602,8 @@
           +(r.reviewStatus==='UPDATED'?'<span style="font-size:10.5px;color:#f5c451;font-weight:800">✏️수정완료</span> ':'')
           +'<span style="color:#9fb4ab;'+strike+'">'+esc(r.brand||'')+' / '+esc(r.product||'')+'</span>'
           +(dn?' <span style="color:#3ddc97;font-size:10.5px;font-weight:800">✓ 완료 '+esc(doneStamp(dn.at))+'</span>':'')
-          +(k==='approve' && !r.applied && r.deferred ? ' <span style="font-size:10.5px;color:#f5c451;font-weight:800">⏸ 목표 도달 — 남겨 둠</span>' : '')
+          +(k==='approve' && !r.applied && r.skipOut ? ' <span style="font-size:10.5px;color:#9fb4ab;font-weight:800">⏭ 건너뜀 — 목표 계산에서 뺌</span>' : '')
+          +(k==='approve' && !r.applied && r.deferred && !r.skipOut ? ' <span style="font-size:10.5px;color:#f5c451;font-weight:800">⏸ 목표 도달 — 남겨 둠</span>' : '')
           +(k==='approve' && !r.applied && !r.deferred && r.conf
               ? (r.conf==='high'
                   ? ' <span style="font-size:10.5px;color:#9fe3c4;font-weight:800">⚡고신뢰'+(r.sample?' · 🎯표본':'')+'</span>'
@@ -1691,7 +1693,16 @@
       };
     });
     document.getElementById('csRescan').onclick=function(){ renderStart(String(SCAN_DATE||'').slice(0,10)); };
-    if(nGrid) document.getElementById('csGridBtn').onclick=function(){ openGrid(); };
+    if(nGrid) document.getElementById('csGridBtn').onclick=async function(){
+      /* 건너뛴 리뷰를 사람이 CMS 에서 따로 처리했을 수 있다 — 확인하고 연다 */
+      var gb=document.getElementById('csGridBtn');
+      if(results.some(function(r){ return r._gridSt==='skip' && r.action==='approve' && !r.applied; })){
+        if(gb){ gb.disabled=true; gb.textContent='건너뛴 리뷰 CMS 상태 확인 중…'; }
+        try{ await refreshSkipped(); }catch(e){}
+        renderQueue(SCAN_DATE);          /* 확인 결과를 대기열에 반영하고 버튼을 되살린다 */
+      }
+      openGrid();
+    };
     var rb=document.getElementById('csRecheck');
     if(rb) rb.onclick=async function(){
       rb.disabled=true; rb.textContent='다시 찾는 중…';
@@ -1984,19 +1995,53 @@
     var left=g.target-won;      /* 달이 바뀌어도 목표는 이어진다 (업무일지와 같은 규칙) */
     return { known:true, month:m, target:g.target, won:won, src:src, r:r, p:p, left:left, approvals:Math.max(0, Math.floor(left/RATE_R)) };
   }
+  /* 사람 확인 건의 "걸리는 점" 점수 — 목표까지 몇 건만 더 해야 할 때 이슈가 적은 괜찮은 리뷰부터 고른다 */
+  function issueScore(r){
+    var s=0;
+    (r.confWhy||[]).forEach(function(w){
+      s+=1;
+      if(/복붙|본문 동일|거의 같은 본문/.test(w)) s+=3;
+      if(/미노출/.test(w)) s+=3;
+      if(/발색/.test(w)) s+=2;
+      if(/정지/.test(w)) s+=2;
+      if(/저해상|캡처|깨진/.test(w)) s+=2;
+    });
+    if(r.photo && r.photo.v==='mixed') s+=1;
+    if(r.reviewStatus==='UPDATED') s+=1;
+    return s;
+  }
+  /* 고신뢰 먼저 → 사람 확인 건은 이슈 적은 순 → 같으면 오래된 작성일부터 */
   function approvalOrder(a, b){
     var ha=a.conf==='high' ? 0 : 1, hb=b.conf==='high' ? 0 : 1;
-    return ha-hb || String(a.date||'').localeCompare(String(b.date||'')) || (Number(a.id)||0)-(Number(b.id)||0);
+    return ha-hb || (ha ? issueScore(a)-issueScore(b) : 0)
+      || String(a.date||'').localeCompare(String(b.date||'')) || (Number(a.id)||0)-(Number(b.id)||0);
   }
-  /* 승인 후보 중 이번 달 목표 안에서 할 것만 남기고 나머지는 "남겨 둠" 표시 */
+  /* 승인 후보 중 이번 달 목표 안에서 할 것만 남기고 나머지는 "남겨 둠" 표시.
+     그리드에서 건너뛴 리뷰는 계산에서 빼고, 그 자리를 건너뛰지 않은 다른 리뷰로 채운다
+     (건너뛴 것을 또 내밀지 않게 — 사람이 따로 수정요청을 보낸 경우가 많다) */
   function planApprovals(){
     var b=budget();
     var c=results.filter(function(r){ return r.action==='approve' && r.approvable && !r.applied; });
-    c.forEach(function(r){ r.deferred=false; });
+    c.forEach(function(r){ r.deferred=false; r.skipOut=false; });
     if(!b.known) return b;
-    c.sort(approvalOrder).forEach(function(r, i){ r.deferred = i>=b.approvals; });
-    b.cand=c.length; b.deferredN=Math.max(0, c.length-b.approvals);
+    var skipped=c.filter(function(r){ return r._gridSt==='skip'; });
+    var rest=c.filter(function(r){ return r._gridSt!=='skip'; });
+    skipped.forEach(function(r){ r.deferred=true; r.skipOut=true; });
+    rest.sort(approvalOrder).forEach(function(r, i){ r.deferred = i>=b.approvals; });
+    b.cand=c.length; b.skippedN=skipped.length; b.deferredN=Math.max(0, rest.length-b.approvals);
     return b;
+  }
+  /* 건너뛴 리뷰가 그사이 CMS 에서 처리됐는지 확인 — 수정요청·승인·미노출이면 후보에서 아예 뺀다 */
+  async function refreshSkipped(){
+    var list=results.filter(function(r){ return r._gridSt==='skip' && r.action==='approve' && r.approvable && !r.applied; }), n=0;
+    for(var i=0;i<list.length;i++){
+      var r=list[i], dr=await get(API+'/admin/reviews/'+r.id), j=dr.json;
+      if(dr.status!==200 || !j) continue;
+      var st=j.status, how = st==='REVISED' ? '수정요청' : st==='APPROVED' ? '검수완료' : j.visible===false ? '미노출' : null;
+      if(how){ r.approvable=false; r.action='hold'; r.cmsDone=how; r.reviewStatus=st; r.reasons.push('CMS에서 이미 '+how+'됨 — 후보에서 뺌'); n++; }
+      await delay(60);
+    }
+    return n;
   }
   /* 표본은 이번에 승인할 고신뢰 중에서 10%(최소 3건) */
   function fixSamples(){
