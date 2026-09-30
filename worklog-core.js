@@ -32,8 +32,9 @@
      [리뷰 ID, 승인한 날] · [제품 ID, 등록한 날] 을 날짜별 장부(_auto)에 쌓고,
      장부의 건수로 그날 리뷰·제품 수를 채운다.
      - 장부는 늘기만 한다. 다시 받아도 같은 건은 한 번만 센다.
-     - 처음 자동으로 채우는 날, 전에 직접 적어 둔 값은 day.manual 에 남긴다.
-     - 자동 반영 뒤 사람이 숫자를 고치면 그 차이를 조정값으로 보고 다음 동기화 때도 유지한다. */
+     - 자동 집계 칸은 CMS 가 기준이다. 사람이 다른 숫자를 적어 두어도 동기화 때 CMS 건수로 바로잡는다.
+       (예전에는 차이를 "조정값"으로 유지해, CMS 47건인 날에 잘못 적은 200 이 그대로 남았다)
+     - 바로잡기 전에 적혀 있던 값은 day.manual 에 남겨 무엇을 고쳤는지 보인다. */
   function pad2(n){return String(n).padStart(2,'0');}
   function blankMonth(m,target){const n=new Date(Date.UTC(+m.slice(0,4),+m.slice(5,7),0)).getUTCDate(),days={};for(let i=1;i<=n;i++)days[pad2(i)]={r:0,p:0,memo:'',unreg:''};return {month:m,target,days};}
   function nextDay(d){const t=new Date(Date.parse(d+'T00:00:00Z')+864e5);return t.toISOString().slice(0,10);}
@@ -60,10 +61,10 @@
       const mm=d.slice(0,7),dd=d.slice(8),t=mon(mm),day=t.days[dd],a=t._auto||{};
       const ar=((a.r||{})[dd]||[]).length,ap=((a.p||{})[dd]||[]).length;
       const r0=day.r||0,p0=day.p||0;
-      let offR=0,offP=0;
-      if(day.auto){offR=r0-(day.auto.r||0);offP=p0-(day.auto.p||0);}
-      else if((r0||p0)&&(r0!==ar||p0!==ap)&&!day.manual)day.manual={r:r0,p:p0};
-      const nr=Math.max(0,ar+offR),np=Math.max(0,ap+offP);
+      /* 사람이 적어 둔 값이 CMS 와 다르면 남겨 두고 CMS 건수로 바로잡는다 */
+      const typed=day.auto?(r0!==(day.auto.r||0)||p0!==(day.auto.p||0)):((r0||p0)&&(r0!==ar||p0!==ap));
+      if(typed)day.manual={r:r0,p:p0};
+      const nr=ar,np=ap;
       if(nr!==r0||np!==p0)changes.push({d,r:[r0,nr],p:[p0,np]});
       if(!day.auto||day.auto.r!==ar||day.auto.p!==ap||nr!==r0||np!==p0)touched.add(mm);
       day.r=nr;day.p=np;day.auto={r:ar,p:ap};
@@ -131,12 +132,10 @@
       const win=!L?R:!R?L:((R._t||0)>(L._t||0)?R:L), other=win===L?R:L;
       const d=JSON.parse(JSON.stringify(win));
       if(other){if(!d.memo&&other.memo)d.memo=other.memo;if(!d.unreg&&other.unreg)d.unreg=other.unreg;if(!d.manual&&other.manual)d.manual=other.manual;}
-      /* 숫자: 자동 집계가 있는 쪽의 조정값을 쓰고, 합친 장부로 다시 센다 */
-      const src=win.auto?win:(other&&other.auto?other:null);
-      if(src){
+      /* 숫자: 자동 집계 날은 합친 장부 건수(CMS 기준) 그대로 */
+      if(win.auto||(other&&other.auto)){
         const ar=((led.r||{})[dd]||[]).length,ap=((led.p||{})[dd]||[]).length;
-        const offR=(src.r||0)-(src.auto.r||0),offP=(src.p||0)-(src.auto.p||0);
-        d.r=Math.max(0,ar+offR);d.p=Math.max(0,ap+offP);d.auto={r:ar,p:ap};
+        d.r=ar;d.p=ap;d.auto={r:ar,p:ap};
       }
       out.days[dd]=d;
     }

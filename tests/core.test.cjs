@@ -272,11 +272,12 @@ test('auto sync fills the real work day, keeps what was typed before, and never 
   const again=W.applyWork(r.months,work);
   assert.equal(again.changes.length,0,'같은 자료를 다시 받아도 그대로');
   assert.equal(again.months['2026-09'].days['11'].r,171);
-  /* 사람이 고친 것은 조정값으로 유지 */
+  /* 사람이 다른 숫자를 적어 두어도 CMS 건수로 바로잡는다 */
   again.months['2026-09'].days['11'].r=175;
   const more=Object.assign({},work,{reviews:work.reviews.concat([['500','2026-09-11']])});
   const r3=W.applyWork(again.months,more);
-  assert.equal(r3.months['2026-09'].days['11'].r,176,'자동 172 + 직접 조정 +4');
+  assert.equal(r3.months['2026-09'].days['11'].r,172,'CMS 171 + 새로 1 = 172 (직접 적은 175 는 무시)');
+  assert.deepEqual(r3.months['2026-09'].days['11'].manual,{r:175,p:2},'바로잡기 전 값은 남긴다');
   /* 장부는 줄지 않는다 — 조회 범위에서 빠진 날도 그대로 */
   const r4=W.applyWork(r3.months,{v:1,from:'2026-09-01',to:'2026-09-27',reviews:[],products:[]});
   assert.equal(r4.months['2026-09'].days['10'].r,8); assert.equal(r4.changes.length,0);
@@ -323,7 +324,7 @@ test('office and home ledgers are merged without losing either side',()=>{
   office.days['25'].memo='회사 메모'; office.days['25']._t=Date.parse('2026-09-27T09:00:00Z');
   const m=W.mergeMonth(office,home);
   assert.equal(m.days['25'].auto.r,3,'장부는 합집합 (1,2,3)');
-  assert.equal(m.days['25'].r,5,'나중에 고친 집의 조정 +2 유지');
+  assert.equal(m.days['25'].r,3,'직접 고친 +2 는 무시하고 합친 장부(CMS) 건수');
   assert.equal(m.days['25'].memo,'회사 메모','메모가 비어 있지 않은 쪽을 남긴다');
   assert.equal(m.days['26'].r,1); assert.equal(m.days['26'].memo,'집에서 메모');
   assert.equal(m.days['25'].p,1);
@@ -428,4 +429,20 @@ test('a changed monthly target carries into new months and wins on the computer 
   assert.equal(W.applyWork({},{v:1,from:'2026-09-01',to:'2026-09-02',reviews:[],products:[]}).months['2026-09'].target,1450000,'처음에만 기본값');
   const a=Object.assign(monthOf('2026-10'),{target:1800000,_t:10}), b=Object.assign(monthOf('2026-10'),{target:2000000,_t:20});
   assert.equal(W.mergeMonth(a,b).target,2000000,'나중에 고친 목표'); assert.equal(W.mergeMonth(b,a).target,2000000);
+});
+
+test('a wrong number typed by hand is corrected to the CMS count on the next sync (9/30: 200 → 47)',()=>{
+  const reviews=Array.from({length:47},(_,i)=>[String(9000+i),'2026-09-30']);
+  const first=W.applyWork({},{v:1,from:'2026-09-01',to:'2026-09-30',reviews,products:[]});
+  const m=first.months;
+  assert.equal(m['2026-09'].days['30'].r,47);
+  m['2026-09'].days['30'].r=200; m['2026-09'].days['30']._t=Date.now();     /* 업무일지에서 200 으로 고쳐 둠 */
+  const again=W.applyWork(m,{v:1,from:'2026-09-01',to:'2026-09-30',reviews,products:[]});
+  assert.equal(again.months['2026-09'].days['30'].r,47,'콘솔 동기화가 CMS 47건으로 바로잡는다');
+  assert.equal(again.today.r,47);
+  assert.deepEqual(again.months['2026-09'].days['30'].manual,{r:200,p:0});
+  assert.ok(again.changes.some(c=>c.d==='2026-09-30'&&c.r[0]===200&&c.r[1]===47),'바뀐 날 목록에 200→47');
+  /* 다른 컴퓨터 기록과 합칠 때도 200 이 되살아나지 않는다 */
+  const other=JSON.parse(JSON.stringify(m['2026-09'])); other.days['30']._t=Date.now()+1000;
+  assert.equal(W.mergeMonth(again.months['2026-09'],other).days['30'].r,47);
 });

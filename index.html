@@ -651,6 +651,9 @@ function edit(m, d, field, val){
   day[field] = (field === 'r' || field === 'p') ? Math.max(0, parseInt(val,10) || 0) : String(val || '');
   day._t = Date.now();
   save(m); renderAll(false);
+  /* 자동 집계 칸은 CMS 가 기준 — 다른 숫자를 적어도 다음 동기화 때 CMS 건수로 돌아간다고 바로 알린다 */
+  if ((field === 'r' || field === 'p') && day.auto && day[field] !== day.auto[field])
+    toast('CMS 자동 집계 칸입니다 — 다음 동기화 때 CMS 기준 ' + day.auto[field] + '건으로 바로잡힙니다', true);
 }
 
 /* ── 렌더: KPI ── */
@@ -701,9 +704,9 @@ function renderDays(){
     const wd = dt.getDay(), inc = income(d);
     const key = cur + '-' + dd;
     const cls = [wd===0||wd===6 ? 'wk':'', key===nowKey ? 'today':'', key>nowKey ? 'fut':''].filter(Boolean).join(' ');
-    const au = d.auto, tip = f => !au ? '' : 'CMS 자동 집계 '+au[f]+'건'
-      + ((d[f]||0)!==au[f] ? ' · 직접 조정 '+((d[f]||0)-au[f]>0?'+':'')+((d[f]||0)-au[f]) : '')
-      + (d.manual && d.manual[f]!==au[f] ? ' · 자동 전 직접 적은 값 '+d.manual[f] : '');
+    const au = d.auto, tip = f => !au ? '' : 'CMS 자동 집계 '+au[f]+'건 — 직접 고쳐도 다음 동기화 때 CMS 기준으로 바로잡힙니다'
+      + ((d[f]||0)!==au[f] ? ' · 지금 칸 값 '+(d[f]||0)+' (CMS와 다름)' : '')
+      + (d.manual && d.manual[f]!==au[f] ? ' · 바로잡기 전 적혀 있던 값 '+d.manual[f] : '');
     rows += `<tr class="${cls}">` +
       `<td class="d">${+cur.slice(5,7)}/${i} <span style="opacity:.5">${'일월화수목금토'[wd]}</span>${au&&(au.r||au.p)?`<button class="evl" data-ev="${key}" title="이 날 작업 목록 (작업 증빙)">≡</button>`:''}</td>` +
       `<td><input class="num${au?' auto':''}" type="number" min="0" value="${d.r||''}" placeholder="0" data-d="${dd}" data-f="r" inputmode="numeric" title="${htmlEscape(tip('r'))}"></td>` +
@@ -887,7 +890,7 @@ function renderAutoInfo(){
   const list=(info.changes||[]).map(c=>{ const x=[]; if(c.r[0]!==c.r[1])x.push('리뷰 '+c.r[0]+'→'+c.r[1]); if(c.p[0]!==c.p[1])x.push('제품 '+c.p[0]+'→'+c.p[1]); return '<li>'+md(c.d)+' '+x.join(' · ')+'</li>'; }).join('');
   el.className='hint autoInfo';
   el.innerHTML='<b style="color:var(--mint2,#0d9668)">CMS 자동</b> · 마지막 반영 '+htmlEscape(when)
-    +' · '+htmlEscape(md(info.from||'2026-09-01'))+'부터 작업한 날 기준 · 초록 줄 칸 = 자동 집계(고치면 조정값으로 유지)'
+    +' · '+htmlEscape(md(info.from||'2026-09-01'))+'부터 작업한 날 기준 · 초록 줄 칸 = CMS 자동 집계(직접 고쳐도 다음 동기화 때 CMS 기준으로 바로잡힘)'
     +(info.partial?' · <span style="color:#b57611">일부 날짜 조회 실패 — 다음 동기화 때 채움</span>':'')
     +(info.nChanges?' · <details><summary>바뀐 날 '+info.nChanges+'일</summary><ul>'+list+'</ul></details>':'');
 }
@@ -1476,7 +1479,8 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
     var html='<div class="evsum">리뷰 검수완료 <b>'+rIds.length+'</b>건'
       +(rIds.length?' <span style="color:var(--dim)">(콘솔 '+nC+' · CMS 직접 '+(rIds.length-nC)+')</span>':'')
       +' · 제품 등록 <b>'+pIds.length+'</b>건'
-      +((adjR||adjP)?'<br><span style="color:var(--dim)">업무일지 값은 리뷰 '+(day.r||0)+' · 제품 '+(day.p||0)+' — 직접 조정 '+(adjR?(adjR>0?'+':'')+adjR+'(리뷰) ':'')+(adjP?(adjP>0?'+':'')+adjP+'(제품)':'')+'은 목록에 없습니다</span>':'')
+      +((adjR||adjP)?'<br><span style="color:#b57611">업무일지 칸에 직접 적힌 값(리뷰 '+(day.r||0)+' · 제품 '+(day.p||0)+')이 CMS 와 다릅니다 — 다음 동기화 때 CMS 기준으로 바로잡힙니다</span>':'')
+      +(day.manual&&(day.manual.r!==day.auto.r||day.manual.p!==day.auto.p)?'<br><span style="color:var(--dim)">바로잡기 전 적혀 있던 값: 리뷰 '+day.manual.r+' · 제품 '+day.manual.p+'</span>':'')
       +'</div>';
     if(rIds.length){
       var by={}; rIds.forEach(function(id){ var x=rInfo[id]; var c=(x&&x[2])||'?'; (by[c]||(by[c]=[])).push(id); });
