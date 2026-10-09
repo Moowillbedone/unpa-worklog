@@ -46,7 +46,7 @@ function harness(){
                      collectWork,workPayload,outboxLoad,outboxAudit,outboxRun,syncNow,lastActor,
                      pendingRecord,pendingLoad,learnFromWatch,associate,consoleState,applyConsoleState,doneRaw,
                      setBacklog:b=>{BACKLOG=b;},backlogList,seedFromVerdicts,
-                     budget,planApprovals,goalSave,openGrid,refreshSkipped,
+                     budget,planApprovals,goalSave,openGrid,refreshSkipped,remainList,
                      setMe:e=>{ME=e;},setWork:w=>{WORK=w;},getSyncHtml:()=>SYNC_HTML,
                      listAll,loadBacklog,scanRows,capOf,canSend,sentMark,
                      getAbort:()=>SCAN_ABORT,
@@ -645,4 +645,17 @@ test('skipped cards are not offered again; the remaining slots go to other clean
   const n=await api.refreshSkipped();
   assert.equal(n,2); assert.equal(rows[0].approvable,false); assert.match(rows[0].reasons.join(' '),/이미 수정요청/);
   assert.equal(rows[2].approvable,true,'아직 대기 중인 건은 그대로(건너뜀 상태 유지)');
+});
+
+test('remaining counts per date leave out hidden and already handled reviews',()=>{
+  const {api,store}=harness();
+  const bl=[{date:'2026-10-08',rows:[{id:1,status:'PENDING',visible:true},{id:2,status:'UPDATED',visible:true},{id:3,status:'PENDING',visible:true,userBlocked:true},{id:4,status:'PENDING',visible:true}]},
+            {date:'2026-10-06',rows:[]}];
+  bl.all=bl.slice(); bl.at='2026-10-09T13:00:00Z';
+  api.setBacklog(bl);
+  store['unpa-console-sent-v1']=JSON.stringify({'4':{action:'approve',at:new Date().toISOString()}});     /* 콘솔을 연 뒤 승인함 */
+  store['unpa-console-pending-v1']=JSON.stringify({'1':{id:'1',a:'register_product',st:'open',since:new Date().toISOString()}});
+  const r=api.remainList();
+  assert.equal(JSON.stringify(r.days['2026-10-08']),JSON.stringify({n:2,reg:1,upd:1,blocked:1}),'미노출·처리한 것·정지 사용자는 빼고 2건');
+  assert.equal(r.days['2026-10-06'].n,0,'남은 게 없는 날도 넘겨 칸을 비우게 한다');
 });

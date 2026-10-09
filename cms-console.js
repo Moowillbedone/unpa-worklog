@@ -1464,6 +1464,8 @@
     if(failed.length===dates.length) return null;          /* 전부 실패 = 로그인·권한 문제 */
     var out=res.filter(function(x){ return !x.failed && x.rows.length; });
     out.failed=failed;                                     /* 일부만 실패한 날짜는 따로 알린다 */
+    out.all=res.filter(function(x){ return !x.failed; });  /* 0건인 날도 — 업무일지 "미등록 제품수"를 비우려면 필요 */
+    out.at=new Date().toISOString();
     return out;
   }
 
@@ -2199,7 +2201,7 @@
     (ob.reviews||[]).forEach(function(x){ if(x && validDate(x[1]) && x[1]>=AUTO_FROM) rv.push([String(x[0])].concat(x.slice(1))); });
     return { v:1, seq:ob.seq||0,
              work:{ v:1, from:AUTO_FROM, to:ymd(new Date()), reviews:rv, products:pv, partial:!!(WORK && WORK.failed.length) },
-             audit:ob.audit||{}, pending:pendingList(), backlog:backlogList(), console:consoleState() };
+             audit:ob.audit||{}, pending:pendingList(), backlog:backlogList(), remain:remainList(), console:consoleState() };
   }
   function syncNonce(){
     try{ return Array.prototype.map.call(crypto.getRandomValues(new Uint8Array(16)),function(x){ return (x<16?'0':'')+x.toString(16); }).join(''); }
@@ -2299,6 +2301,22 @@
       out.push({ id:String(x.id), d:b.date, brand:x.brandName||'', product:x.productName||'', status:x.status||'', blocked:x.userBlocked===true });
     }); });
     return out;
+  }
+  /* 짝수일(작성일)별 CMS 에 남은 검수 — 업무일지 "미등록 제품수" 칸에 들어간다.
+     이미 미노출된 리뷰와 정지 사용자 리뷰(미노출 대상)는 세지 않는다 — 검수도 제품 등록도 필요 없다.
+     콘솔을 연 뒤 처리한 것도 뺀다. reg: 상품·브랜드 등록 필요로 판정된 건 · upd: 유저 수정완료 · blocked: 뺀 정지 사용자 수 */
+  function remainList(){
+    if(!BACKLOG || !BACKLOG.all) return null;
+    var sent=sentLoad(), pend=pendingLoad(), days={};
+    BACKLOG.all.forEach(function(b){
+      var rows=backlogTodo(b.rows, sent);
+      var live=rows.filter(function(x){ return x.userBlocked!==true; });
+      days[b.date]={ n:live.length,
+        reg:rows.filter(function(x){ var e=pend[String(x.id)]; return e && (e.a==='register_product' || e.a==='register_brand') && e.st!=='resolved' && e.st!=='learned'; }).length,
+        upd:live.filter(function(x){ return x.status==='UPDATED'; }).length,
+        blocked:rows.filter(function(x){ return x.userBlocked===true; }).length };
+    });
+    return { at:BACKLOG.at || new Date().toISOString(), days:days };
   }
   /* 업무일지에 남아 있는 예전 판정으로 대기 목록을 채운다 — 새 콘솔로 스캔하기 전 건도
      "내가 그 브랜드·제품을 등록하면 자동 짝짓기"가 되도록 */

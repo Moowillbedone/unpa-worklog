@@ -457,3 +457,29 @@ test('the sync window hands the console this month\'s target and income',async()
   const r=await W.syncWindow(s,{v:1,seq:1,work:{v:1,from:'2026-09-01',to:'2026-09-30',reviews:[['1','2026-09-30'],['2','2026-09-29']],products:[['9','2026-09-29']]}},null,{now:new Date('2026-09-30T12:00:00Z')});
   assert.deepEqual(r.goal,{month:'2026-09',target:1430000,r:2,p:1,won:1600});
 });
+test('remaining reviews per even date fill the 미등록 제품수 column without erasing notes',()=>{
+  const base={'2026-09':monthOf('2026-09',{'14':{r:0,p:0,memo:'',unreg:'유민지'},'20':{r:0,p:0,memo:'',unreg:'24'},'26':{r:0,p:0,memo:'',unreg:'5'},'30':{r:47,p:0,memo:'',unreg:'이월'}})};
+  const remain={at:'2026-10-09T13:00:00Z',days:{'2026-09-14':{n:3,reg:0,upd:0,blocked:0},'2026-09-20':{n:17,reg:15,upd:1,blocked:0},
+                '2026-09-26':{n:0,reg:0,upd:0,blocked:0},'2026-09-30':{n:32,reg:4,upd:0,blocked:2},'2026-08-14':{n:2,reg:0,upd:1,blocked:1}}};
+  const touched=W.applyRemain(base,remain);
+  const d=base['2026-09'].days;
+  assert.equal(d['20'].unreg,'17','숫자 칸은 CMS 건수로'); assert.equal(d['20'].pend.reg,15);
+  assert.equal(d['26'].unreg,'','남은 게 없으면 비운다');
+  assert.equal(d['14'].unreg,'유민지','메모는 그대로'); assert.equal(d['14'].pend.n,3,'건수는 따로 둔다');
+  assert.equal(d['30'].unreg,'이월'); assert.equal(d['30'].pend.n,32);
+  assert.equal(d['30'].r,47,'리뷰 수는 건드리지 않는다');
+  assert.equal(base['2026-08'].days['14'].unreg,'2','지난달 짝수일도'); assert.equal(base['2026-08'].target,1450000);
+  assert.ok(touched.includes('2026-09')&&touched.includes('2026-08'));
+  assert.deepEqual(W.applyRemain(base,remain),[],'같은 결과를 다시 받으면 바뀐 달 없음');
+  /* 두 컴퓨터: 더 최근에 CMS 를 훑은 쪽의 건수 */
+  const older=JSON.parse(JSON.stringify(base['2026-09'])); older.days['20'].pend={n:20,reg:15,upd:1,blocked:0,at:'2026-10-01T00:00:00Z'}; older.days['20'].unreg='20';
+  assert.equal(W.mergeMonth(older,base['2026-09']).days['20'].unreg,'17');
+  assert.equal(W.mergeMonth(base['2026-09'],older).days['20'].unreg,'17');
+});
+test('the sync window writes remaining counts into the worklog',async()=>{
+  const s=fakeStore();
+  s.setItem('unpa-worklog-v1',JSON.stringify({v:1,months:{'2026-10':monthOf('2026-10')},dirty:[]}));
+  await W.syncWindow(s,{v:1,seq:1,work:{v:1,from:'2026-09-01',to:'2026-10-09',reviews:[],products:[]},remain:{at:'2026-10-09T13:00:00Z',days:{'2026-10-08':{n:13,reg:2,upd:0,blocked:0}}}},null,{now:new Date('2026-10-09T13:00:00Z')});
+  const o=JSON.parse(s.getItem('unpa-worklog-v1'));
+  assert.equal(o.months['2026-10'].days['08'].unreg,'13'); assert.ok(o.dirty.includes('2026-10'));
+});

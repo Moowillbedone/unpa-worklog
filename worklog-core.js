@@ -72,12 +72,37 @@
     const last=mon(p.to.slice(0,7)).days[p.to.slice(8)];
     return {months:out,changes,touched:[...touched],today:{d:p.to,r:last.r,p:last.p}};
   }
+  /* ── 짝수일별 남은 검수 (미등록 제품수 칸) ───────────────────
+     콘솔이 CMS 검수 대기를 훑은 결과: { at, days:{ 'YYYY-MM-DD':{ n, reg, upd, blocked } } } — 리뷰 작성일 기준.
+     이미 미노출된 리뷰는 콘솔이 세지 않는다(검수·등록할 필요가 없으므로).
+     칸이 비었거나 숫자면 CMS 건수로 맞추고(0 이면 비움), 사람이 적은 메모("유민지", "이월" 등)는 그대로 둔다 — 건수는 day.pend 에 따로 둔다. */
+  function isAutoUnreg(v){return !String(v==null?'':v).trim()||/^\d+$/.test(String(v).trim());}
+  function applyRemain(out,remain){
+    const touched=new Set();
+    if(!remain||!remain.days)return [];
+    const at=String(remain.at||'');
+    for(const d of Object.keys(remain.days)){
+      const x=remain.days[d];
+      if(!date(d)||!x||!integer(x.n))continue;
+      const mm=d.slice(0,7),dd=d.slice(8);
+      if(!out[mm]){const prev=Object.keys(out).filter(k=>k<mm&&out[k]&&integer(out[k].target)).sort().pop();out[mm]=blankMonth(mm,prev?out[prev].target:1450000);}
+      const t=out[mm];if(!t.days[dd])t.days[dd]={r:0,p:0,memo:'',unreg:''};
+      const day=t.days[dd],pend={n:x.n,reg:x.reg|0,upd:x.upd|0,blocked:x.blocked|0,at};
+      const want=x.n>0?String(x.n):'';
+      const same=day.pend&&day.pend.n===pend.n&&day.pend.reg===pend.reg&&day.pend.upd===pend.upd&&day.pend.blocked===pend.blocked;
+      day.pend=pend;
+      if(isAutoUnreg(day.unreg)&&String(day.unreg||'').trim()!==want){day.unreg=want;touched.add(mm);}
+      else if(!same)touched.add(mm);
+    }
+    return [...touched];
+  }
   /* 브라우저에 저장된 업무일지 원문(JSON 문자열)에 자동 집계를 반영한다. 원문이 깨졌으면 손대지 않는다. */
-  function syncStore(raw,work,base,now){
+  function syncStore(raw,work,base,now,remain){
     const store=raw?JSON.parse(raw):(base||{v:1,months:{},dirty:[]});
     if(!store||typeof store!=='object'||!store.months)throw Error('업무일지 저장 형식 오류');
     months(store.months);
     const res=applyWork(store.months,work);
+    applyRemain(res.months,remain).forEach(m=>{if(res.touched.indexOf(m)<0)res.touched.push(m);});
     months(res.months);
     const at=(now||new Date()).toISOString();
     res.touched.forEach(m=>{res.months[m]._u=at;});
@@ -132,6 +157,9 @@
       const win=!L?R:!R?L:((R._t||0)>(L._t||0)?R:L), other=win===L?R:L;
       const d=JSON.parse(JSON.stringify(win));
       if(other){if(!d.memo&&other.memo)d.memo=other.memo;if(!d.unreg&&other.unreg)d.unreg=other.unreg;if(!d.manual&&other.manual)d.manual=other.manual;}
+      /* 남은 검수 건수: 더 최근에 CMS 를 훑은 쪽. 칸이 숫자(자동)면 그 건수로, 메모면 메모 그대로 */
+      const pL=L&&L.pend,pR=R&&R.pend;
+      if(pL||pR){const P=!pL?pR:!pR?pL:(String(pR.at||'')>String(pL.at||'')?pR:pL);d.pend=P;if(isAutoUnreg(d.unreg))d.unreg=P.n>0?String(P.n):'';}
       /* 숫자: 자동 집계 날은 합친 장부 건수(CMS 기준) 그대로 */
       if(win.auto||(other&&other.auto)){
         const ar=((led.r||{})[dd]||[]).length,ap=((led.p||{})[dd]||[]).length;
@@ -227,7 +255,7 @@
       if(old&&old.months){months(old.months);base={v:1,months:old.months,dirty:Object.keys(old.months)};}
       else if(opts.base)base=opts.base;
     }
-    const res=syncStore(store.getItem(key),p.work,base,now);
+    const res=syncStore(store.getItem(key),p.work,base,now,p.remain);
     store.setItem(key,res.value);
     if(uid)store.setItem('unpa-worklog-active',key);
     const ev=readJSON(store,EV_KEY,null)||{v:1,months:{}};ev.months=ev.months||{};
@@ -271,6 +299,6 @@
     return {ok:true,today:res.today,changes:res.changes.slice(0,20),nChanges:res.changes.length,auditDays,auditError,cloud,console:consoleOut,
             verdicts:verdictsFor(audit,p.backlog),goal};
   }
-  return {date,months,mergeAudit,unappliedIds,applyWork,syncStore,syncAudit,syncWindow,latestVerdicts,verdictsFor,
+  return {date,months,mergeAudit,unappliedIds,applyWork,applyRemain,isAutoUnreg,syncStore,syncAudit,syncWindow,latestVerdicts,verdictsFor,
           evidenceFrom,mergeEvidence,mergeMonth,mergeAlias,mergeSent,mergeTexts,mergeGate,mergeConsole,mergeByTime,monthsBack,cloudSync};
 });
