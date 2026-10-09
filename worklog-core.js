@@ -180,7 +180,7 @@
   /* 본문 지문: 먼저 올라온 리뷰를 원본으로 */
   function mergeTexts(a,b,cap){const out=Object.assign({},a||{});for(const k of Object.keys(b||{})){const v=b[k],p=out[k];if(!v)continue;if(!p){out[k]=v;continue;}const orig=String(v.d||'')<String(p.d||'')?v:p;out[k]=Object.assign({},orig,{t:String(v.t||'')>String(p.t||'')?v.t:p.t});}const ks=Object.keys(out),c=cap||8000;if(ks.length>c)ks.sort((x,y)=>String(out[x].t||'')<String(out[y].t||'')?-1:1).slice(0,ks.length-c).forEach(k=>{delete out[k];});return out;}
   function mergeGate(a,b){const m=new Map();for(const x of [...(a||[]),...(b||[])])if(x&&x.t)m.set(x.t+'|'+(x.d||''),x);return [...m.values()].sort((x,y)=>x.t<y.t?-1:1).slice(-200);}
-  function mergeConsole(a,b){a=a||{};b=b||{};return {alias:mergeAlias(a.alias,b.alias),gate:mergeGate(a.gate,b.gate),done:mergeByTime(a.done,b.done),pending:mergeByTime(a.pending,b.pending,'u'),texts:mergeTexts(a.texts,b.texts),sent:mergeSent(a.sent,b.sent)};}
+  function mergeConsole(a,b){a=a||{};b=b||{};return {alias:mergeAlias(a.alias,b.alias),gate:mergeGate(a.gate,b.gate),done:mergeByTime(a.done,b.done),pending:mergeByTime(a.pending,b.pending,'u'),texts:mergeTexts(a.texts,b.texts),sent:mergeSent(a.sent,b.sent),hidefp:mergeByTime(a.hidefp,b.hidefp)};}
   function monthsBack(now,n){const out=[],y=now.getFullYear(),m=now.getMonth();for(let i=0;i<n;i++){const d=new Date(y,m-i,1);out.push(d.getFullYear()+'-'+pad2(d.getMonth()+1));}return out;}
 
   /* ── 서버와 한 번에 주고받기 ──────────────────────────────
@@ -206,9 +206,9 @@
     if(st.console){
       const L=rd('~learn')||{},sentR={};
       sentMonths.forEach(m=>Object.assign(sentR,rd('~sent:'+m)||{}));
-      const merged=mergeConsole({alias:L.alias,gate:L.gate,done:L.done,pending:L.pending,texts:rd('~texts')||{},sent:sentR},st.console);
+      const merged=mergeConsole({alias:L.alias,gate:L.gate,done:L.done,pending:L.pending,hidefp:L.hidefp,texts:rd('~texts')||{},sent:sentR},st.console);
       out.console=merged;
-      push.push({month:'~learn',data:{alias:merged.alias,gate:merged.gate,done:merged.done,pending:merged.pending}});
+      push.push({month:'~learn',data:{alias:merged.alias,gate:merged.gate,done:merged.done,pending:merged.pending,hidefp:merged.hidefp}});
       push.push({month:'~texts',data:merged.texts});
       const byMonth={};
       for(const k of Object.keys(merged.sent)){const at=String(merged.sent[k].at||'');const m=/^\d{4}-\d{2}/.test(at)?at.slice(0,7):null;if(m&&sentMonths.indexOf(m)>=0)(byMonth[m]||(byMonth[m]={}))[k]=merged.sent[k];}

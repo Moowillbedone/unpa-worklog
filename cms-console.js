@@ -280,9 +280,11 @@
     }
     /* 키보드 배열을 그대로 두드린 것 */
     if(/^(?:asdf|qwer|zxcv|ㅁㄴㅇㄹ|1234){2,}$/i.test(t.replace(/\s/g,''))) return '키보드 배열 반복';
+    /* 긴 글은 쓰는 글자 종류 비율이 자연히 낮아진다(626자 정상 리뷰가 0.29) — 짧은 글이거나 글자 종류가 아주 적을 때만 본다 */
     if(syll.length>=8){
       var u={}; syll.forEach(function(c){ u[c]=1; });
-      if(Object.keys(u).length/syll.length<=0.3) return '동일 음절 반복';
+      var kinds=Object.keys(u).length;
+      if(kinds<=6 || (syll.length<=60 && kinds/syll.length<=0.3)) return '동일 음절 반복';
     }
     if(syll.length===0 && alnum.length<=2 && t.length<=6) return '내용 없음 («'+t.slice(0,8)+'»)';
     return null;
@@ -925,13 +927,15 @@
     /* ── 규칙 3: 무의미한 언어만 있으면 검수 대상이 아니다 → 미노출 ──
        단 "본문이 비어 있음"은 무의미한 언어가 아니다. 간편 리뷰일 수도 있고
        엑박 처리가 먼저일 수도 있어, 미노출로 바로 보내지 않는다. */
-    var gb=gibberish(content);
+    var okBy=hideOverridden(item.id, content);
+    var gb=okBy ? null : gibberish(content);
     if(gb){ out.action='hide'; out.exec=true; out.reasons.push('무의미한 본문 — '+gb); return out; }
-    if(isSpam(content)){ out.action='hide'; out.exec=true; out.reasons.push('본문 도배'); return out; }
+    if(!okBy && isSpam(content)){ out.action='hide'; out.exec=true; out.reasons.push('본문 도배'); return out; }
     var bad=badContent(content);
     if(bad){ out.action='hold'; out.reasons.push(bad+' → 본문을 읽고 판단'); return out; }
-    var le=lowEffort(content);
+    var le=okBy ? null : lowEffort(content);
     if(le){ out.action='hide'; out.exec=true; out.reasons.push('무성의한 리뷰 — '+le); return out; }
+    if(okBy) out.reasons.push('🧠 전에 사람이 정상으로 본 '+okBy+' — 미노출로 보지 않음');
 
     /* 취급하지 않는 품목은 검수 대상이 아니다 — 사람이 보고 미노출 여부를 정한다 */
     var nb2=notBeauty(item.productName+' '+item.brandName);
@@ -990,8 +994,9 @@
 
     /* 여기부터는 규칙 1·2 를 통과한 정상 매칭 리뷰 */
 
-    /* 사진이 전량 캡처·저해상이면 어뷰징 */
-    if(out.photo.v==='suspect'){ out.action='hide'; out.exec=true; out.reasons.push('사진 '+out.photo.label); return out; }
+    /* 사진이 전부 작거나 폰 화면 크기여도 미노출하지 않는다.
+       앱이 사진을 줄여 올리는 경우가 많아(650×862 · 993×947), 이것만으로 잡은 리뷰 대부분을 사람이 정상 승인했다.
+       승인 후보로 두되 고신뢰에서는 빠지고(신뢰도 판정), 그리드에서 눈으로 확인한다. */
 
     /* 브랜드가 CMS에 조회되는지 확인 — 액션은 바꾸지 않고 경고만 남긴다
        (브랜드 표기 차이로 조회가 빗나갈 수 있어 오탐을 만들지 않는다) */
@@ -1014,7 +1019,8 @@
       return out;
     }
     out.action='approve'; out.approvable=true;
-    if(out.photo.v==='mixed')       out.reasons.push('사진 '+out.photo.label+' → 눈으로 확인');
+    if(out.photo.v==='suspect')     out.reasons.push('사진 '+out.photo.label.replace('/도용 의심','')+' 크기 — 도용·캡처인지 눈으로 확인');
+    else if(out.photo.v==='mixed')  out.reasons.push('사진 '+out.photo.label+' → 눈으로 확인');
     else if(out.photo.v==='camera') out.reasons.push('직접촬영 · 매칭 정상');
     else                            out.reasons.push('사진 판별 애매 → 확인');
     if(out.swatch) out.reasons.push('발색 제품('+out.swatch+') — 발색샷 확인');
@@ -1050,6 +1056,86 @@
   function histUser(h, nick){ var k=String(nick||''); return h.users[k]||(h.users[k]={approve:0,hide:0,revise:0}); }
   function aliasKey(brandId, productName){
     return String(brandId)+'|'+norm(stripSize(String(productName||'').replace(/\[[^\]]*\]/g,'')));
+  }
+
+  /* ── 미노출 판정 학습 ───────────────────────────────────
+     사진·본문이 멀쩡한데 미노출로 잡힌 것을 사람이 바로잡으면(체크 해제, 또는 CMS 에서 정상 승인) 기억한다.
+       - 그 리뷰는 다시 미노출로 권하지 않는다
+       - 같은 본문(무의미·도배·무성의 판정)이 다시 오면 미노출로 보지 않는다
+       - 어떤 판정이 자주 틀리면(사람이 정상으로 본 것 2건 이상 · 30% 이상) 그 판정으로 걸린 건은 기본 체크 해제
+     정지 사용자는 사실 정보라 배우지 않는다 — 정지 사용자 리뷰를 승인한 것은 사람 실수로 본다.
+     상태 st: suggested 미노출 권함 · override 사람이 정상으로 봄 · confirmed 실제로 미노출함 */
+  var HIDEFP_KEY='unpa-console-hidefp-v1';
+  var TEXT_KINDS={ 'gib-jamo':1, 'gib-rep':1, 'gib-kbd':1, 'gib-syll':1, 'gib-empty':1, 'spam':1, 'low':1 };
+  var KIND_LB={ 'gib-jamo':'자모 나열', 'gib-rep':'같은 글자 반복', 'gib-kbd':'키보드 반복', 'gib-syll':'동일 음절 반복', 'gib-empty':'내용 없음',
+                'spam':'본문 도배', 'low':'무성의한 리뷰', 'photo-shot':'사진 화면캡처', 'photo-web':'사진 저해상', 'other':'기타' };
+  function hidefpLoad(){ try{ var o=JSON.parse(localStorage.getItem(HIDEFP_KEY)||'{}'); return (o && typeof o==='object') ? o : {}; }catch(e){ return {}; } }
+  function hidefpSave(o){
+    var cut=new Date(Date.now()-180*864e5).toISOString();
+    Object.keys(o).forEach(function(k){ if(!o[k] || String(o[k].at||'')<cut) delete o[k]; });
+    try{ localStorage.setItem(HIDEFP_KEY, JSON.stringify(o)); }catch(e){}
+  }
+  function hideKind(r){
+    var t=(r.reasons||[]).join(' ');
+    if(/정지 사용자/.test(t)) return 'blocked';
+    if(/자모 나열/.test(t)) return 'gib-jamo';
+    if(/같은 글자 반복/.test(t)) return 'gib-rep';
+    if(/키보드/.test(t)) return 'gib-kbd';
+    if(/동일 음절/.test(t)) return 'gib-syll';
+    if(/내용 없음/.test(t)) return 'gib-empty';
+    if(/본문 도배/.test(t)) return 'spam';
+    if(/무성의/.test(t)) return 'low';
+    if(/화면캡처/.test(t)) return 'photo-shot';
+    if(/저해상|도용/.test(t)) return 'photo-web';
+    return 'other';
+  }
+  function bodyHash(text){ var nt=normText(text); return nt.length>=2 ? textHash(nt) : null; }
+  function hidefpMark(r, st, force){
+    var k=hideKind(r); if(k==='blocked') return;
+    var o=hidefpLoad(), id=String(r.id), prev=o[id];
+    if(prev && prev.st===st) return;
+    if(!force && st==='suggested' && prev && (prev.st==='override' || prev.st==='confirmed')) return;   /* 사람 판단을 덮지 않는다 */
+    o[id]={ k:k, h:bodyHash(r._body||r.text||''), at:new Date().toISOString(), st:st };
+    hidefpSave(o);
+  }
+  /* 사람이 이 리뷰(또는 같은 본문)를 정상으로 본 적이 있나 */
+  function hideOverridden(id, text){
+    var o=hidefpLoad(), e=o[String(id)];
+    if(e && e.st==='override') return '이 리뷰';
+    var h=bodyHash(text); if(!h) return null;
+    return Object.keys(o).some(function(k){ var x=o[k]; return x && x.st==='override' && TEXT_KINDS[x.k] && x.h===h; }) ? '같은 본문' : null;
+  }
+  function kindStats(){
+    var o=hidefpLoad(), s={};
+    Object.keys(o).forEach(function(k){ var e=o[k]; if(!e || !e.k || e.k==='blocked') return;
+      var x=s[e.k]||(s[e.k]={ over:0, conf:0 }); if(e.st==='override') x.over++; else if(e.st==='confirmed') x.conf++; });
+    return s;
+  }
+  function kindUnsure(k){
+    if(!k || k==='blocked') return null;
+    var x=kindStats()[k]; if(!x) return null;
+    return (x.over>=2 && x.over/(x.over+x.conf)>=0.3) ? x : null;
+  }
+  /* 스캔에서 미노출로 권한 것을 기억해 두고, 나중에 사람이 CMS 에서 정상 승인했는지 지켜본다 */
+  function hideRecord(rows){
+    var o=hidefpLoad(), now=new Date().toISOString(), n=0;
+    rows.forEach(function(r){
+      if(!r || r.action!=='hide' || r.applied) return;
+      var k=hideKind(r); if(k==='blocked' || o[String(r.id)]) return;
+      o[String(r.id)]={ k:k, h:bodyHash(r._body||r.text||''), at:now, st:'suggested' }; n++;
+    });
+    if(n) hidefpSave(o);
+  }
+  /* CMS 목록에서 본 그 뒤 상태 — 내가 정상 승인했으면 오탐, 미노출됐으면 맞힌 것 */
+  function learnHides(watch, me){
+    var o=hidefpLoad(), n=0, now=new Date().toISOString();
+    Object.keys(o).forEach(function(k){
+      var e=o[k], w=watch && watch[k]; if(!e || !w || e.st==='confirmed') return;
+      if(w.status==='APPROVED' && w.actor===me && w.visible!==false){ if(e.st!=='override'){ e.st='override'; e.at=now; n++; } }
+      else if(w.visible===false){ e.st='confirmed'; e.at=now; }
+    });
+    hidefpSave(o);
+    return n;
   }
 
   /* 본문 비교용 정규화 — 공백·기호를 걷고 앞 400자만 */
@@ -1307,7 +1393,7 @@
   /* 업무일지 서버에 올려 다른 컴퓨터와 나누는 콘솔 경험 */
   function consoleState(){
     var h=histLoad();
-    return { alias:h.alias, gate:h.gate, texts:h.texts, done:doneRaw(), pending:pendingLoad(), sent:sentLoad() };
+    return { alias:h.alias, gate:h.gate, texts:h.texts, done:doneRaw(), pending:pendingLoad(), sent:sentLoad(), hidefp:hidefpLoad() };
   }
   /* 서버에서 합쳐 돌아온 경험을 이 브라우저에 반영한다 — 그사이 새로 쌓인 것도 잃지 않게 한 번 더 합친다 */
   function applyConsoleState(m){
@@ -1321,6 +1407,7 @@
       localStorage.setItem(SENT_KEY, JSON.stringify(x.sent));
     }catch(e){}
     pendingSave(x.pending);
+    if(x.hidefp) hidefpSave(x.hidefp);
     return true;
   }
 
@@ -1333,6 +1420,8 @@
   document.body.appendChild(box);
 
   var tplMap={}, results=[], logLines=[];
+  /* 대기열 체크박스를 사람이 바꾼 것 — 다시 그려도(실행·그리드·재확인·다시 스캔) 되살아나지 않게 이 콘솔 동안 기억한다 */
+  var UNCHECK={};
   function log(h){ logLines.push(h); var el=document.getElementById('csLog'); if(el) el.innerHTML=logLines.join('<br>'); }
 
   var ACT={
@@ -1547,6 +1636,7 @@
     }
     postScan();
     pendingRecord(results);
+    hideRecord(results);
     outboxAudit();
     renderQueue(SCAN_LABEL||SCAN_DATE);
   }
@@ -1554,7 +1644,17 @@
   function renderQueue(sd){
     sd = SCAN_LABEL || sd;          /* 실행·체크 뒤 다시 그려도 "09-20 ~ 09-26 (3일)" 표시를 유지한다 */
     var B=planApprovals(); fixSamples();
-    var done=doneLoad();
+    var done=doneLoad(), FP=hidefpLoad();
+    results.forEach(function(r){
+      if(!(r.action==='hide' || r.action==='revise_product') || r.applied) return;
+      if(UNCHECK[r.id]!==undefined) r._unchecked=UNCHECK[r.id];
+      else if(r._unchecked===undefined){
+        var e=FP[String(r.id)];
+        r._unchecked = r.action==='hide' && ((e && e.st==='override') || !!kindUnsure(hideKind(r)));
+      }
+      if(r.action==='hide'){ var hk=hideKind(r), un=kindUnsure(hk);
+        r._learnNote = un ? '🧠 자주 틀린 판정('+KIND_LB[hk]+' — 사람이 정상으로 본 것 '+un.over+'/'+(un.over+un.conf)+') · 기본 해제' : ''; }
+    });
     var multiDay=scanDates().length>1;
     var groups={revise:[],hide:[],register:[],hold:[]};
     results.forEach(function(r){ (groups[r.action]||(groups[r.action]=[])).push(r); });
@@ -1577,8 +1677,10 @@
       var exec = (k==='revise_product'||k==='hide');
       var manual = !!MANUAL_TODO[k];
       var gDone = manual ? g.filter(function(r){ return done[String(r.id)]; }).length : 0;
+      var nOff = exec ? g.filter(function(r){ return !r.applied && r._unchecked; }).length : 0;
       html+='<div style="margin-top:12px;border-top:1px solid #22392e;padding-top:9px">'
         +'<div style="font-weight:800;color:'+ACT[k].c+'">'+ACT[k].t+' · '+g.length+'건'
+        +(nOff?' <span style="font-size:11px;color:#9fb4ab">· 체크 해제 '+nOff+'</span>':'')
         +(manual?' <span class="csDoneCnt" data-k="'+k+'" style="font-size:11px;color:'+(gDone===g.length?'#3ddc97':'#9fb4ab')+'">✓ '+gDone+'/'+g.length+'</span>':'')
         +(k==='approve'?(function(){
             var hi=g.filter(function(r){ return r.conf==='high' && !r.applied; }).length;
@@ -1593,13 +1695,15 @@
         var dn = manual ? done[String(r.id)] : null;
         var strike = dn ? 'text-decoration:line-through;text-decoration-color:rgba(159,180,171,.7);' : '';
         html+='<div class="csCard" data-id="'+r.id+'" style="margin-top:7px;background:'+(dn?'#0d1512':'#111d18')+';border:1px solid '+(dn?'#1a2b23':'#22392e')+';border-radius:8px;padding:8px 10px;opacity:'+(dn?'.6':'1')+'">'
-          +(exec?'<label style="display:flex;gap:7px;align-items:flex-start;cursor:pointer"><input type="checkbox" class="csChk" data-id="'+r.id+'" '+(r.applied?'disabled':'checked')+' style="margin-top:3px">'
+          +(exec?'<label style="display:flex;gap:7px;align-items:flex-start;cursor:pointer"><input type="checkbox" class="csChk" data-id="'+r.id+'" '+(r.applied?'disabled':(r._unchecked?'':'checked'))+' style="margin-top:3px">'
             :manual?'<div style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" class="csDone" data-id="'+r.id+'" '+(dn?'checked':'')+' title="등록을 끝냈으면 체크 (표시만, CMS 로 보내지 않음)" style="margin-top:3px;width:15px;height:15px;accent-color:#3ddc97;cursor:pointer">'
             :'<div>')
           +'<div><a class="csLink" href="'+reviewUrl(r.id)+'" target="_blank" rel="noopener" '
           +'title="CMS 리뷰 상세를 새 탭에서 열기" '
           +'style="color:#8fd8ff;font-weight:800;text-decoration:none;border-bottom:1px dotted rgba(143,216,255,.5)">#'+r.id+' ↗</a> '
           +(r.applied?'<span style="color:#3ddc97;font-weight:800">✓ 처리됨</span> ':'')
+          +(k==='hide' && !r.applied && r._unchecked && FP[String(r.id)] && FP[String(r.id)].st==='override' ? '<span style="font-size:10.5px;color:#9fe3c4;font-weight:800">↩ 정상으로 표시함</span> ' : '')
+          +(k==='hide' && !r.applied && r._learnNote ? '<span style="font-size:10.5px;color:#f5c451;font-weight:800">'+esc(r._learnNote)+'</span> ' : '')
           +(multiDay?'<span style="color:#6b7f77;font-size:10.5px">'+esc(String(r.date||'').slice(5))+'</span> ':'')
           +(r.reviewStatus==='UPDATED'?'<span style="font-size:10.5px;color:#f5c451;font-weight:800">✏️수정완료</span> ':'')
           +'<span style="color:#9fb4ab;'+strike+'">'+esc(r.brand||'')+' / '+esc(r.product||'')+'</span>'
@@ -1658,6 +1762,14 @@
       +(scanDates().length>1?' (하루 상한 × '+scanDates().length+'일)':'')+'. 에러 시 즉시 중단.</div>';
 
     box.innerHTML=head(html);
+    /* 체크 해제·재체크를 기억한다. 미노출을 해제했다 = 사람이 정상으로 봤다 → 배운다 (다시 체크하면 되돌린다) */
+    [].slice.call(box.querySelectorAll('.csChk')).forEach(function(cb){
+      cb.addEventListener('change', function(){
+        var r=results.filter(function(x){ return String(x.id)===String(cb.dataset.id); })[0]; if(!r) return;
+        r._unchecked=!cb.checked; UNCHECK[r.id]=!cb.checked;
+        if(r.action==='hide') hidefpMark(r, cb.checked ? 'suggested' : 'override', true);
+      });
+    });
     /* 링크는 label 안에 있어 클릭이 체크박스까지 토글한다 — 막는다 */
     [].slice.call(box.querySelectorAll('.csLink')).forEach(function(a){
       a.onclick=function(ev){ ev.stopPropagation(); };
@@ -1884,6 +1996,7 @@
                    conf:r.conf||null, sample:!!r.sample, why:(r.reasons||[]).slice(-2)});
         if(ok){
           if(r.action==='approve') SESSION_APPROVED[String(r.id)]=ymd(new Date());   /* 목표 계산에 바로 반영 */
+          if(r.action==='hide') hidefpMark(r, 'confirmed', true);
           if(pendingLoad()[String(r.id)]) pendingMark(r.id, r.action==='revise_product' ? 'learned' : isRevise(r.action) ? 'sent' : 'resolved',
                                                      r.action==='revise_product' ? { pid:r.product_id, pname:r.product_exact } : null);
           if(!sentMark(r)) log('&nbsp;&nbsp;<span style="color:#ff8f6b">⚠ 전송 기록 저장 실패 — 브라우저 저장공간을 확인하세요 (재스캔 때 다시 보낼 수 있음)</span>');
@@ -2096,7 +2209,7 @@
     var now=new Date(), dates=[];
     for(var i=0;i<WORK_DAYS;i++) dates.push(ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate()-i)));
     var reviews={}, products={}, failed=[], next=0, doneN=0, watch={}, mine=[];
-    var watchIds=pendingLoad();
+    var watchIds=Object.assign({}, pendingLoad(), hidefpLoad());
     async function worker(){
       while(next<dates.length){
         var sd=dates[next++], page=1;
@@ -2270,8 +2383,10 @@
     if(!WORK || !ME) return;
     var lw=await learnFromWatch(WORK.watch, ME);
     var silent=matchPending();
+    var nh=learnHides(WORK.watch, ME);
     var n=lw.learned+silent;
-    LEARN_NOTE = n ? '<span style="color:#9fe3c4">🧠 제품명 연결 '+n+'건 새로 배움</span>' : '';
+    LEARN_NOTE = (n ? '<span style="color:#9fe3c4">🧠 제품명 연결 '+n+'건 새로 배움</span>' : '')
+      + (nh ? (n?' · ':'')+'<span style="color:#9fe3c4">🧠 미노출 오탐 '+nh+'건 배움(정상 승인한 것)</span>' : '');
   }
   /* 대기 목록 ↔ 내가 등록한 제품 짝짓기 (CMS 를 다시 부르지 않는다) */
   function matchPending(){
@@ -2486,6 +2601,7 @@
         +'<div style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(r.product||'')+'</div>'
         +(r.swatch?'<div style="font-size:10px;color:#f0a35e;margin-top:2px">💄 발색 제품 — 발색샷 확인</div>':'')
         +(r.photo&&r.photo.v==='mixed'?'<div style="font-size:10px;color:#f5c451;margin-top:2px">⚠ '+esc(r.photo.label)+'</div>':'')
+        +(r.photo&&r.photo.v==='suspect'?'<div style="font-size:10px;color:#f5c451;margin-top:2px">⚠ 사진 '+esc(r.photo.label.replace('/도용 의심',''))+' 크기 — 도용·캡처인지 확인</div>':'')
         +(r.warn?'<div style="font-size:10px;color:#f5c451;margin-top:2px">⚠ '+esc(r.warn)+'</div>':'')
         +(r.reviewStatus==='UPDATED'?'<div style="font-size:10px;color:#f5c451;margin-top:2px;font-weight:800">✏️ 유저 수정완료 건</div>':'')
         +(r.sample?'<div style="font-size:10px;color:#8fd8ff;margin-top:2px;font-weight:800">🎯 표본 — 문제 있으면 건너뛰기</div>'

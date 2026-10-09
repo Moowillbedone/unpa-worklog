@@ -483,3 +483,19 @@ test('the sync window writes remaining counts into the worklog',async()=>{
   const o=JSON.parse(s.getItem('unpa-worklog-v1'));
   assert.equal(o.months['2026-10'].days['08'].unreg,'13'); assert.ok(o.dirty.includes('2026-10'));
 });
+test('long genuine reviews are not "same syllable" gibberish; small photos alone do not hide a review',async()=>{
+  const c=consoleRules();
+  const long='요즘 데일리 베이스 메이크업으로 사용하기 좋은 헤라 실키스테이 파운데이션이에요. '.repeat(12);
+  assert.equal(c.rules.gibberish(long),null,'600자 넘는 정상 리뷰');
+  assert.ok(c.rules.gibberish('가가가가거거거거가가'),'짧은 반복은 여전히 잡는다');
+  assert.ok(c.rules.gibberish('좋아요좋아요좋아요좋아요좋아요좋아요좋아요좋아요좋아요좋아요좋아요'),'글자 종류가 아주 적으면 길어도 잡는다');
+  c.mock('get',async url=>({status:200,json:{total:1,results:url.includes('/brands?')?[{id:4,name:'브랜드',approved:true}]:[{id:1,name:'쿠션',brandId:4}]}}));
+  c.mock('imgDims',async()=>({w:650,h:862}));
+  const r=await c.rules.classify({id:11,brandName:'브랜드',productName:'쿠션'},{userBlocked:false,userBlockedCount:0,productId:1,productImageUrl:'https://img.test/p',productPrice:1000,contentText:'장미향 좋아해서 골라봤는데 생각보다 향이 부담스럽지 않고 은은하게 퍼져서 좋았어요.',attachments:['https://img.test/a','https://img.test/b']});
+  assert.equal(r.action,'approve','사진이 작아도 미노출하지 않고 그리드로'); assert.equal(r.approvable,true);
+  assert.match(r.reasons.join(' '),/눈으로 확인/);
+});
+test('merging console experience keeps hide corrections from the other computer',()=>{
+  const m=W.mergeConsole({hidefp:{'1':{k:'low',st:'suggested',at:'2026-10-01'}}},{hidefp:{'1':{k:'low',st:'override',at:'2026-10-02'},'2':{k:'photo-web',st:'override',at:'2026-10-02'}}});
+  assert.equal(m.hidefp['1'].st,'override'); assert.ok(m.hidefp['2']);
+});

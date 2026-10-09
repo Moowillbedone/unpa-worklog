@@ -47,6 +47,8 @@ function harness(){
                      pendingRecord,pendingLoad,learnFromWatch,associate,consoleState,applyConsoleState,doneRaw,
                      setBacklog:b=>{BACKLOG=b;},backlogList,seedFromVerdicts,
                      budget,planApprovals,goalSave,openGrid,refreshSkipped,remainList,
+                     hideRecord,learnHides,hidefpLoad,hidefpMark,hideOverridden,kindUnsure,hideKind,renderQueue,
+                     setUncheck:(id,v)=>{UNCHECK[id]=v;},
                      setMe:e=>{ME=e;},setWork:w=>{WORK=w;},getSyncHtml:()=>SYNC_HTML,
                      listAll,loadBacklog,scanRows,capOf,canSend,sentMark,
                      getAbort:()=>SCAN_ABORT,
@@ -658,4 +660,42 @@ test('remaining counts per date leave out hidden and already handled reviews',()
   const r=api.remainList();
   assert.equal(JSON.stringify(r.days['2026-10-08']),JSON.stringify({n:2,reg:1,upd:1,blocked:1}),'미노출·처리한 것·정지 사용자는 빼고 2건');
   assert.equal(r.days['2026-10-06'].n,0,'남은 게 없는 날도 넘겨 칸을 비우게 한다');
+});
+
+/* ── 미노출 판정 학습 (2026-10-09) ─────────────────────────── */
+test('a hide the person corrected is learned; suspended users are never learned',()=>{
+  const {api}=harness();
+  const rows=[{id:1,action:'hide',reasons:['사진 전부 저해상/도용 의심'],_body:'정상 리뷰 본문 아주 길게 씀'},
+              {id:2,action:'hide',reasons:['사진 전부 저해상/도용 의심'],_body:'또 다른 정상 리뷰'},
+              {id:3,action:'hide',reasons:['정지 사용자 (누적 1회) — 검수 제외, 미노출'],_body:'x'},
+              {id:4,action:'hide',reasons:['무성의한 리뷰 — 상투어만 있음 («좋아요»)'],_body:'좋아요 굿'},
+              {id:5,action:'hide',reasons:['사진 전부 저해상/도용 의심'],_body:'세 번째'}];
+  api.hideRecord(rows);
+  assert.equal(Object.keys(api.hidefpLoad()).sort().join(','),'1,2,4,5','정지 사용자는 기억하지 않는다');
+  /* 사람이 CMS 에서 정상 승인 (1,2) · 실수로 승인한 정지 사용자(3) · 실제 미노출(5) */
+  const n=api.learnHides({'1':{status:'APPROVED',actor:'me',visible:true},'2':{status:'APPROVED',actor:'me',visible:true},
+                          '3':{status:'APPROVED',actor:'me',visible:true},'5':{status:'PENDING',actor:'',visible:false}},'me');
+  assert.equal(n,2);
+  const fp=api.hidefpLoad(); assert.equal(fp['1'].st,'override'); assert.equal(fp['5'].st,'confirmed'); assert.equal(fp['3'],undefined);
+  assert.ok(api.kindUnsure('photo-web'),'사진 저해상 판정: 정상 2 / 맞힘 1 → 자주 틀린 판정');
+  assert.equal(api.kindUnsure('blocked'),null);
+  /* 무성의 판정을 사람이 해제하면 같은 본문은 다음부터 미노출로 보지 않는다 */
+  api.hidefpMark(rows[3],'override',true);
+  assert.equal(api.hideOverridden(999,'좋아요 굿'),'같은 본문');
+  assert.equal(api.hideOverridden(1,'아무 본문'),'이 리뷰');
+});
+test('an unchecked hide stays unchecked after re-rendering, and learned-unsure rules start unchecked',()=>{
+  const {api}=harness(); api.setDate('2026-10-08');
+  const a={id:21,action:'hide',exec:true,reasons:['무의미한 본문 — 자모 나열'],_body:'ㅁㄴㅇㄹ',date:'2026-10-08'};
+  const b={id:22,action:'hide',exec:true,reasons:['무의미한 본문 — 자모 나열'],_body:'ㅂㅈㄷㄱ',date:'2026-10-08'};
+  api.setResults([a,b]); api.renderQueue('2026-10-08');
+  assert.equal(a._unchecked,false); assert.equal(b._unchecked,false);
+  api.setUncheck(21,true); a._unchecked=undefined;
+  api.renderQueue('2026-10-08'); api.renderQueue('2026-10-08');
+  assert.equal(a._unchecked,true,'다른 일을 해서 다시 그려도 해제 유지'); assert.equal(b._unchecked,false);
+  /* 새로 스캔해 결과가 새 객체여도: 사람이 정상으로 본 리뷰는 해제된 채로 */
+  api.hidefpMark(a,'override',true);
+  const a2=Object.assign({},a,{_unchecked:undefined}); api.setUncheck(21,undefined);
+  api.setResults([a2]); api.renderQueue('2026-10-08');
+  assert.equal(a2._unchecked,true);
 });
