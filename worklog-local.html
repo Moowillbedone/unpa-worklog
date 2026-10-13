@@ -300,14 +300,17 @@
     const evKeys=Object.keys(ev.months).sort();evKeys.slice(0,Math.max(0,evKeys.length-4)).forEach(k=>{delete ev.months[k];});
     let evError=null;try{store.setItem(EV_KEY,JSON.stringify(ev));}catch(e){evError=String(e&&e.message||e);}
     const auditError=auditDays||cloud==='on'?writeAudit(store,audit):null;
+    /* 남은 검수(미등록 제품수 칸) 요약 — 업무일지 화면이 업데이트 결과로 보여 준다 */
+    let remain=null;
+    if(p.remain&&p.remain.days){const days={};let n=0;Object.keys(p.remain.days).forEach(d=>{const x=p.remain.days[d];if(date(d)&&x&&integer(x.n)&&x.n>0){days[d]=x.n;n+=x.n;}});remain={n,days,at:String(p.remain.at||iso)};}
     const info={at:iso,from:p.work.from,today:res.today,partial:!!p.work.partial,changes:res.changes.slice(0,60),nChanges:res.changes.length,
-                auditDays,auditError,evError,cloud};
+                auditDays,auditError,evError,cloud,remain};
     try{store.setItem('unpa-worklog-sync-v1',JSON.stringify(info));}catch(e){}
     /* 이번 달 목표·수입 — 콘솔이 목표 금액 안에서만 승인하도록 (단가는 업무일지와 같게 리뷰 500 · 제품 600) */
     let goal=null;
     try{const fin=JSON.parse(store.getItem(key)),mk=p.work.to.slice(0,7),md=fin&&fin.months&&fin.months[mk];
       if(md&&integer(md.target)){let r=0,pp=0;Object.values(md.days||{}).forEach(d=>{r+=d.r||0;pp+=d.p||0;});goal={month:mk,target:md.target,r,p:pp,won:r*500+pp*600};}}catch(e){}
-    return {ok:true,today:res.today,changes:res.changes.slice(0,20),nChanges:res.changes.length,auditDays,auditError,cloud,console:consoleOut,
+    return {ok:true,today:res.today,changes:res.changes.slice(0,20),nChanges:res.changes.length,auditDays,auditError,cloud,console:consoleOut,remain,
             verdicts:verdictsFor(audit,p.backlog),goal};
   }
   return {date,months,mergeAudit,unappliedIds,applyWork,applyRemain,isAutoUnreg,syncStore,syncAudit,syncWindow,latestVerdicts,verdictsFor,
@@ -554,7 +557,7 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
       <button id="nx" title="다음 달">›</button>
     </div>
     <button class="btn ghost" id="today">오늘로</button>
-    <button class="btn" id="updBtn" title="CMS 최근 60일 기준으로 리뷰·제품 수와 금액을 다시 채웁니다">🔄 업데이트</button>
+    <button class="btn" id="updBtn" title="CMS 기준으로 리뷰·제품 수, 금액, 미등록 제품수를 다시 채웁니다">🔄 업데이트</button>
     <button class="btn ghost" id="sbBtn" title="기기 간 동기화">☁️ 동기화</button>
     <button class="btn ghost" id="imp" title="백업 JSON 불러오기">가져오기</button>
     <button class="btn ghost" id="exp" title="백업 JSON 내려받기">내보내기</button>
@@ -782,8 +785,8 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
         <b>CMS 탭에서 북마클릿 한 번이면 끝납니다</b>
         <ol>
           <li>방금 열린 <b>CMS 탭</b>에서 북마크바의 <b>📒 업무일지 업데이트</b>를 누릅니다.</li>
-          <li>작은 창이 떠서 CMS 최근 60일의 <b>내가 승인한 리뷰·등록한 제품</b>을 모읍니다. 조회만 하고 CMS는 바꾸지 않습니다.</li>
-          <li>끝나면 이 화면의 리뷰 수·제품 수·금액이 저절로 바뀌고, CMS 탭은 닫힙니다.</li>
+          <li>작은 창이 떠서 CMS에서 <b>짝수일 남은 검수</b>와 최근 60일의 <b>내가 승인한 리뷰·등록한 제품</b>을 모읍니다. 조회만 하고 CMS는 바꾸지 않습니다.</li>
+          <li>끝나면 이 화면의 리뷰 수·제품 수·금액과 <b>미등록 제품수</b> 칸이 저절로 바뀌고, CMS 탭은 닫힙니다.</li>
         </ol>
       </div>
       <div class="step">
@@ -1319,10 +1322,13 @@ function updSynced(){
   st.innerHTML='✅ 업데이트 완료 '+htmlEscape(new Date(info.at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}))
     +' · 오늘 리뷰 <b>'+(t.r||0)+'</b> · 제품 <b>'+(t.p||0)+'</b>'
     +(info.nChanges?' · 바뀐 날 <b>'+info.nChanges+'</b>일':' · 바뀐 날 없음')
+    +(info.remain?'<br>📋 남은 검수 <b>'+info.remain.n+'</b>건'+(Object.keys(info.remain.days).length
+        ?' · '+Object.keys(info.remain.days).sort().map(d=>(+d.slice(5,7))+'/'+(+d.slice(8))+' '+info.remain.days[d]).join(', ')
+        :' — 짝수일 모두 끝')+' <span style="font-weight:400">(미등록 제품수 칸에 반영)</span>':'')
     +(info.partial?'<br><span style="color:#b57611">일부 날짜 조회 실패 — 다음 업데이트 때 채움</span>':'')
     +(info.cloud==='on'?'<br>☁ 다른 컴퓨터 기록과도 합쳤습니다':'');
   toast('업무일지를 CMS 기준으로 업데이트했습니다');
-  clearTimeout(updSynced._t); updSynced._t=setTimeout(()=>{ $('#updMask').hidden=true; },6000);
+  clearTimeout(updSynced._t); updSynced._t=setTimeout(()=>{ $('#updMask').hidden=true; },10000);
 }
 $('#updBtn').onclick=()=>{
   UPD_OPEN_AT=Date.now();

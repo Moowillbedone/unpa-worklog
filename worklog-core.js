@@ -291,14 +291,17 @@
     const evKeys=Object.keys(ev.months).sort();evKeys.slice(0,Math.max(0,evKeys.length-4)).forEach(k=>{delete ev.months[k];});
     let evError=null;try{store.setItem(EV_KEY,JSON.stringify(ev));}catch(e){evError=String(e&&e.message||e);}
     const auditError=auditDays||cloud==='on'?writeAudit(store,audit):null;
+    /* 남은 검수(미등록 제품수 칸) 요약 — 업무일지 화면이 업데이트 결과로 보여 준다 */
+    let remain=null;
+    if(p.remain&&p.remain.days){const days={};let n=0;Object.keys(p.remain.days).forEach(d=>{const x=p.remain.days[d];if(date(d)&&x&&integer(x.n)&&x.n>0){days[d]=x.n;n+=x.n;}});remain={n,days,at:String(p.remain.at||iso)};}
     const info={at:iso,from:p.work.from,today:res.today,partial:!!p.work.partial,changes:res.changes.slice(0,60),nChanges:res.changes.length,
-                auditDays,auditError,evError,cloud};
+                auditDays,auditError,evError,cloud,remain};
     try{store.setItem('unpa-worklog-sync-v1',JSON.stringify(info));}catch(e){}
     /* 이번 달 목표·수입 — 콘솔이 목표 금액 안에서만 승인하도록 (단가는 업무일지와 같게 리뷰 500 · 제품 600) */
     let goal=null;
     try{const fin=JSON.parse(store.getItem(key)),mk=p.work.to.slice(0,7),md=fin&&fin.months&&fin.months[mk];
       if(md&&integer(md.target)){let r=0,pp=0;Object.values(md.days||{}).forEach(d=>{r+=d.r||0;pp+=d.p||0;});goal={month:mk,target:md.target,r,p:pp,won:r*500+pp*600};}}catch(e){}
-    return {ok:true,today:res.today,changes:res.changes.slice(0,20),nChanges:res.changes.length,auditDays,auditError,cloud,console:consoleOut,
+    return {ok:true,today:res.today,changes:res.changes.slice(0,20),nChanges:res.changes.length,auditDays,auditError,cloud,console:consoleOut,remain,
             verdicts:verdictsFor(audit,p.backlog),goal};
   }
   return {date,months,mergeAudit,unappliedIds,applyWork,applyRemain,isAutoUnreg,syncStore,syncAudit,syncWindow,latestVerdicts,verdictsFor,

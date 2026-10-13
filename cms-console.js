@@ -1550,6 +1550,11 @@
   async function loadBacklog(){
     var dates=evenDates(BACKLOG_DAYS), sent=sentLoad(), res=new Array(dates.length), next=0, doneN=0;
     var paint=function(){
+      if(SYNC_ONLY){
+        syncStatus('📋 남은 검수 확인 중… <b>'+doneN+' / '+dates.length+'</b>일 (짝수일 최근 '+BACKLOG_DAYS+'일, 조회만)');
+        preProgress('남은 검수 확인 중… '+doneN+' / '+dates.length+'일');
+        return;
+      }
       box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">남은 일 확인 중… <b>'+doneN+' / '+dates.length+'</b>일<br>'
         +'<span style="font-size:11px">짝수일 최근 '+BACKLOG_DAYS+'일 · 조회만 합니다</span></div>');
     };
@@ -2332,10 +2337,10 @@
       Object.keys(WORK.products).forEach(function(id){ var x=arr(WORK.products[id]); pv.push([id, x[0], x[1]||'', x[2]||'']); });
     }
     (ob.reviews||[]).forEach(function(x){ if(x && validDate(x[1]) && x[1]>=AUTO_FROM) rv.push([String(x[0])].concat(x.slice(1))); });
-    /* 업데이트 전용은 남은 검수 목록을 스캔하지 않는다 — 남은 일·미등록 칸은 비우지 않고 그대로 둔다 */
+    /* 남은 검수 목록을 못 불러왔으면(BACKLOG 없음) 남은 일·미등록 칸은 비우지 않고 그대로 둔다 */
     return { v:1, seq:ob.seq||0,
              work:{ v:1, from:AUTO_FROM, to:ymd(new Date()), reviews:rv, products:pv, partial:!!(WORK && WORK.failed.length) },
-             audit:ob.audit||{}, pending:SYNC_ONLY ? null : pendingList(), backlog:backlogList(), remain:remainList(), console:consoleState() };
+             audit:ob.audit||{}, pending:(SYNC_ONLY && !BACKLOG) ? null : pendingList(), backlog:backlogList(), remain:remainList(), console:consoleState() };
   }
   function syncNonce(){
     try{ return Array.prototype.map.call(crypto.getRandomValues(new Uint8Array(16)),function(x){ return (x<16?'0':'')+x.toString(16); }).join(''); }
@@ -2414,6 +2419,16 @@
   /* 업무일지 [업데이트] 버튼이 연 CMS 탭이면 반영 뒤 저절로 닫는다 (업무일지 화면은 스스로 다시 그려진다) */
   var CLOSE_TIMER=null;
   function syncOnlyDone(){
+    var rm=remainList();
+    if(rm){
+      var ds=Object.keys(rm.days).filter(function(d){ return rm.days[d].n>0; }).sort();
+      var n=ds.reduce(function(s,d){ return s+rm.days[d].n; },0);
+      var note=document.createElement('div'); note.style.cssText='margin-top:6px;font-size:11.5px;color:#9fb4ab';
+      note.innerHTML='📋 남은 검수 <b style="color:#e8f1ed">'+n+'</b>건'
+        +(ds.length?' · '+ds.map(function(d){ return (+d.slice(5,7))+'/'+(+d.slice(8))+' '+rm.days[d].n; }).join(', '):' — 짝수일 모두 끝')
+        +(BACKLOG && BACKLOG.failed && BACKLOG.failed.length?' <span style="color:#f5c451">(조회 실패 '+BACKLOG.failed.length+'일은 그대로 둠)</span>':'');
+      box.appendChild(note);
+    }
     if(!/unpa-wl-update/.test(location.hash||'')) return;
     var el=document.createElement('div'); el.style.cssText='margin-top:8px;font-size:11.5px;color:#9fb4ab';
     el.innerHTML='업무일지 화면에 반영됐습니다. 이 탭은 5초 뒤 닫힙니다 '
@@ -2712,12 +2727,18 @@
 
   /* ── 시작 ── */
   if(SYNC_ONLY){
-    /* 업무일지 [업데이트] — 남은 검수 스캔·판정 없이, CMS 최근 60일의 내 승인·등록만 모아 업무일지에 넘긴다 */
+    /* 업무일지 [업데이트] — 판정·처리 없이 조회만 한다.
+       ① 짝수일 최근 60일 남은 검수(미등록 제품수 칸) ② 최근 60일 내 승인·등록(리뷰·제품 수, 금액)을 모아 업무일지에 넘긴다 */
     box.innerHTML='<b style="color:#3ddc97">📒 업무일지 업데이트</b>'
       +'<button id="csSyncX" title="닫기" style="float:right;background:none;border:0;color:#6b7f77;font-size:15px;cursor:pointer;line-height:1">✕</button>'
       +'<div id="csSync" style="margin-top:4px;font-size:11.5px;color:#9fb4ab">CMS 계정 확인 중…</div>';
     preOpen();
-    loadCore().then(function(){ return startWorkSync(); })
+    loadCore().then(async function(){
+      var b=await loadBacklog();
+      if(b) BACKLOG=b;
+      else syncStatus('<span style="color:#f5c451">⚠ 남은 검수 목록 조회 실패 — 미등록 칸은 그대로 두고 리뷰·제품 수만 반영합니다</span>');
+      return startWorkSync();
+    })
       .catch(function(e){ preClose(); syncStatus('<span style="color:#ff8f6b">⚠ 업무일지 동기화 오류 — '+esc(e&&e.message||e)+'</span>'); });
     return;
   }

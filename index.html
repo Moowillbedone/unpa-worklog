@@ -248,7 +248,7 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
       <button id="nx" title="다음 달">›</button>
     </div>
     <button class="btn ghost" id="today">오늘로</button>
-    <button class="btn" id="updBtn" title="CMS 최근 60일 기준으로 리뷰·제품 수와 금액을 다시 채웁니다">🔄 업데이트</button>
+    <button class="btn" id="updBtn" title="CMS 기준으로 리뷰·제품 수, 금액, 미등록 제품수를 다시 채웁니다">🔄 업데이트</button>
     <button class="btn ghost" id="sbBtn" title="기기 간 동기화">☁️ 동기화</button>
     <button class="btn ghost" id="imp" title="백업 JSON 불러오기">가져오기</button>
     <button class="btn ghost" id="exp" title="백업 JSON 내려받기">내보내기</button>
@@ -476,8 +476,8 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
         <b>CMS 탭에서 북마클릿 한 번이면 끝납니다</b>
         <ol>
           <li>방금 열린 <b>CMS 탭</b>에서 북마크바의 <b>📒 업무일지 업데이트</b>를 누릅니다.</li>
-          <li>작은 창이 떠서 CMS 최근 60일의 <b>내가 승인한 리뷰·등록한 제품</b>을 모읍니다. 조회만 하고 CMS는 바꾸지 않습니다.</li>
-          <li>끝나면 이 화면의 리뷰 수·제품 수·금액이 저절로 바뀌고, CMS 탭은 닫힙니다.</li>
+          <li>작은 창이 떠서 CMS에서 <b>짝수일 남은 검수</b>와 최근 60일의 <b>내가 승인한 리뷰·등록한 제품</b>을 모읍니다. 조회만 하고 CMS는 바꾸지 않습니다.</li>
+          <li>끝나면 이 화면의 리뷰 수·제품 수·금액과 <b>미등록 제품수</b> 칸이 저절로 바뀌고, CMS 탭은 닫힙니다.</li>
         </ol>
       </div>
       <div class="step">
@@ -1013,10 +1013,13 @@ function updSynced(){
   st.innerHTML='✅ 업데이트 완료 '+htmlEscape(new Date(info.at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}))
     +' · 오늘 리뷰 <b>'+(t.r||0)+'</b> · 제품 <b>'+(t.p||0)+'</b>'
     +(info.nChanges?' · 바뀐 날 <b>'+info.nChanges+'</b>일':' · 바뀐 날 없음')
+    +(info.remain?'<br>📋 남은 검수 <b>'+info.remain.n+'</b>건'+(Object.keys(info.remain.days).length
+        ?' · '+Object.keys(info.remain.days).sort().map(d=>(+d.slice(5,7))+'/'+(+d.slice(8))+' '+info.remain.days[d]).join(', ')
+        :' — 짝수일 모두 끝')+' <span style="font-weight:400">(미등록 제품수 칸에 반영)</span>':'')
     +(info.partial?'<br><span style="color:#b57611">일부 날짜 조회 실패 — 다음 업데이트 때 채움</span>':'')
     +(info.cloud==='on'?'<br>☁ 다른 컴퓨터 기록과도 합쳤습니다':'');
   toast('업무일지를 CMS 기준으로 업데이트했습니다');
-  clearTimeout(updSynced._t); updSynced._t=setTimeout(()=>{ $('#updMask').hidden=true; },6000);
+  clearTimeout(updSynced._t); updSynced._t=setTimeout(()=>{ $('#updMask').hidden=true; },10000);
 }
 $('#updBtn').onclick=()=>{
   UPD_OPEN_AT=Date.now();
