@@ -154,7 +154,7 @@ test('only fully safe candidates are high confidence',()=>{
   assert.equal(api.confidenceOf(cand(3),h).level,'check','과거 미노출 사용자는 사람이 본다');
 });
 
-test('near-identical texts in one scan are flagged, samples are drawn from high confidence',()=>{
+test('near-identical texts in one scan are flagged, samples are drawn from high confidence',async()=>{
   const {api}=harness(); api.setDate('2026-09-26');
   const words=['피부가','편해요','촉촉','산뜻','무난','흡수','향이','보습','진정','발림','가볍고','끈적임','없이','아침','저녁','건성','지성','복합성','민감','트러블'];
   const rows=Array.from({length:40},(_,i)=>{
@@ -163,7 +163,7 @@ test('near-identical texts in one scan are flagged, samples are drawn from high 
     return cand(100+i,{_body:t});
   });
   rows.push(cand(900,{user:'copycat',_body:LONG}), cand(901,{user:'copycat',product:'다른 제품',_body:LONG+'!'}));
-  api.setResults(rows); api.postScan();
+  api.setResults(rows); await api.postScan();
   const r900=rows.find(r=>r.id===900), r901=rows.find(r=>r.id===901);
   assert.ok(r900.dup && r901.dup,'거의 같은 본문 둘 다 표시');
   assert.equal(r900.conf,'check'); assert.equal(r901.conf,'check');
@@ -173,13 +173,36 @@ test('near-identical texts in one scan are flagged, samples are drawn from high 
   assert.equal(samples.length,Math.max(3,Math.ceil(highs.length*0.1)),'표본은 10%, 최소 3건');
 });
 
-test('text seen on a previous day under another review is flagged',()=>{
+test('text seen on a previous day under another review is flagged',async()=>{
   const {api}=harness();
-  api.setDate('2026-09-24'); api.setResults([cand(1)]); api.postScan();
-  api.setDate('2026-09-26'); const again=cand(2); api.setResults([again]); api.postScan();
+  api.setDate('2026-09-24'); api.setResults([cand(1)]); await api.postScan();
+  api.setDate('2026-09-26'); const again=cand(2); api.setResults([again]); await api.postScan();
   assert.match(again.dup,/과거 리뷰\(#1/); assert.equal(again.conf,'check');
-  const same=cand(1); api.setResults([same]); api.postScan();
+  const same=cand(1); api.setResults([same]); await api.postScan();
   assert.equal(same.dup,undefined,'원본 리뷰를 다시 스캔해도 원본은 복붙으로 몰리지 않는다');
+});
+
+test('a review re-posted after the user deleted the original is not a duplicate',async()=>{
+  const {api,ctx}=harness();
+  ctx.__route=(url)=> /\/admin\/reviews\/1$/.test(url) ? {status:200,body:{id:1,deletedAt:'2026-10-02T06:05:41Z'}} : null;
+  api.setDate('2026-09-28'); api.setResults([cand(1)]); await api.postScan();
+  api.setDate('2026-10-02'); const again=cand(2); api.setResults([again]); await api.postScan();
+  assert.equal(again.dup,undefined,'원본이 지워졌으면 중복으로 보지 않는다');
+  assert.ok(again.reasons.some(w=>/지운 리뷰\(#1\)/.test(w)));
+  const third=cand(3); api.setResults([third]); await api.postScan();
+  assert.match(third.dup||'',/과거 리뷰\(#2/,'다시 올린 리뷰가 새 원본이 된다');
+});
+
+test('product reselect with swatch goes out as one combined message',()=>{
+  const {api}=harness();
+  api.setTpl(Object.assign({},TPL,{product_match_swatch:{body:'[{제품명}] 검색 및 선택. 또한 해당 제품의 발색샷도 첨부 부탁드립니다. 문의 help'}}));
+  const r=api.buildReq({id:7,action:'revise_product',product_exact:'새틴 베일 쿠션',with_swatch:true});
+  assert.equal(r.body.content.length,1);
+  assert.match(r.body.content[0],/\[새틴 베일 쿠션\][\s\S]*발색샷/);
+  assert.equal((r.body.content[0].match(/문의/g)||[]).length,1,'문의 안내는 한 번만');
+  const {api:bare}=harness(); bare.setTpl(TPL);
+  assert.equal(bare.buildReq({id:8,action:'revise_product',product_exact:'x',with_swatch:true}),null,
+    '합친 문구가 없으면 발색 요청을 빠뜨린 채 보내지 않는다');
 });
 
 test('sample gate: any skipped sample blocks all high-confidence approvals',()=>{

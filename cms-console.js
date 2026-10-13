@@ -1176,7 +1176,7 @@
   }
 
   /* 판정이 끝난 뒤 리뷰끼리 비교해야 알 수 있는 것들 */
-  function postScan(){
+  async function postScan(){
     var h=histLoad();
     h._jh={}; var J=sentLoad(); Object.keys(J).forEach(function(k){ var e=J[k]; if(e && e.action==='hide' && e.u) h._jh[e.u]=(h._jh[e.u]||0)+1; });
     var items=results.filter(function(r){ return r && r._body!==undefined; });
@@ -1199,19 +1199,29 @@
       }
     }
 
-    /* ② 지난 스캔에서 본 본문을 다른 리뷰로 다시 올린 경우 */
+    /* ② 지난 스캔에서 본 본문을 다른 리뷰로 다시 올린 경우.
+       단 유저가 원본을 지우고 다시 쓴 것이면 중복이 아니다 — 원본이 살아 있는지 확인한다.
+       (2026-10-02 #478555: 9/28 #477187 을 지우고 다시 올린 리뷰를 중복으로 잡았다) */
     var now=new Date().toISOString();
-    items.forEach(function(r){
-      if(r._nt.length<30) return;
+    for(var x=0;x<items.length;x++){
+      var r=items[x];
+      if(r._nt.length<30) continue;
       var k=textHash(r._nt), seen=h.texts[k];
       if(seen && String(seen.id)!==String(r.id) && !r.dup){
+        var orig=await get(API+'/admin/reviews/'+seen.id);
+        if(orig.status>=200 && orig.status<300 && orig.json && orig.json.deletedAt){
+          r.reasons.push('🗑️ 지운 리뷰(#'+seen.id+')를 다시 올린 것 — 중복 아님');
+          h.texts[k]={ id:String(r.id), d:r.date||SCAN_DATE, t:now };   /* 이제 이 리뷰가 원본이다 */
+          continue;
+        }
+        /* 조회가 실패하면 살아 있다고 보고 표시만 남긴다 — 사람이 그리드에서 본다 */
         r.dup='과거 리뷰(#'+seen.id+', '+seen.d+')와 본문 동일';
         r.reasons.push(r.dup);
       }
       /* 처음 본 리뷰를 원본으로 둔다 — 덮어쓰면 원본이 도리어 복붙으로 몰린다 */
       if(!seen) h.texts[k]={ id:String(r.id), d:r.date||SCAN_DATE, t:now };
       else if(String(seen.id)===String(r.id)) seen.t=now;
-    });
+    }
 
     /* ③ 승인 후보 신뢰도 + 표본 */
     var highs=[];
@@ -1634,7 +1644,7 @@
       }
       await delay(60);
     }
-    postScan();
+    await postScan();
     pendingRecord(results);
     hideRecord(results);
     outboxAudit();
@@ -1912,7 +1922,9 @@
 
   function buildReq(r){
     if(r.action==='revise_product'){                 /* 제품 재선택 요청 — 정확한 상품명을 넣어 보낸다 */
-      var tpl=tplMap['product_match'];
+      /* 발색샷도 필요하면 한 문구로 합친다 — 따로 붙이면 문의 안내가 두 번 들어간다.
+         합친 문구가 없으면 발색 요청을 빠뜨리고 보내지 않도록 아예 만들지 않는다. */
+      var tpl=tplMap[r.with_swatch ? 'product_match_swatch' : 'product_match'];
       var body=tpl?tpl.body.replace(/\{제품명\}/g, r.product_exact||r.product):null;
       return body ? {method:'POST',url:API+'/admin/reviews/'+r.id+'/revise',body:{content:[body]}} : null;
     }
