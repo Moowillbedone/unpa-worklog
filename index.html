@@ -132,6 +132,12 @@ td input.memo.auto{box-shadow:inset 3px 0 0 var(--mint,#3ddc97);font-weight:700}
 .evrow .src.c{color:var(--mint-dk)}
 .pendgrp{margin-top:10px;font-weight:800;font-size:13px}
 .excnote{font-size:12.5px;color:var(--mid);line-height:1.6;margin-bottom:10px}
+.xtabs{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 12px}
+.xtab{background:var(--surface);border:1px solid var(--line2);color:var(--mid);border-radius:999px;padding:6px 14px;
+  font:inherit;font-size:13px;font-weight:700;cursor:pointer}
+.xtab:hover{color:var(--tx);border-color:var(--line3)}
+.xtab.on{background:var(--mint);border-color:var(--mint);color:#fff}
+.xtab .n{margin-left:5px;font-weight:600;opacity:.85}
 .xk{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:9px;white-space:nowrap;background:var(--sunk);color:var(--mid)}
 .xk.not_reviewable{background:#fde8e6;color:#b23b30}.xk.no_price{background:var(--amber-lt);color:#7c5408}
 .xk.overseas{background:#e6f0fd;color:#2c5ea8}.xk.done{background:#e3f4ec;color:#1f7a52}
@@ -454,6 +460,7 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
   <div id="view-exc" hidden>
     <div class="card" id="excCard">
       <div class="chd"><h2>🚩 검수 예외</h2><span class="hint" id="excHint">리뷰 작성일 기준 · 제품명을 누르면 CMS 리뷰로 이동</span></div>
+      <div class="xtabs" id="excTabs" role="tablist" aria-label="예외 분류"></div>
       <div class="excnote">일반 규칙대로 처리하지 못했거나 따로 세어 둘 리뷰를 날짜별로 모읍니다.
         <b>리뷰 대상 아님</b>은 수정요청을 보내기 전에 먼저 여기 적고, <b>해외직구</b>는 정상 처리하되 하루 몇 건인지 셉니다.</div>
       <div id="excSum"></div>
@@ -1720,13 +1727,31 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
   var XST={ listed:'리스트업', sent:'수정요청 보냄', done:'처리 완료', hold:'보류' };
   function xLoad(){ var o=jget(XK); return (o&&o.items)?o:{v:1,items:{}}; }
   function xSave(o){ try{ localStorage.setItem(XK, JSON.stringify(o)); return true; }catch(e){ return false; } }
+  /* 분류 탭 — 보류(보류·리스트업 = 아직 손이 필요한 건) / 처리 완료(처리 완료·수정요청 보냄) / 전체. 열 때마다 보류부터 */
+  var XTABS=[['hold','보류'],['done','처리 완료'],['all','전체']], XTAB='hold';
+  function xGroup(x){ return (x.status==='done'||x.status==='sent') ? 'done' : 'hold'; }
+  function renderExcTabs(items){
+    var el=document.getElementById('excTabs'); if(!el) return;
+    var n={hold:0,done:0,all:items.length}; items.forEach(function(x){ n[xGroup(x)]++; });
+    el.innerHTML=XTABS.map(function(t){
+      return '<button class="xtab'+(XTAB===t[0]?' on':'')+'" role="tab" aria-selected="'+(XTAB===t[0])+'" data-xtab="'+t[0]+'">'
+        +t[1]+'<span class="n">'+n[t[0]]+'</span></button>';
+    }).join('');
+  }
+  document.getElementById('excTabs').addEventListener('click', function(e){
+    var b=e.target.closest('[data-xtab]'); if(!b||b.dataset.xtab===XTAB) return;
+    XTAB=b.dataset.xtab; renderExc();
+  });
   function renderExc(){
     var body=document.getElementById('excBody'), sum=document.getElementById('excSum'); if(!body) return;
-    var all=xLoad().items, items=Object.keys(all).map(function(k){ return all[k]; }).filter(Boolean);
-    if(!items.length){ sum.innerHTML=''; body.innerHTML='<div class="warn">아직 기록된 예외가 없습니다.</div>'; return; }
+    var all=xLoad().items, every=Object.keys(all).map(function(k){ return all[k]; }).filter(Boolean);
+    renderExcTabs(every);
+    if(!every.length){ sum.innerHTML=''; body.innerHTML='<div class="warn">아직 기록된 예외가 없습니다.</div>'; return; }
+    var items=XTAB==='all' ? every : every.filter(function(x){ return xGroup(x)===XTAB; });
+    if(!items.length){ sum.innerHTML=''; body.innerHTML='<div class="warn">'+(XTAB==='hold'?'보류 중인 예외가 없습니다.':'처리 완료된 예외가 없습니다.')+'</div>'; return; }
     var byD={}; items.forEach(function(x){ var d=x.d||'날짜 없음'; (byD[d]||(byD[d]=[])).push(x); });
     var tot={}; items.forEach(function(x){ tot[x.kind]=(tot[x.kind]||0)+1; });
-    sum.innerHTML='<div class="xday" style="margin-top:0">전체 '+items.length+'건 '
+    sum.innerHTML='<div class="xday" style="margin-top:0">'+(XTAB==='hold'?'보류':XTAB==='done'?'처리 완료':'전체')+' '+items.length+'건 '
       +Object.keys(XKIND).filter(function(k){ return tot[k]; }).map(function(k){ return '<span class="xk '+k+'">'+XKIND[k]+' '+tot[k]+'</span>'; }).join(' ')+'</div>';
     body.innerHTML=Object.keys(byD).sort().reverse().map(function(d){
       var list=byD[d], cnt={}; list.forEach(function(x){ cnt[x.kind]=(cnt[x.kind]||0)+1; });
