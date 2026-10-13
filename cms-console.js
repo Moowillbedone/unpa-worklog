@@ -33,8 +33,14 @@
 (function () {
   'use strict';
   if (location.hostname !== 'cms.unpa.me') { alert('cms.unpa.me 에서 실행해주세요.'); return; }
-  try { var old = document.getElementById('cmsConsoleBox'); if (old) old.remove(); } catch (e) {}
-  if (window.__CONSOLE_RUNNING) { alert('이미 실행 중입니다.'); return; }
+  /* 업무일지 [업데이트] 북마클릿으로 불렸으면 콘솔 화면 없이 업무일지 집계만 넘긴다.
+     북마클릿이 클릭 순간 미리 열어 둔 동기화 창을 이어 쓴다 — 집계가 끝난 뒤 창을 열면 팝업 차단에 걸린다. */
+  var SYNC_ONLY = window.__UNPA_SYNC_ONLY === 1;
+  var PRE_WIN = SYNC_ONLY ? (window.__UNPA_SYNC_WIN || null) : null;
+  window.__UNPA_SYNC_ONLY = 0; window.__UNPA_SYNC_WIN = null;
+  /* 업데이트 카드는 열려 있는 콘솔을 닫지 않는다 */
+  try { var old = document.getElementById(SYNC_ONLY ? 'unpaSyncBox' : 'cmsConsoleBox'); if (old) old.remove(); } catch (e) {}
+  if (window.__CONSOLE_RUNNING) { try { if (PRE_WIN) PRE_WIN.close(); } catch (e) {} alert('이미 실행 중입니다.'); return; }
 
   var API = 'https://api-v2.unpa.me';
   var TPL_URL = 'https://moowillbedone.github.io/unpa-worklog/templates.json';
@@ -1422,11 +1428,11 @@
   }
 
   /* ── 패널 ── */
-  var box=document.createElement('div'); box.id='cmsConsoleBox';
+  var box=document.createElement('div'); box.id=SYNC_ONLY ? 'unpaSyncBox' : 'cmsConsoleBox';
   box.style.cssText='position:fixed;top:12px;right:12px;z-index:2147483647;background:#0d1512;color:#e8f1ed;'
     +'border:1px solid #2fb87f;border-radius:14px;padding:15px 17px;'
     +'font:12.5px/1.55 -apple-system,BlinkMacSystemFont,sans-serif;'
-    +'box-shadow:0 14px 48px rgba(0,0,0,.55);max-width:420px;max-height:90vh;overflow:auto';
+    +'box-shadow:0 14px 48px rgba(0,0,0,.55);max-width:'+(SYNC_ONLY ? 340 : 420)+'px;max-height:90vh;overflow:auto';
   document.body.appendChild(box);
 
   var tplMap={}, results=[], logLines=[];
@@ -1454,6 +1460,8 @@
   box.addEventListener('click', function(ev){
     var t=ev.target;
     if(t && t.id==='csSyncBtn'){ ev.preventDefault(); ev.stopPropagation(); syncNow(); }
+    if(t && t.id==='csSyncX'){ ev.preventDefault(); clearTimeout(CLOSE_TIMER); box.remove(); }
+    if(t && t.id==='csKeepTab'){ ev.preventDefault(); clearTimeout(CLOSE_TIMER); t.parentNode.textContent='이 탭은 그대로 둡니다.'; }
   });
 
   async function renderStart(sd){
@@ -2324,9 +2332,10 @@
       Object.keys(WORK.products).forEach(function(id){ var x=arr(WORK.products[id]); pv.push([id, x[0], x[1]||'', x[2]||'']); });
     }
     (ob.reviews||[]).forEach(function(x){ if(x && validDate(x[1]) && x[1]>=AUTO_FROM) rv.push([String(x[0])].concat(x.slice(1))); });
+    /* 업데이트 전용은 남은 검수 목록을 스캔하지 않는다 — 남은 일·미등록 칸은 비우지 않고 그대로 둔다 */
     return { v:1, seq:ob.seq||0,
              work:{ v:1, from:AUTO_FROM, to:ymd(new Date()), reviews:rv, products:pv, partial:!!(WORK && WORK.failed.length) },
-             audit:ob.audit||{}, pending:pendingList(), backlog:backlogList(), remain:remainList(), console:consoleState() };
+             audit:ob.audit||{}, pending:SYNC_ONLY ? null : pendingList(), backlog:backlogList(), remain:remainList(), console:consoleState() };
   }
   function syncNonce(){
     try{ return Array.prototype.map.call(crypto.getRandomValues(new Uint8Array(16)),function(x){ return (x<16?'0':'')+x.toString(16); }).join(''); }
@@ -2339,12 +2348,30 @@
      클릭 없이 열리면 팝업 차단에 걸릴 수 있다 — 그때는 버튼 한 번으로 연다.
      (주소창의 팝업 차단 아이콘에서 cms.unpa.me 를 "항상 허용"하면 이후 자동) */
   var SYNCING=false;
+  /* 업데이트 북마클릿이 미리 연 창 — 집계하는 동안 동기화 창(sync.html)을 띄워 두고 진행 상황을 보여 준다 */
+  var PRE=null;
+  function preOpen(){
+    if(!PRE_WIN || PRE_WIN.closed) return;
+    var nonce=syncNonce();
+    try{ PRE_WIN.location.href=SYNC_URL+'#n='+nonce; }catch(e){ return; }
+    PRE={ win:PRE_WIN, nonce:nonce, ready:false };
+    window.addEventListener('message', function(ev){
+      if(!PRE || ev.origin!==WL_ORIGIN || ev.source!==PRE.win || !ev.data || ev.data.nonce!==PRE.nonce) return;
+      if(ev.data.type==='unpa-sync-ready') PRE.ready=true;
+    });
+  }
+  function preProgress(text){
+    if(!PRE || !PRE.ready || PRE.win.closed) return;
+    try{ PRE.win.postMessage({ type:'unpa-sync-progress', nonce:PRE.nonce, text:text }, WL_ORIGIN); }catch(e){}
+  }
+  function preClose(){ try{ if(PRE && !PRE.win.closed) PRE.win.close(); }catch(e){} PRE=null; }
   function syncNow(){
-    if(!ME){ syncStatus('<span style="color:#ff8f6b">⚠ CMS 계정을 확인하지 못해 업무일지 동기화를 건너뜀</span>'); return false; }
+    if(!ME){ preClose(); syncStatus('<span style="color:#ff8f6b">⚠ CMS 계정을 확인하지 못해 업무일지 동기화를 건너뜀</span>'); return false; }
     if(SYNCING) return false;
-    var nonce=syncNonce(), sx=(window.screenX||0)+Math.max(0,(window.outerWidth||1200)-460);
-    var w=null;
-    try{ w=window.open(SYNC_URL+'#n='+nonce, 'unpa-worklog-sync', 'popup,width=420,height=300,left='+sx+',top='+((window.screenY||0)+80)); }catch(e){ w=null; }
+    var pre=(PRE && !PRE.win.closed) ? PRE : null; PRE=null;
+    var nonce=pre ? pre.nonce : syncNonce(), sx=(window.screenX||0)+Math.max(0,(window.outerWidth||1200)-460);
+    var w=pre ? pre.win : null;
+    if(!w) try{ w=window.open(SYNC_URL+'#n='+nonce, 'unpa-worklog-sync', 'popup,width=420,height=300,left='+sx+',top='+((window.screenY||0)+80)); }catch(e){ w=null; }
     if(!w){
       syncButton('📒 업무일지 반영 대기 <span style="color:#6b7f77">(팝업 차단 — 주소창 아이콘에서 항상 허용하면 자동)</span>');
       return false;
@@ -2376,16 +2403,29 @@
           : ev.data.cloud ? ' · <span style="color:#f5c451">☁ 서버 합치기 실패 — 다음에 다시</span>' : '')
         +(LEARN_NOTE?' · '+LEARN_NOTE:'')
         +(function(){ var b=budget(); return b.known ? '<br><span style="color:#f5c451">'+esc(budgetLine(b))+'</span>' : ''; })());
+      if(SYNC_ONLY) syncOnlyDone();
     };
     window.addEventListener('message', onMsg);
+    /* 미리 연 창이 이미 준비 신호를 보냈으면 기다리지 않고 바로 넘긴다 */
+    if(pre && pre.ready) w.postMessage({ type:'unpa-sync-data', nonce:nonce, payload:payload }, WL_ORIGIN);
     timer=setTimeout(function(){ finish(); syncButton('<span style="color:#ff8f6b">⚠ 업무일지 창 응답 없음</span>'); }, 45000);
     return true;
   }
+  /* 업무일지 [업데이트] 버튼이 연 CMS 탭이면 반영 뒤 저절로 닫는다 (업무일지 화면은 스스로 다시 그려진다) */
+  var CLOSE_TIMER=null;
+  function syncOnlyDone(){
+    if(!/unpa-wl-update/.test(location.hash||'')) return;
+    var el=document.createElement('div'); el.style.cssText='margin-top:8px;font-size:11.5px;color:#9fb4ab';
+    el.innerHTML='업무일지 화면에 반영됐습니다. 이 탭은 5초 뒤 닫힙니다 '
+      +'<button id="csKeepTab" style="margin-left:4px;background:#132019;color:#9fb4ab;border:1px solid #2c4a3c;border-radius:6px;padding:2px 8px;font:inherit;font-size:11px;cursor:pointer">그대로 두기</button>';
+    box.appendChild(el);
+    CLOSE_TIMER=setTimeout(function(){ try{ history.replaceState(null,'',location.pathname+location.search); }catch(e){} window.close(); }, 5000);
+  }
   async function startWorkSync(){
     if(!ME) ME=await whoAmI();
-    if(!ME){ syncStatus('<span style="color:#ff8f6b">⚠ CMS 계정을 확인하지 못해 업무일지 동기화를 건너뜀</span>'); return; }
+    if(!ME){ preClose(); syncStatus('<span style="color:#ff8f6b">⚠ CMS 계정을 확인하지 못해 업무일지 동기화를 건너뜀</span>'); return; }
     syncStatus('📒 업무일지 집계 중… (CMS 최근 '+WORK_DAYS+'일, 조회만)');
-    WORK=await collectWork(ME, function(d,n){ if(!SYNCING) syncStatus('📒 업무일지 집계 중… '+d+' / '+n+'일'); });
+    WORK=await collectWork(ME, function(d,n){ if(!SYNCING) syncStatus('📒 업무일지 집계 중… '+d+' / '+n+'일'); preProgress('CMS 집계 중… '+d+' / '+n+'일'); });
     try{ await learnAndMatch(); }catch(e){}
     syncNow();
   }
@@ -2671,6 +2711,16 @@
   }
 
   /* ── 시작 ── */
+  if(SYNC_ONLY){
+    /* 업무일지 [업데이트] — 남은 검수 스캔·판정 없이, CMS 최근 60일의 내 승인·등록만 모아 업무일지에 넘긴다 */
+    box.innerHTML='<b style="color:#3ddc97">📒 업무일지 업데이트</b>'
+      +'<button id="csSyncX" title="닫기" style="float:right;background:none;border:0;color:#6b7f77;font-size:15px;cursor:pointer;line-height:1">✕</button>'
+      +'<div id="csSync" style="margin-top:4px;font-size:11.5px;color:#9fb4ab">CMS 계정 확인 중…</div>';
+    preOpen();
+    loadCore().then(function(){ return startWorkSync(); })
+      .catch(function(e){ preClose(); syncStatus('<span style="color:#ff8f6b">⚠ 업무일지 동기화 오류 — '+esc(e&&e.message||e)+'</span>'); });
+    return;
+  }
   var qs=new URLSearchParams(location.search); var sd=qs.get('startDate')||ymd(new Date());
   box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">템플릿 불러오는 중…</div>');
   oF.call(window,TPL_URL+'?t='+Date.now()).then(function(r){return r.json();})

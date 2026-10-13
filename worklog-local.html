@@ -554,6 +554,7 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
       <button id="nx" title="다음 달">›</button>
     </div>
     <button class="btn ghost" id="today">오늘로</button>
+    <button class="btn" id="updBtn" title="CMS 최근 60일 기준으로 리뷰·제품 수와 금액을 다시 채웁니다">🔄 업데이트</button>
     <button class="btn ghost" id="sbBtn" title="기기 간 동기화">☁️ 동기화</button>
     <button class="btn ghost" id="imp" title="백업 JSON 불러오기">가져오기</button>
     <button class="btn ghost" id="exp" title="백업 JSON 내려받기">내보내기</button>
@@ -769,6 +770,37 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
 </div>
 <div class="toast" id="toast"></div>
 
+<div class="mask" id="updMask" hidden>
+  <div class="modal">
+    <div class="mhd">
+      <h3>🔄 업무일지 업데이트</h3>
+      <button class="mx" id="updClose" title="닫기">✕</button>
+    </div>
+    <div class="mbd">
+      <div class="stat off" id="updStat">확인 중…</div>
+      <div class="step">
+        <b>CMS 탭에서 북마클릿 한 번이면 끝납니다</b>
+        <ol>
+          <li>방금 열린 <b>CMS 탭</b>에서 북마크바의 <b>📒 업무일지 업데이트</b>를 누릅니다.</li>
+          <li>작은 창이 떠서 CMS 최근 60일의 <b>내가 승인한 리뷰·등록한 제품</b>을 모읍니다. 조회만 하고 CMS는 바꾸지 않습니다.</li>
+          <li>끝나면 이 화면의 리뷰 수·제품 수·금액이 저절로 바뀌고, CMS 탭은 닫힙니다.</li>
+        </ol>
+      </div>
+      <div class="step">
+        <b>처음 한 번 — 북마클릿 설치</b><br>
+        아래 버튼을 클릭하지 말고 <b>북마크바로 끌어다 놓으세요</b>. 북마크바가 안 보이면 <b>Cmd/Ctrl + Shift + B</b>.
+        <div class="mact" style="margin-top:10px">
+          <a class="btn" id="updBm" href="#" draggable="true" style="text-decoration:none">📒 업무일지 업데이트</a>
+          <button class="btn ghost" id="updCopy">주소 복사 (드래그 안 될 때)</button>
+        </div>
+      </div>
+      <div class="mact">
+        <button class="btn ghost" id="updReopen">CMS 탭 다시 열기</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="mask" id="sbMask" hidden>
   <div class="modal">
     <div class="mhd">
@@ -937,7 +969,7 @@ let STORAGE_CONFLICT=false;
 /* 다른 탭 — 특히 검수 콘솔이 여는 동기화 창(sync.html) — 이 기록을 바꾸면 다시 읽어 화면에 반영한다.
    이 탭의 입력은 칠 때마다 바로 저장되므로 다시 읽어도 잃는 것이 없다. */
 window.addEventListener('storage',e=>{
-  if(e.key==='unpa-worklog-sync-v1'){ renderAutoInfo(); return; }
+  if(e.key==='unpa-worklog-sync-v1'){ renderAutoInfo(); updSynced(); return; }
   if(e.key!==LS) return;
   try{
     const o=JSON.parse(e.newValue||'null');
@@ -1227,7 +1259,7 @@ $('#file').onchange = e => {
 function renderAutoInfo(){
   const el=$('#autoHint'); if(!el) return;
   let info=null; try{ info=JSON.parse(localStorage.getItem('unpa-worklog-sync-v1')||'null'); }catch(e){}
-  if(!info||!info.at){ el.innerHTML='숫자 칸을 클릭해 바로 입력 · 자동 저장 · 검수 콘솔을 열면 CMS 기준으로 자동 기록'; return; }
+  if(!info||!info.at){ el.innerHTML='숫자 칸을 클릭해 바로 입력 · 자동 저장 · 위쪽 [🔄 업데이트] 또는 검수 콘솔로 CMS 기준 자동 기록'; return; }
   const at=new Date(info.at), p2=n=>String(n).padStart(2,'0');
   const when=p2(at.getMonth()+1)+'-'+p2(at.getDate())+' '+p2(at.getHours())+':'+p2(at.getMinutes());
   const md=d=>(+d.slice(5,7))+'/'+(+d.slice(8,10));
@@ -1238,6 +1270,75 @@ function renderAutoInfo(){
     +(info.partial?' · <span style="color:#b57611">일부 날짜 조회 실패 — 다음 동기화 때 채움</span>':'')
     +(info.nChanges?' · <details><summary>바뀐 날 '+info.nChanges+'일</summary><ul>'+list+'</ul></details>':'');
 }
+
+/* ── 🔄 업데이트 ──
+   이 페이지(github.io)는 CMS 로그인 정보를 쓸 수 없어서 CMS 숫자를 직접 읽지 못한다.
+   그래서 버튼은 CMS 탭을 열고, 그 탭에서 [📒 업무일지 업데이트] 북마클릿을 한 번 누르면
+   검수 콘솔의 업무일지 집계만 돌아 동기화 창(sync.html)이 이 브라우저 기록을 고친다.
+   이 화면은 storage 이벤트로 바뀐 것을 받아 저절로 다시 그린다. */
+const WL_BASE='https://moowillbedone.github.io/unpa-worklog/';
+let UPD_OPEN_AT=0;
+function updBookmarklet(){
+  const code="(function(){if(location.hostname!=='cms.unpa.me'){alert('CMS(cms.unpa.me) 탭에서 눌러 주세요.');return;}"
+    +"var w=null;try{w=window.open('about:blank','unpa-worklog-sync','popup,width=420,height=300');"
+    +"if(w&&w.document&&w.document.body){w.document.title='업무일지 동기화';"
+    +"w.document.body.style.cssText='margin:0;padding:18px;font:14px -apple-system,sans-serif;color:#16211d;background:#f6f8f7';"
+    +"w.document.body.textContent='📒 CMS에서 업무일지 집계 준비 중…';}}catch(e){}"
+    +"window.__UNPA_SYNC_ONLY=1;window.__UNPA_SYNC_WIN=w;"
+    +"var s=document.createElement('script');s.src='"+WL_BASE+"cms-console.js?t='+Date.now();"
+    +"s.onerror=function(){try{if(w)w.close();}catch(e){}alert('업무일지 스크립트를 불러오지 못했습니다.');};"
+    +"document.body.appendChild(s);})();";
+  /* 즐겨찾기 주소에 한글이 그대로 들어가면 브라우저마다 다르게 저장된다 — \uXXXX 로 바꿔 둔다 */
+  return 'javascript:'+code.replace(/[^\x00-\x7f]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));
+}
+function updCmsUrl(){
+  return 'https://cms.unpa.me/review/list/all?startDate='+dKey(today)+'&endDate='+dKey(today)+'&beforeApproval=true#unpa-wl-update';
+}
+function updLastInfo(){
+  let info=null; try{ info=JSON.parse(localStorage.getItem('unpa-worklog-sync-v1')||'null'); }catch(e){}
+  return info&&info.at ? info : null;
+}
+function updStatLast(){
+  const info=updLastInfo(), st=$('#updStat');
+  if(!info){ st.className='stat off'; st.innerHTML='아직 CMS에서 반영한 적이 없습니다. CMS 탭에서 북마클릿을 눌러 주세요.'; return; }
+  const at=new Date(info.at), min=Math.max(0,Math.round((Date.now()-at)/60000));
+  const ago=min<1?'방금':min<60?min+'분 전':min<1440?Math.floor(min/60)+'시간 전':Math.floor(min/1440)+'일 전';
+  st.className='stat off';
+  st.innerHTML='마지막 반영 <b>'+htmlEscape(at.toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}))+'</b> ('+ago+')'
+    +' — CMS 탭에서 북마클릿을 누르면 지금 기준으로 다시 채웁니다.';
+}
+function updOpenCms(){
+  try{ window.open(updCmsUrl(),'unpa-cms'); }catch(e){}
+}
+/* 동기화 창이 반영을 마치면 (storage 이벤트) 결과를 띄운다 */
+function updSynced(){
+  const info=updLastInfo(); if(!info) return;
+  if($('#updMask').hidden || Date.parse(info.at)<UPD_OPEN_AT) return;
+  const t=info.today||{}, st=$('#updStat');
+  st.className='stat on';
+  st.innerHTML='✅ 업데이트 완료 '+htmlEscape(new Date(info.at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}))
+    +' · 오늘 리뷰 <b>'+(t.r||0)+'</b> · 제품 <b>'+(t.p||0)+'</b>'
+    +(info.nChanges?' · 바뀐 날 <b>'+info.nChanges+'</b>일':' · 바뀐 날 없음')
+    +(info.partial?'<br><span style="color:#b57611">일부 날짜 조회 실패 — 다음 업데이트 때 채움</span>':'')
+    +(info.cloud==='on'?'<br>☁ 다른 컴퓨터 기록과도 합쳤습니다':'');
+  toast('업무일지를 CMS 기준으로 업데이트했습니다');
+  clearTimeout(updSynced._t); updSynced._t=setTimeout(()=>{ $('#updMask').hidden=true; },6000);
+}
+$('#updBtn').onclick=()=>{
+  UPD_OPEN_AT=Date.now();
+  $('#updBm').href=updBookmarklet();
+  updStatLast();
+  $('#updMask').hidden=false;
+  updOpenCms();
+};
+$('#updReopen').onclick=()=>{ UPD_OPEN_AT=Date.now(); updOpenCms(); };
+$('#updClose').onclick=()=>{ clearTimeout(updSynced._t); $('#updMask').hidden=true; };
+$('#updMask').addEventListener('click',e=>{ if(e.target===$('#updMask')){ clearTimeout(updSynced._t); $('#updMask').hidden=true; } });
+$('#updBm').addEventListener('click',e=>{ e.preventDefault(); toast('클릭 말고 북마크바로 끌어다 놓으세요'); });
+$('#updCopy').onclick=async()=>{
+  try{ await navigator.clipboard.writeText(updBookmarklet()); toast('복사됨 — 새 북마크를 만들고 URL 칸에 붙여넣으세요'); }
+  catch(e){ toast('복사 실패 — 버튼을 북마크바로 끌어다 놓으세요',true); }
+};
 
 /* ── 초기화 ── */
 cur = TODAY_M;
