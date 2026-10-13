@@ -980,6 +980,13 @@ const BOOT_READY=(async () => {
  * anon key 는 공개되어도 되는 값입니다(RLS 가 실제 방어선).
  */
 const SB_CFG = 'unpa-sb-cfg';
+/* 검수 예외 합치기 — worklog-core.js 가 캐시된 옛 버전이어도 동작하도록 같은 규칙을 여기에도 둔다 */
+function mergeExc(a,b){
+  if(window.WorklogCore&&WorklogCore.mergeExceptions) return WorklogCore.mergeExceptions(a,b);
+  const out=Object.assign({},(a&&a.items)||{}), bi=(b&&b.items)||{};
+  for(const k of Object.keys(bi)){const v=bi[k],p=out[k];if(!v)continue;if(!p||String(v.at||'')>=String(p.at||''))out[k]=v;}
+  return {v:1,items:out};
+}
 let SB = null, SB_USER = null, SB_BUSY = false;
 
 /* 기본 연결 정보 — anon key 는 공개되어도 되는 값이며,
@@ -1109,7 +1116,7 @@ async function pullDocs(){
       if(row.month.indexOf('~ev:')===0) ev.months[row.month.slice(4)]=WorklogCore.mergeEvidence(ev.months[row.month.slice(4)],row.data);
       else if(row.month.indexOf('~audit:')===0 && row.data && Array.isArray(row.data.items)){ const d=row.month.slice(7); au.days[d]=WorklogCore.mergeAudit(au.days[d],Object.assign({},row.data,{date:d})); }
       else if(row.month==='~pending' && row.data && (!pend || String(row.data.at||'')>String(pend.at||''))) pend=row.data;
-      else if(row.month==='~exc' && row.data) exc=WorklogCore.mergeExceptions(exc,row.data);
+      else if(row.month==='~exc' && row.data) exc=mergeExc(exc,row.data);
     });
     try{ localStorage.setItem('unpa-exceptions-v1',JSON.stringify(exc)); }catch(e){}
     if(typeof window.renderExc==='function') window.renderExc();
@@ -1595,7 +1602,7 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
     var r=await SB.from('worklog_months').select('data,updated_at').eq('user_id',account).eq('month','~exc');
     if(r.error) return false;
     var row=r.data&&r.data[0];
-    var merged=WorklogCore.mergeExceptions(row&&row.data, xLoad()); xSave(merged);
+    var merged=mergeExc(row&&row.data, xLoad()); xSave(merged);
     var at=new Date().toISOString(), value={user_id:account,month:'~exc',data:merged,updated_at:at};
     var q=row ? SB.from('worklog_months').update(value).eq('user_id',account).eq('month','~exc').eq('updated_at',row.updated_at)
               : SB.from('worklog_months').insert(value);
