@@ -131,6 +131,14 @@ td input.memo.auto{box-shadow:inset 3px 0 0 var(--mint,#3ddc97);font-weight:700}
 .evrow .src{margin-left:auto;font-size:11px;color:var(--dim);white-space:nowrap}
 .evrow .src.c{color:var(--mint-dk)}
 .pendgrp{margin-top:10px;font-weight:800;font-size:13px}
+.excnote{font-size:12.5px;color:var(--mid);line-height:1.6;margin-bottom:10px}
+.xk{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:9px;white-space:nowrap;background:var(--sunk);color:var(--mid)}
+.xk.not_reviewable{background:#fde8e6;color:#b23b30}.xk.no_price{background:var(--amber-lt);color:#7c5408}
+.xk.overseas{background:#e6f0fd;color:#2c5ea8}.xk.done{background:#e3f4ec;color:#1f7a52}
+.xday{margin-top:14px;font-weight:800;font-size:13px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.xrow{display:grid;grid-template-columns:auto 1fr auto;gap:4px 10px;padding:6px 0;border-bottom:1px dashed var(--line);font-size:13px;align-items:baseline}
+.xrow .why{grid-column:2/4;color:var(--mid);font-size:12.3px;line-height:1.5}
+@media (max-width:560px){.xrow{grid-template-columns:1fr auto}.xrow .why{grid-column:1/3}}
 details.old>summary{cursor:pointer;font-weight:800;color:var(--mid);padding:6px 2px;margin-bottom:10px}
 td input.memo{color:var(--mid);font-size:12.3px;font-weight:400}
 td input::placeholder{color:#b9c4c0}
@@ -251,6 +259,7 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
   <nav class="views">
     <button class="vtab on" data-v="log">📋 업무일지</button>
     <button class="vtab" data-v="audit">🧾 작업 증빙</button>
+    <button class="vtab" data-v="exc">🚩 검수 예외</button>
   </nav>
 
   <div id="view-log">
@@ -440,6 +449,16 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
     </div>
     </details>
   </div><!-- /view-audit -->
+
+  <div id="view-exc" hidden>
+    <div class="card" id="excCard">
+      <div class="chd"><h2>🚩 검수 예외</h2><span class="hint" id="excHint">리뷰 작성일 기준 · 제품명을 누르면 CMS 리뷰로 이동</span></div>
+      <div class="excnote">일반 규칙대로 처리하지 못했거나 따로 세어 둘 리뷰를 날짜별로 모읍니다.
+        <b>리뷰 대상 아님</b>은 수정요청을 보내기 전에 먼저 여기 적고, <b>해외직구</b>는 정상 처리하되 하루 몇 건인지 셉니다.</div>
+      <div id="excSum"></div>
+      <div id="excBody"></div>
+    </div>
+  </div><!-- /view-exc -->
 
 </div>
 <div class="toast" id="toast"></div>
@@ -1076,7 +1095,7 @@ async function pullAll(){
 async function pullDocs(){
   if(!SB||!SB_USER) return;
   try{
-    const now=new Date(), keys=['~pending'];
+    const now=new Date(), keys=['~pending','~exc'];
     WorklogCore.monthsBack(now,3).forEach(m=>keys.push('~ev:'+m));
     for(let i=0;i<45;i++){ const d=new Date(now.getFullYear(),now.getMonth(),now.getDate()-i); keys.push('~audit:'+dKey(d)); }
     const { data, error } = await SB.from('worklog_months').select('month,data,updated_at').eq('user_id',SB_USER.id).in('month',keys);
@@ -1085,11 +1104,15 @@ async function pullDocs(){
     const ev=rd('unpa-evidence-v1')||{v:1,months:{}}; ev.months=ev.months||{};
     const au=rd('unpa-audit-v1')||{v:1,days:{}}; au.days=au.days||{};
     let pend=rd('unpa-pending-v1');
+    let exc=rd('unpa-exceptions-v1')||{v:1,items:{}};
     data.forEach(row=>{
       if(row.month.indexOf('~ev:')===0) ev.months[row.month.slice(4)]=WorklogCore.mergeEvidence(ev.months[row.month.slice(4)],row.data);
       else if(row.month.indexOf('~audit:')===0 && row.data && Array.isArray(row.data.items)){ const d=row.month.slice(7); au.days[d]=WorklogCore.mergeAudit(au.days[d],Object.assign({},row.data,{date:d})); }
       else if(row.month==='~pending' && row.data && (!pend || String(row.data.at||'')>String(pend.at||''))) pend=row.data;
+      else if(row.month==='~exc' && row.data) exc=WorklogCore.mergeExceptions(exc,row.data);
     });
+    try{ localStorage.setItem('unpa-exceptions-v1',JSON.stringify(exc)); }catch(e){}
+    if(typeof window.renderExc==='function') window.renderExc();
     try{ localStorage.setItem('unpa-evidence-v1',JSON.stringify(ev)); localStorage.setItem('unpa-audit-v1',JSON.stringify(au)); if(pend) localStorage.setItem('unpa-pending-v1',JSON.stringify(pend)); }catch(e){}
     if(typeof window.refreshEvidence==='function') window.refreshEvidence(true);
   }catch(e){}
@@ -1397,7 +1420,9 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
       var v=b.dataset.v;
       document.getElementById('view-log').hidden   = v!=='log';
       document.getElementById('view-audit').hidden = v!=='audit';
+      document.getElementById('view-exc').hidden   = v!=='exc';
       if(v==='audit') aRenderAll();
+      if(v==='exc' && window.renderExc) window.renderExc();
     };
   });
 
@@ -1533,6 +1558,66 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
   document.querySelector('.vtab[data-v="audit"]').addEventListener('click', function(){ refreshEvidence(); });
   window.addEventListener('storage', function(e){ if(e.key===EVK||e.key===PK||e.key===null||(e.key&&e.key.indexOf('unpa-worklog-v')===0)) setTimeout(refreshEvidence,0); });
   refreshEvidence();
+
+  /* ═══ 검수 예외 ═══
+     규칙대로 처리하지 못했거나 따로 세어 둘 리뷰. 리뷰 작성일 기준으로 모으고, 서버 '~exc' 행으로 다른 기기와 나눈다.
+     항목: {id, d:작성일, kind, brand, product, reason, status, at}. 리뷰 콘솔·Claude 가 WorklogExc.add() 로 적는다. */
+  var XK='unpa-exceptions-v1';
+  var XKIND={ not_reviewable:'리뷰 대상 아님', no_price:'정보 확인 불가 · 보류', overseas:'해외직구 (일시 허용)', other:'기타' };
+  var XST={ listed:'리스트업', sent:'수정요청 보냄', done:'처리 완료', hold:'보류' };
+  function xLoad(){ var o=jget(XK); return (o&&o.items)?o:{v:1,items:{}}; }
+  function xSave(o){ try{ localStorage.setItem(XK, JSON.stringify(o)); return true; }catch(e){ return false; } }
+  function renderExc(){
+    var body=document.getElementById('excBody'), sum=document.getElementById('excSum'); if(!body) return;
+    var all=xLoad().items, items=Object.keys(all).map(function(k){ return all[k]; }).filter(Boolean);
+    if(!items.length){ sum.innerHTML=''; body.innerHTML='<div class="warn">아직 기록된 예외가 없습니다.</div>'; return; }
+    var byD={}; items.forEach(function(x){ var d=x.d||'날짜 없음'; (byD[d]||(byD[d]=[])).push(x); });
+    var tot={}; items.forEach(function(x){ tot[x.kind]=(tot[x.kind]||0)+1; });
+    sum.innerHTML='<div class="xday" style="margin-top:0">전체 '+items.length+'건 '
+      +Object.keys(XKIND).filter(function(k){ return tot[k]; }).map(function(k){ return '<span class="xk '+k+'">'+XKIND[k]+' '+tot[k]+'</span>'; }).join(' ')+'</div>';
+    body.innerHTML=Object.keys(byD).sort().reverse().map(function(d){
+      var list=byD[d], cnt={}; list.forEach(function(x){ cnt[x.kind]=(cnt[x.kind]||0)+1; });
+      return '<div class="xday">'+esc(/^\d{4}-\d{2}-\d{2}$/.test(d)?md(d)+' 작성':d)+' · '+list.length+'건 '
+        +Object.keys(XKIND).filter(function(k){ return cnt[k]; }).map(function(k){ return '<span class="xk '+k+'">'+XKIND[k]+' '+cnt[k]+'</span>'; }).join(' ')+'</div>'
+        +list.sort(function(a,b){ return String(a.id)<String(b.id)?-1:1; }).map(function(x){
+          return '<div class="xrow"><span class="xk '+esc(x.kind)+'">'+esc(XKIND[x.kind]||x.kind||'')+'</span>'
+            +'<a href="https://cms.unpa.me/review/detail/'+encodeURIComponent(x.id)+'" target="_blank" rel="noopener"><b>'+esc(x.brand||'')+'</b> / '+esc(x.product||'')+' <span style="color:var(--dim)">#'+esc(x.id)+' ↗</span></a>'
+            +'<span class="xk '+(x.status==='done'||x.status==='sent'?'done':'')+'">'+esc(XST[x.status]||x.status||'')+'</span>'
+            +(x.reason?'<span class="why">'+esc(x.reason)+'</span>':'')+'</div>';
+        }).join('');
+    }).join('');
+  }
+  window.renderExc=renderExc;
+  /* 서버 '~exc' 행과 합쳐 올린다 — 다른 기기가 먼저 올렸으면 받아 합친 뒤 한 번 더 */
+  async function pushExc(retried){
+    if(typeof SB==='undefined'||!SB||!SB_USER) return false;
+    var account=SB_USER.id;
+    var r=await SB.from('worklog_months').select('data,updated_at').eq('user_id',account).eq('month','~exc');
+    if(r.error) return false;
+    var row=r.data&&r.data[0];
+    var merged=WorklogCore.mergeExceptions(row&&row.data, xLoad()); xSave(merged);
+    var at=new Date().toISOString(), value={user_id:account,month:'~exc',data:merged,updated_at:at};
+    var q=row ? SB.from('worklog_months').update(value).eq('user_id',account).eq('month','~exc').eq('updated_at',row.updated_at)
+              : SB.from('worklog_months').insert(value);
+    var res=await q.select('month');
+    if(res.error||!res.data||res.data.length!==1){ return retried ? false : pushExc(true); }
+    renderExc(); return true;
+  }
+  window.WorklogExc={
+    kinds:XKIND, statuses:XST,
+    add:function(list){
+      var o=xLoad(), at=new Date().toISOString(), n=0;
+      [].concat(list).forEach(function(x){
+        if(!x||!x.id) return;
+        var id=String(x.id); o.items[id]=Object.assign({}, o.items[id]||{}, x, {id:id, at:at}); n++;
+      });
+      xSave(o); renderExc();
+      return pushExc().then(function(ok){ return {added:n, total:Object.keys(xLoad().items).length, pushed:ok}; });
+    },
+    list:function(){ return xLoad(); }
+  };
+  window.addEventListener('storage', function(e){ if(e.key===XK) renderExc(); });
+  renderExc();
 
   /* 검수 콘솔 → 동기화 창(sync.html)이 검수 기록을 바꾸면 다시 읽는다 */
   function aHint(){

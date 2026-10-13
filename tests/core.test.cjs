@@ -499,3 +499,16 @@ test('merging console experience keeps hide corrections from the other computer'
   const m=W.mergeConsole({hidefp:{'1':{k:'low',st:'suggested',at:'2026-10-01'}}},{hidefp:{'1':{k:'low',st:'override',at:'2026-10-02'},'2':{k:'photo-web',st:'override',at:'2026-10-02'}}});
   assert.equal(m.hidefp['1'].st,'override'); assert.ok(m.hidefp['2']);
 });
+
+test('review exceptions merge per review, the later edit wins, nothing is lost across devices',()=>{
+  const C=require('../worklog-core.js');
+  const work={v:1,items:{'478541':{id:'478541',kind:'not_reviewable',status:'listed',at:'2026-10-13T10:00:00Z'},
+                         '478414':{id:'478414',kind:'no_price',status:'hold',at:'2026-10-13T10:00:00Z'}}};
+  const home={v:1,items:{'478541':{id:'478541',kind:'not_reviewable',status:'sent',at:'2026-10-13T11:00:00Z'},
+                         '478416':{id:'478416',kind:'overseas',status:'done',at:'2026-10-13T09:00:00Z'}}};
+  const m=C.mergeExceptions(work,home);
+  assert.equal(Object.keys(m.items).length,3,'양쪽 항목이 모두 남는다');
+  assert.equal(m.items['478541'].status,'sent','나중에 고친 상태가 이긴다');
+  assert.deepEqual(C.mergeExceptions(null,home).items,home.items);
+  assert.deepEqual(C.mergeExceptions(work,undefined).items,work.items);
+});
