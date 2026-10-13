@@ -35,12 +35,24 @@
   if (location.hostname !== 'cms.unpa.me') { alert('cms.unpa.me 에서 실행해주세요.'); return; }
   /* 업무일지 [업데이트] 북마클릿으로 불렸으면 콘솔 화면 없이 업무일지 집계만 넘긴다.
      북마클릿이 클릭 순간 미리 열어 둔 동기화 창을 이어 쓴다 — 집계가 끝난 뒤 창을 열면 팝업 차단에 걸린다. */
-  var SYNC_ONLY = window.__UNPA_SYNC_ONLY === 1;
-  var PRE_WIN = SYNC_ONLY ? (window.__UNPA_SYNC_WIN || null) : null;
+  /* Tampermonkey 자동 동기화(unpa-autosync.user.js)가 불렀으면 html 속성에 일회용 번호를 남겨 둔다.
+     집계 결과는 팝업 없이 window.postMessage 로 그 스크립트에 넘기고, 업무일지 탭이 반영한 결과를 같은 길로 돌려받는다. */
+  var AUTO_NONCE = null;
+  try {
+    var autoAttr = document.documentElement.getAttribute('data-unpa-autosync-run');
+    if (autoAttr) { document.documentElement.removeAttribute('data-unpa-autosync-run'); if (/^[a-f0-9]{16,64}$/.test(autoAttr)) AUTO_NONCE = autoAttr; }
+  } catch (e) {}
+  var SYNC_AUTO = !!AUTO_NONCE;
+  function autoPost(type, extra){ if (SYNC_AUTO) try { window.postMessage(Object.assign({ type:type, nonce:AUTO_NONCE }, extra || {}), location.origin); } catch (e) {} }
+  var SYNC_ONLY = window.__UNPA_SYNC_ONLY === 1 || SYNC_AUTO;
+  var PRE_WIN = (SYNC_ONLY && !SYNC_AUTO) ? (window.__UNPA_SYNC_WIN || null) : null;
   window.__UNPA_SYNC_ONLY = 0; window.__UNPA_SYNC_WIN = null;
   /* 업데이트 카드는 열려 있는 콘솔을 닫지 않는다 */
   try { var old = document.getElementById(SYNC_ONLY ? 'unpaSyncBox' : 'cmsConsoleBox'); if (old) old.remove(); } catch (e) {}
-  if (window.__CONSOLE_RUNNING) { try { if (PRE_WIN) PRE_WIN.close(); } catch (e) {} alert('이미 실행 중입니다.'); return; }
+  if (window.__CONSOLE_RUNNING) {
+    if (SYNC_AUTO) { autoPost('unpa-auto-fail', { error:'검수 콘솔이 처리 중이라 이번에는 건너뜀' }); return; }
+    try { if (PRE_WIN) PRE_WIN.close(); } catch (e) {} alert('이미 실행 중입니다.'); return;
+  }
 
   var API = 'https://api-v2.unpa.me';
   var TPL_URL = 'https://moowillbedone.github.io/unpa-worklog/templates.json';
@@ -1433,6 +1445,8 @@
     +'border:1px solid #2fb87f;border-radius:14px;padding:15px 17px;'
     +'font:12.5px/1.55 -apple-system,BlinkMacSystemFont,sans-serif;'
     +'box-shadow:0 14px 48px rgba(0,0,0,.55);max-width:'+(SYNC_ONLY ? 340 : 420)+'px;max-height:90vh;overflow:auto';
+  /* 자동 동기화 카드는 CMS 화면을 가리지 않게 오른쪽 아래에 작게 띄우고, 끝나면 저절로 사라진다 */
+  if(SYNC_AUTO){ box.style.top='auto'; box.style.bottom='12px'; box.style.padding='10px 13px'; box.style.fontSize='11.5px'; box.style.opacity='.92'; }
   document.body.appendChild(box);
 
   var tplMap={}, results=[], logLines=[];
@@ -1568,7 +1582,7 @@
           res[i]={ date:dates[i], rows:todo, updated:todo.filter(function(x){ return x.status==='UPDATED'; }).length };
         }
         doneN++; paint();
-        await delay(40);
+        if(document.visibilityState!=='hidden') await delay(40);   /* 숨은 탭은 타이머가 1분씩 늘어진다 */
       }
     }
     await Promise.all([worker(), worker(), worker()]);
@@ -2366,6 +2380,7 @@
     });
   }
   function preProgress(text){
+    autoPost('unpa-auto-status', { text:text });
     if(!PRE || !PRE.ready || PRE.win.closed) return;
     try{ PRE.win.postMessage({ type:'unpa-sync-progress', nonce:PRE.nonce, text:text }, WL_ORIGIN); }catch(e){}
   }
@@ -2391,30 +2406,34 @@
       if(ev.data.type==='unpa-sync-ready'){ w.postMessage({ type:'unpa-sync-data', nonce:nonce, payload:payload }, WL_ORIGIN); return; }
       if(ev.data.type!=='unpa-sync-done') return;
       finish();
-      if(!ev.data.ok){ syncButton('<span style="color:#ff8f6b">⚠ 업무일지 반영 실패 — '+esc(String(ev.data.error||'').slice(0,80))+'</span>'); return; }
-      if(ev.data.console) applyConsoleState(ev.data.console);
-      if(ev.data.goal && ev.data.goal.target>0){ goalSave(Object.assign({ at:new Date().toISOString() }, ev.data.goal)); if(results.length) renderQueue(SCAN_DATE); }
-      if(ev.data.verdicts && seedFromVerdicts(ev.data.verdicts)) matchPending();   /* 예전 판정으로 채운 건도 바로 짝지어 본다 */
-      /* 보낸 뒤로 보관함에 새로 쌓인 게 없으면 비운다 (새로 쌓였으면 다음에 함께 다시 보낸다 — 합칠 때 중복은 걸러진다) */
-      if((outboxLoad().seq||0)===payload.seq){ try{ localStorage.removeItem(OUTBOX_KEY); }catch(e){} }
-      var t=ev.data.today||{}, hm=new Date().toTimeString().slice(0,5);
-      syncStatus('<span style="color:#3ddc97">📒 업무일지 반영 '+hm+'</span> · 오늘 리뷰 <b>'+(t.r||0)+'</b> · 제품 <b>'+(t.p||0)+'</b>'
-        +(ev.data.nChanges?' · 바뀐 날 '+ev.data.nChanges+'일':'')
-        +(ev.data.auditDays?' · 검수기록 '+ev.data.auditDays+'일':'')
-        +(ev.data.auditError?' <span style="color:#f5c451">(검수기록 저장 실패 — '+esc(String(ev.data.auditError).slice(0,60))+')</span>':'')
-        +(WORK && WORK.failed.length?' <span style="color:#f5c451">(일부 날짜 조회 실패 — 다음에 채움)</span>':'')
-        +(ev.data.cloud==='on' ? ' · <span style="color:#9fe3c4">☁ 다른 컴퓨터와 합침</span>'
-          : ev.data.cloud==='off' ? ' · <span style="color:#6b7f77">☁ 업무일지 로그인 전 — 이 컴퓨터에만</span>'
-          : ev.data.cloud ? ' · <span style="color:#f5c451">☁ 서버 합치기 실패 — 다음에 다시</span>' : '')
-        +(LEARN_NOTE?' · '+LEARN_NOTE:'')
-        +(function(){ var b=budget(); return b.known ? '<br><span style="color:#f5c451">'+esc(budgetLine(b))+'</span>' : ''; })());
-      if(SYNC_ONLY) syncOnlyDone();
+      syncDone(ev.data, payload);
     };
     window.addEventListener('message', onMsg);
     /* 미리 연 창이 이미 준비 신호를 보냈으면 기다리지 않고 바로 넘긴다 */
     if(pre && pre.ready) w.postMessage({ type:'unpa-sync-data', nonce:nonce, payload:payload }, WL_ORIGIN);
     timer=setTimeout(function(){ finish(); syncButton('<span style="color:#ff8f6b">⚠ 업무일지 창 응답 없음</span>'); }, 45000);
     return true;
+  }
+  /* 업무일지가 반영을 마친 결과 — 동기화 창(sync.html)에서 오든 자동 동기화로 오든 같게 처리한다 */
+  function syncDone(d, payload){
+    if(!d.ok){ autoHide(10000); syncButton('<span style="color:#ff8f6b">⚠ 업무일지 반영 실패 — '+esc(String(d.error||'').slice(0,80))+'</span>'); return; }
+    if(d.console) applyConsoleState(d.console);
+    if(d.goal && d.goal.target>0){ goalSave(Object.assign({ at:new Date().toISOString() }, d.goal)); if(results.length) renderQueue(SCAN_DATE); }
+    if(d.verdicts && seedFromVerdicts(d.verdicts)) matchPending();   /* 예전 판정으로 채운 건도 바로 짝지어 본다 */
+    /* 보낸 뒤로 보관함에 새로 쌓인 게 없으면 비운다 (새로 쌓였으면 다음에 함께 다시 보낸다 — 합칠 때 중복은 걸러진다) */
+    if((outboxLoad().seq||0)===payload.seq){ try{ localStorage.removeItem(OUTBOX_KEY); }catch(e){} }
+    var t=d.today||{}, hm=new Date().toTimeString().slice(0,5);
+    syncStatus('<span style="color:#3ddc97">📒 업무일지 반영 '+hm+'</span> · 오늘 리뷰 <b>'+(t.r||0)+'</b> · 제품 <b>'+(t.p||0)+'</b>'
+      +(d.nChanges?' · 바뀐 날 '+d.nChanges+'일':'')
+      +(d.auditDays?' · 검수기록 '+d.auditDays+'일':'')
+      +(d.auditError?' <span style="color:#f5c451">(검수기록 저장 실패 — '+esc(String(d.auditError).slice(0,60))+')</span>':'')
+      +(WORK && WORK.failed.length?' <span style="color:#f5c451">(일부 날짜 조회 실패 — 다음에 채움)</span>':'')
+      +(d.cloud==='on' ? ' · <span style="color:#9fe3c4">☁ 다른 컴퓨터와 합침</span>'
+        : d.cloud==='off' ? ' · <span style="color:#6b7f77">☁ 업무일지 로그인 전 — 이 컴퓨터에만</span>'
+        : d.cloud ? ' · <span style="color:#f5c451">☁ 서버 합치기 실패 — 다음에 다시</span>' : '')
+      +(LEARN_NOTE?' · '+LEARN_NOTE:'')
+      +(function(){ var b=budget(); return b.known ? '<br><span style="color:#f5c451">'+esc(budgetLine(b))+'</span>' : ''; })());
+    if(SYNC_ONLY) syncOnlyDone();
   }
   /* 업무일지 [업데이트] 버튼이 연 CMS 탭이면 반영 뒤 저절로 닫는다 (업무일지 화면은 스스로 다시 그려진다) */
   var CLOSE_TIMER=null;
@@ -2429,7 +2448,7 @@
         +(BACKLOG && BACKLOG.failed && BACKLOG.failed.length?' <span style="color:#f5c451">(조회 실패 '+BACKLOG.failed.length+'일은 그대로 둠)</span>':'');
       box.appendChild(note);
     }
-    if(!/unpa-wl-update/.test(location.hash||'')) return;
+    if(!/unpa-wl-update/.test(location.hash||'')){ autoHide(12000); return; }
     var el=document.createElement('div'); el.style.cssText='margin-top:8px;font-size:11.5px;color:#9fb4ab';
     el.innerHTML='업무일지 화면에 반영됐습니다. 이 탭은 5초 뒤 닫힙니다 '
       +'<button id="csKeepTab" style="margin-left:4px;background:#132019;color:#9fb4ab;border:1px solid #2c4a3c;border-radius:6px;padding:2px 8px;font:inherit;font-size:11px;cursor:pointer">그대로 두기</button>';
@@ -2438,11 +2457,28 @@
   }
   async function startWorkSync(){
     if(!ME) ME=await whoAmI();
-    if(!ME){ preClose(); syncStatus('<span style="color:#ff8f6b">⚠ CMS 계정을 확인하지 못해 업무일지 동기화를 건너뜀</span>'); return; }
+    if(!ME){ preClose(); autoPost('unpa-auto-fail', { error:'CMS 계정을 확인하지 못함(로그인 필요)' }); autoHide(6000);
+             syncStatus('<span style="color:#ff8f6b">⚠ CMS 계정을 확인하지 못해 업무일지 동기화를 건너뜀</span>'); return; }
     syncStatus('📒 업무일지 집계 중… (CMS 최근 '+WORK_DAYS+'일, 조회만)');
     WORK=await collectWork(ME, function(d,n){ if(!SYNCING) syncStatus('📒 업무일지 집계 중… '+d+' / '+n+'일'); preProgress('CMS 집계 중… '+d+' / '+n+'일'); });
     try{ await learnAndMatch(); }catch(e){}
+    if(SYNC_AUTO){ deliverAuto(); return; }
     syncNow();
+  }
+  /* 자동 동기화 — 집계를 Tampermonkey 스크립트에 넘기고(그 스크립트가 업무일지 탭에 전달), 반영 결과를 돌려받는다 */
+  var AUTO_PAYLOAD=null, AUTO_TIMER=null;
+  function autoHide(ms){ if(SYNC_AUTO) setTimeout(function(){ try{ box.remove(); }catch(e){} }, ms); }
+  function deliverAuto(){
+    AUTO_PAYLOAD=workPayload();
+    syncStatus('📒 업무일지로 넘겼습니다 — 업무일지 화면이 열려 있으면 바로 반영됩니다');
+    window.addEventListener('message', function(ev){
+      if(ev.origin!==location.origin || !ev.data || ev.data.nonce!==AUTO_NONCE || ev.data.type!=='unpa-auto-result') return;
+      clearTimeout(AUTO_TIMER); AUTO_TIMER=null;
+      syncDone(ev.data.res || { ok:false, error:'결과 없음' }, AUTO_PAYLOAD);
+    });
+    autoPost('unpa-auto-payload', { payload:AUTO_PAYLOAD });
+    /* 업무일지 탭이 닫혀 있으면 결과가 오지 않는다 — 다음에 업무일지를 열 때 반영된다 */
+    AUTO_TIMER=setTimeout(function(){ syncStatus('📒 업무일지로 넘겼습니다 — 업무일지를 열면 반영됩니다'); autoHide(8000); }, 20000);
   }
   /* 대기 리뷰의 그 뒤 상태에서 배우고, 내가 새로 등록한 제품과 짝짓는다 */
   var ASSOC=[], LEARN_NOTE='';
@@ -2729,7 +2765,7 @@
   if(SYNC_ONLY){
     /* 업무일지 [업데이트] — 판정·처리 없이 조회만 한다.
        ① 짝수일 최근 60일 남은 검수(미등록 제품수 칸) ② 최근 60일 내 승인·등록(리뷰·제품 수, 금액)을 모아 업무일지에 넘긴다 */
-    box.innerHTML='<b style="color:#3ddc97">📒 업무일지 업데이트</b>'
+    box.innerHTML='<b style="color:#3ddc97">📒 업무일지 '+(SYNC_AUTO?'자동 동기화':'업데이트')+'</b>'
       +'<button id="csSyncX" title="닫기" style="float:right;background:none;border:0;color:#6b7f77;font-size:15px;cursor:pointer;line-height:1">✕</button>'
       +'<div id="csSync" style="margin-top:4px;font-size:11.5px;color:#9fb4ab">CMS 계정 확인 중…</div>';
     preOpen();
