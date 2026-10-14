@@ -145,7 +145,7 @@ td input.memo.auto{box-shadow:inset 3px 0 0 var(--mint,#3ddc97);font-weight:700}
 .xtab .n{margin-left:5px;font-weight:600;opacity:.85}
 .xk{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:9px;white-space:nowrap;background:var(--sunk);color:var(--mid)}
 .xk.not_reviewable{background:#fde8e6;color:#b23b30}.xk.no_price{background:var(--amber-lt);color:#7c5408}
-.xk.overseas{background:#e6f0fd;color:#2c5ea8}.xk.done{background:#e3f4ec;color:#1f7a52}
+.xk.overseas{background:#e6f0fd;color:#2c5ea8}.xk.prelaunch{background:#f1e9fb;color:#6b3fa0}.xk.medicine{background:#fdeee2;color:#a3521b}.xk.done{background:#e3f4ec;color:#1f7a52}
 .xday{margin-top:14px;font-weight:800;font-size:13px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .xrow{display:grid;grid-template-columns:auto 1fr auto;gap:4px 10px;padding:6px 0;border-bottom:1px dashed var(--line);font-size:13px;align-items:baseline}
 .xrow .why{grid-column:2/4;color:var(--mid);font-size:12.3px;line-height:1.5}
@@ -1745,7 +1745,7 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
      규칙대로 처리하지 못했거나 따로 세어 둘 리뷰. 리뷰 작성일 기준으로 모으고, 서버 '~exc' 행으로 다른 기기와 나눈다.
      항목: {id, d:작성일, kind, brand, product, reason, status, at}. 리뷰 콘솔·Claude 가 WorklogExc.add() 로 적는다. */
   var XK='unpa-exceptions-v1';
-  var XKIND={ not_reviewable:'리뷰 대상 아님', no_price:'정보 확인 불가 · 보류', overseas:'해외직구 (일시 허용)', other:'기타' };
+  var XKIND={ not_reviewable:'리뷰 대상 아님', no_price:'정보 확인 불가 · 보류', overseas:'해외직구 (일시 허용)', prelaunch:'출시 전 체험단 (현재 승인)', medicine:'의약품 · 약국 전용', other:'기타' };
   var XST={ listed:'리스트업', sent:'수정요청 보냄', done:'처리 완료', hold:'보류' };
   function xLoad(){ var o=jget(XK); return (o&&o.items)?o:{v:1,items:{}}; }
   function xSave(o){ try{ localStorage.setItem(XK, JSON.stringify(o)); return true; }catch(e){ return false; } }
