@@ -33,26 +33,25 @@
 (function () {
   'use strict';
   if (location.hostname !== 'cms.unpa.me') { alert('cms.unpa.me 에서 실행해주세요.'); return; }
+  /* 예전 Tampermonkey 자동 동기화(10/14 하루 쓰고 걷어냄)가 아직 깔려 있으면 html 에 실행 표시를 남기고 이 스크립트를 부른다.
+     사람이 누른 게 아니므로 아무것도 띄우지 않고 끝낸다 — 30분마다 콘솔이 저절로 뜨는 일이 없게.
+     옛 스크립트는 '끝났다'는 신호를 받아야 다음 실행을 30분 뒤로 미룬다 — 빈 결과로 끝을 알린다(업무일지 쪽은 빈 결과를 무시). */
+  try {
+    if (document.documentElement.hasAttribute('data-unpa-autosync-run')) {
+      var n0 = document.documentElement.getAttribute('data-unpa-autosync-run');
+      document.documentElement.removeAttribute('data-unpa-autosync-run');
+      try { window.postMessage({ type: 'unpa-auto-payload', nonce: n0, payload: null }, location.origin); } catch (e) {}
+      return;
+    }
+  } catch (e) {}
   /* 업무일지 [업데이트] 북마클릿으로 불렸으면 콘솔 화면 없이 업무일지 집계만 넘긴다.
      북마클릿이 클릭 순간 미리 열어 둔 동기화 창을 이어 쓴다 — 집계가 끝난 뒤 창을 열면 팝업 차단에 걸린다. */
-  /* Tampermonkey 자동 동기화(unpa-autosync.user.js)가 불렀으면 html 속성에 일회용 번호를 남겨 둔다.
-     집계 결과는 팝업 없이 window.postMessage 로 그 스크립트에 넘기고, 업무일지 탭이 반영한 결과를 같은 길로 돌려받는다. */
-  var AUTO_NONCE = null;
-  try {
-    var autoAttr = document.documentElement.getAttribute('data-unpa-autosync-run');
-    if (autoAttr) { document.documentElement.removeAttribute('data-unpa-autosync-run'); if (/^[a-f0-9]{16,64}$/.test(autoAttr)) AUTO_NONCE = autoAttr; }
-  } catch (e) {}
-  var SYNC_AUTO = !!AUTO_NONCE;
-  function autoPost(type, extra){ if (SYNC_AUTO) try { window.postMessage(Object.assign({ type:type, nonce:AUTO_NONCE }, extra || {}), location.origin); } catch (e) {} }
-  var SYNC_ONLY = window.__UNPA_SYNC_ONLY === 1 || SYNC_AUTO;
-  var PRE_WIN = (SYNC_ONLY && !SYNC_AUTO) ? (window.__UNPA_SYNC_WIN || null) : null;
+  var SYNC_ONLY = window.__UNPA_SYNC_ONLY === 1;
+  var PRE_WIN = SYNC_ONLY ? (window.__UNPA_SYNC_WIN || null) : null;
   window.__UNPA_SYNC_ONLY = 0; window.__UNPA_SYNC_WIN = null;
   /* 업데이트 카드는 열려 있는 콘솔을 닫지 않는다 */
   try { var old = document.getElementById(SYNC_ONLY ? 'unpaSyncBox' : 'cmsConsoleBox'); if (old) old.remove(); } catch (e) {}
-  if (window.__CONSOLE_RUNNING) {
-    if (SYNC_AUTO) { autoPost('unpa-auto-fail', { error:'검수 콘솔이 처리 중이라 이번에는 건너뜀' }); return; }
-    try { if (PRE_WIN) PRE_WIN.close(); } catch (e) {} alert('이미 실행 중입니다.'); return;
-  }
+  if (window.__CONSOLE_RUNNING) { try { if (PRE_WIN) PRE_WIN.close(); } catch (e) {} alert('이미 실행 중입니다.'); return; }
 
   var API = 'https://api-v2.unpa.me';
   var TPL_URL = 'https://moowillbedone.github.io/unpa-worklog/templates.json';
@@ -1445,8 +1444,6 @@
     +'border:1px solid #2fb87f;border-radius:14px;padding:15px 17px;'
     +'font:12.5px/1.55 -apple-system,BlinkMacSystemFont,sans-serif;'
     +'box-shadow:0 14px 48px rgba(0,0,0,.55);max-width:'+(SYNC_ONLY ? 340 : 420)+'px;max-height:90vh;overflow:auto';
-  /* 자동 동기화 카드는 CMS 화면을 가리지 않게 오른쪽 아래에 작게 띄우고, 끝나면 저절로 사라진다 */
-  if(SYNC_AUTO){ box.style.top='auto'; box.style.bottom='12px'; box.style.padding='10px 13px'; box.style.fontSize='11.5px'; box.style.opacity='.92'; }
   document.body.appendChild(box);
 
   var tplMap={}, results=[], logLines=[];
@@ -1511,11 +1508,14 @@
     box.innerHTML=head(
       '<div style="margin-top:9px;color:#9fb4ab">📋 남은 일 · 짝수일 최근 '+BACKLOG_DAYS+'일</div>'
       +'<div style="margin-top:6px;font-size:12px;color:#9fb4ab">'+list+'</div>'+warns+'<div id="csAssoc"></div>'
+      +(upd?'<button id="csScanUpd" style="margin-top:11px;width:100%;background:#2c2410;color:#f5c451;border:1px solid #f5c451;border-radius:9px;padding:10px;font-weight:800;cursor:pointer">'
+        +'✏️ 수정완료만 검토 ('+upd+'건) — 남은 것 전부를 스캔하지 않고 바로</button>':'')
       +(backlog.length?'<button id="csScanAll" style="margin-top:11px;width:100%;background:#3ddc97;color:#04130c;border:0;border-radius:9px;padding:10px;font-weight:800;cursor:pointer">'
         +'▶ 남은 것 전부 스캔 ('+backlog.length+'일 · '+total+'건'+(upd?' · 수정완료 '+upd:'')+')</button>':'')
       +manual);
     bindManual();
     if(backlog.length) document.getElementById('csScanAll').onclick=function(){ scanAll(backlog); };
+    if(upd) document.getElementById('csScanUpd').onclick=function(){ scanUpdated(backlog); };
     renderAssoc();
   }
 
@@ -1552,16 +1552,19 @@
 
   /* 짝수일마다 아직 할 일이 남은 리뷰를 모은다.
      이미 콘솔로 처리한 건(전송 이력)과 이미 미노출된 건은 빼되,
-     예전에 제품 재선택 요청을 보냈는데 유저가 수정완료한 건은 다시 넣는다. */
-  function backlogTodo(rows, sent){
+     예전에 제품 재선택 요청을 보냈는데 유저가 수정완료한 건은 다시 넣는다.
+     listAt: 목록을 받아온 시각 — 그 뒤에 이 콘솔에서 보낸 요청이면 목록의 '수정완료'는 이미 지난 상태라 뺀다. */
+  function backlogTodo(rows, sent, listAt){
     return rows.filter(function(x){
       if(x.visible===false) return false;
       var e=sent[String(x.id)];
       if(!e) return true;
+      if(listAt && String(e.at||'')>=listAt) return false;
       return x.status==='UPDATED' && (e.action==='revise_product' || e.action==='revise_swatch');
     });
   }
   async function loadBacklog(){
+    var listAt=new Date().toISOString();
     var dates=evenDates(BACKLOG_DAYS), sent=sentLoad(), res=new Array(dates.length), next=0, doneN=0;
     var paint=function(){
       if(SYNC_ONLY){
@@ -1582,7 +1585,7 @@
           res[i]={ date:dates[i], rows:todo, updated:todo.filter(function(x){ return x.status==='UPDATED'; }).length };
         }
         doneN++; paint();
-        if(document.visibilityState!=='hidden') await delay(40);   /* 숨은 탭은 타이머가 1분씩 늘어진다 */
+        await delay(40);
       }
     }
     await Promise.all([worker(), worker(), worker()]);
@@ -1592,6 +1595,7 @@
     out.failed=failed;                                     /* 일부만 실패한 날짜는 따로 알린다 */
     out.all=res.filter(function(x){ return !x.failed; });  /* 0건인 날도 — 업무일지 "미등록 제품수"를 비우려면 필요 */
     out.at=new Date().toISOString();
+    out.listAt=listAt;
     return out;
   }
 
@@ -1611,6 +1615,22 @@
     SCAN_LABEL = dates.length===1 ? dates[0] : dates[0].slice(5)+' ~ '+dates[dates.length-1].slice(5)+' ('+dates.length+'일)';
     var rows=[];
     backlog.forEach(function(b){ b.rows.forEach(function(x){ x._date=b.date; rows.push(x); }); });
+    await scanRows(rows);
+  }
+
+  /* 유저가 수정완료(UPDATED)한 건만 — 남은 것 전부를 스캔하지 않고 바로 다시 판정한다.
+     판정 규칙은 전체 스캔과 같다: 제품이 연결됐으면 승인 후보(그리드), 아직 엑박이면 재선택 요청(같은 요청 2번째부터는 확인으로). */
+  function updatedRows(backlog){
+    var rows=[];
+    backlog.forEach(function(b){ b.rows.forEach(function(x){ if(x.status==='UPDATED'){ x._date=b.date; rows.push(x); } }); });
+    return rows;
+  }
+  async function scanUpdated(backlog){
+    var rows=updatedRows(backlog);
+    if(!rows.length){ alert('수정완료된 리뷰가 없습니다.'); return; }
+    var ds=rows.map(function(x){ return x._date; }).filter(function(d,i,a){ return a.indexOf(d)===i; }).sort();
+    SCAN_DATE = ds.length===1 ? ds[0] : ds[0]+'_'+ds[ds.length-1];
+    SCAN_LABEL = '✏️ 수정완료 '+rows.length+'건 · '+(ds.length===1 ? ds[0].slice(5) : ds[0].slice(5)+' ~ '+ds[ds.length-1].slice(5)+' ('+ds.length+'일)');
     await scanRows(rows);
   }
 
@@ -2380,7 +2400,6 @@
     });
   }
   function preProgress(text){
-    autoPost('unpa-auto-status', { text:text });
     if(!PRE || !PRE.ready || PRE.win.closed) return;
     try{ PRE.win.postMessage({ type:'unpa-sync-progress', nonce:PRE.nonce, text:text }, WL_ORIGIN); }catch(e){}
   }
@@ -2406,34 +2425,30 @@
       if(ev.data.type==='unpa-sync-ready'){ w.postMessage({ type:'unpa-sync-data', nonce:nonce, payload:payload }, WL_ORIGIN); return; }
       if(ev.data.type!=='unpa-sync-done') return;
       finish();
-      syncDone(ev.data, payload);
+      if(!ev.data.ok){ syncButton('<span style="color:#ff8f6b">⚠ 업무일지 반영 실패 — '+esc(String(ev.data.error||'').slice(0,80))+'</span>'); return; }
+      if(ev.data.console) applyConsoleState(ev.data.console);
+      if(ev.data.goal && ev.data.goal.target>0){ goalSave(Object.assign({ at:new Date().toISOString() }, ev.data.goal)); if(results.length) renderQueue(SCAN_DATE); }
+      if(ev.data.verdicts && seedFromVerdicts(ev.data.verdicts)) matchPending();   /* 예전 판정으로 채운 건도 바로 짝지어 본다 */
+      /* 보낸 뒤로 보관함에 새로 쌓인 게 없으면 비운다 (새로 쌓였으면 다음에 함께 다시 보낸다 — 합칠 때 중복은 걸러진다) */
+      if((outboxLoad().seq||0)===payload.seq){ try{ localStorage.removeItem(OUTBOX_KEY); }catch(e){} }
+      var t=ev.data.today||{}, hm=new Date().toTimeString().slice(0,5);
+      syncStatus('<span style="color:#3ddc97">📒 업무일지 반영 '+hm+'</span> · 오늘 리뷰 <b>'+(t.r||0)+'</b> · 제품 <b>'+(t.p||0)+'</b>'
+        +(ev.data.nChanges?' · 바뀐 날 '+ev.data.nChanges+'일':'')
+        +(ev.data.auditDays?' · 검수기록 '+ev.data.auditDays+'일':'')
+        +(ev.data.auditError?' <span style="color:#f5c451">(검수기록 저장 실패 — '+esc(String(ev.data.auditError).slice(0,60))+')</span>':'')
+        +(WORK && WORK.failed.length?' <span style="color:#f5c451">(일부 날짜 조회 실패 — 다음에 채움)</span>':'')
+        +(ev.data.cloud==='on' ? ' · <span style="color:#9fe3c4">☁ 다른 컴퓨터와 합침</span>'
+          : ev.data.cloud==='off' ? ' · <span style="color:#6b7f77">☁ 업무일지 로그인 전 — 이 컴퓨터에만</span>'
+          : ev.data.cloud ? ' · <span style="color:#f5c451">☁ 서버 합치기 실패 — 다음에 다시</span>' : '')
+        +(LEARN_NOTE?' · '+LEARN_NOTE:'')
+        +(function(){ var b=budget(); return b.known ? '<br><span style="color:#f5c451">'+esc(budgetLine(b))+'</span>' : ''; })());
+      if(SYNC_ONLY) syncOnlyDone();
     };
     window.addEventListener('message', onMsg);
     /* 미리 연 창이 이미 준비 신호를 보냈으면 기다리지 않고 바로 넘긴다 */
     if(pre && pre.ready) w.postMessage({ type:'unpa-sync-data', nonce:nonce, payload:payload }, WL_ORIGIN);
     timer=setTimeout(function(){ finish(); syncButton('<span style="color:#ff8f6b">⚠ 업무일지 창 응답 없음</span>'); }, 45000);
     return true;
-  }
-  /* 업무일지가 반영을 마친 결과 — 동기화 창(sync.html)에서 오든 자동 동기화로 오든 같게 처리한다 */
-  function syncDone(d, payload){
-    if(!d.ok){ autoHide(10000); syncButton('<span style="color:#ff8f6b">⚠ 업무일지 반영 실패 — '+esc(String(d.error||'').slice(0,80))+'</span>'); return; }
-    if(d.console) applyConsoleState(d.console);
-    if(d.goal && d.goal.target>0){ goalSave(Object.assign({ at:new Date().toISOString() }, d.goal)); if(results.length) renderQueue(SCAN_DATE); }
-    if(d.verdicts && seedFromVerdicts(d.verdicts)) matchPending();   /* 예전 판정으로 채운 건도 바로 짝지어 본다 */
-    /* 보낸 뒤로 보관함에 새로 쌓인 게 없으면 비운다 (새로 쌓였으면 다음에 함께 다시 보낸다 — 합칠 때 중복은 걸러진다) */
-    if((outboxLoad().seq||0)===payload.seq){ try{ localStorage.removeItem(OUTBOX_KEY); }catch(e){} }
-    var t=d.today||{}, hm=new Date().toTimeString().slice(0,5);
-    syncStatus('<span style="color:#3ddc97">📒 업무일지 반영 '+hm+'</span> · 오늘 리뷰 <b>'+(t.r||0)+'</b> · 제품 <b>'+(t.p||0)+'</b>'
-      +(d.nChanges?' · 바뀐 날 '+d.nChanges+'일':'')
-      +(d.auditDays?' · 검수기록 '+d.auditDays+'일':'')
-      +(d.auditError?' <span style="color:#f5c451">(검수기록 저장 실패 — '+esc(String(d.auditError).slice(0,60))+')</span>':'')
-      +(WORK && WORK.failed.length?' <span style="color:#f5c451">(일부 날짜 조회 실패 — 다음에 채움)</span>':'')
-      +(d.cloud==='on' ? ' · <span style="color:#9fe3c4">☁ 다른 컴퓨터와 합침</span>'
-        : d.cloud==='off' ? ' · <span style="color:#6b7f77">☁ 업무일지 로그인 전 — 이 컴퓨터에만</span>'
-        : d.cloud ? ' · <span style="color:#f5c451">☁ 서버 합치기 실패 — 다음에 다시</span>' : '')
-      +(LEARN_NOTE?' · '+LEARN_NOTE:'')
-      +(function(){ var b=budget(); return b.known ? '<br><span style="color:#f5c451">'+esc(budgetLine(b))+'</span>' : ''; })());
-    if(SYNC_ONLY) syncOnlyDone();
   }
   /* 업무일지 [업데이트] 버튼이 연 CMS 탭이면 반영 뒤 저절로 닫는다 (업무일지 화면은 스스로 다시 그려진다) */
   var CLOSE_TIMER=null;
@@ -2448,7 +2463,7 @@
         +(BACKLOG && BACKLOG.failed && BACKLOG.failed.length?' <span style="color:#f5c451">(조회 실패 '+BACKLOG.failed.length+'일은 그대로 둠)</span>':'');
       box.appendChild(note);
     }
-    if(!/unpa-wl-update/.test(location.hash||'')){ autoHide(12000); return; }
+    if(!/unpa-wl-update/.test(location.hash||'')) return;
     var el=document.createElement('div'); el.style.cssText='margin-top:8px;font-size:11.5px;color:#9fb4ab';
     el.innerHTML='업무일지 화면에 반영됐습니다. 이 탭은 5초 뒤 닫힙니다 '
       +'<button id="csKeepTab" style="margin-left:4px;background:#132019;color:#9fb4ab;border:1px solid #2c4a3c;border-radius:6px;padding:2px 8px;font:inherit;font-size:11px;cursor:pointer">그대로 두기</button>';
@@ -2457,28 +2472,11 @@
   }
   async function startWorkSync(){
     if(!ME) ME=await whoAmI();
-    if(!ME){ preClose(); autoPost('unpa-auto-fail', { error:'CMS 계정을 확인하지 못함(로그인 필요)' }); autoHide(6000);
-             syncStatus('<span style="color:#ff8f6b">⚠ CMS 계정을 확인하지 못해 업무일지 동기화를 건너뜀</span>'); return; }
+    if(!ME){ preClose(); syncStatus('<span style="color:#ff8f6b">⚠ CMS 계정을 확인하지 못해 업무일지 동기화를 건너뜀</span>'); return; }
     syncStatus('📒 업무일지 집계 중… (CMS 최근 '+WORK_DAYS+'일, 조회만)');
     WORK=await collectWork(ME, function(d,n){ if(!SYNCING) syncStatus('📒 업무일지 집계 중… '+d+' / '+n+'일'); preProgress('CMS 집계 중… '+d+' / '+n+'일'); });
     try{ await learnAndMatch(); }catch(e){}
-    if(SYNC_AUTO){ deliverAuto(); return; }
     syncNow();
-  }
-  /* 자동 동기화 — 집계를 Tampermonkey 스크립트에 넘기고(그 스크립트가 업무일지 탭에 전달), 반영 결과를 돌려받는다 */
-  var AUTO_PAYLOAD=null, AUTO_TIMER=null;
-  function autoHide(ms){ if(SYNC_AUTO) setTimeout(function(){ try{ box.remove(); }catch(e){} }, ms); }
-  function deliverAuto(){
-    AUTO_PAYLOAD=workPayload();
-    syncStatus('📒 업무일지로 넘겼습니다 — 업무일지 화면이 열려 있으면 바로 반영됩니다');
-    window.addEventListener('message', function(ev){
-      if(ev.origin!==location.origin || !ev.data || ev.data.nonce!==AUTO_NONCE || ev.data.type!=='unpa-auto-result') return;
-      clearTimeout(AUTO_TIMER); AUTO_TIMER=null;
-      syncDone(ev.data.res || { ok:false, error:'결과 없음' }, AUTO_PAYLOAD);
-    });
-    autoPost('unpa-auto-payload', { payload:AUTO_PAYLOAD });
-    /* 업무일지 탭이 닫혀 있으면 결과가 오지 않는다 — 다음에 업무일지를 열 때 반영된다 */
-    AUTO_TIMER=setTimeout(function(){ syncStatus('📒 업무일지로 넘겼습니다 — 업무일지를 열면 반영됩니다'); autoHide(8000); }, 20000);
   }
   /* 대기 리뷰의 그 뒤 상태에서 배우고, 내가 새로 등록한 제품과 짝짓는다 */
   var ASSOC=[], LEARN_NOTE='';
@@ -2515,7 +2513,7 @@
   function backlogList(){
     if(!BACKLOG) return null;
     var sent=sentLoad(), out=[];
-    BACKLOG.forEach(function(b){ backlogTodo(b.rows, sent).forEach(function(x){
+    BACKLOG.forEach(function(b){ backlogTodo(b.rows, sent, BACKLOG.listAt).forEach(function(x){
       out.push({ id:String(x.id), d:b.date, brand:x.brandName||'', product:x.productName||'', status:x.status||'', blocked:x.userBlocked===true });
     }); });
     return out;
@@ -2527,7 +2525,7 @@
     if(!BACKLOG || !BACKLOG.all) return null;
     var sent=sentLoad(), pend=pendingLoad(), days={};
     BACKLOG.all.forEach(function(b){
-      var rows=backlogTodo(b.rows, sent);
+      var rows=backlogTodo(b.rows, sent, BACKLOG.listAt);
       var live=rows.filter(function(x){ return x.userBlocked!==true; });
       days[b.date]={ n:live.length,
         reg:rows.filter(function(x){ var e=pend[String(x.id)]; return e && (e.a==='register_product' || e.a==='register_brand') && e.st!=='resolved' && e.st!=='learned'; }).length,
@@ -2570,13 +2568,15 @@
   }
   function renderAssoc(){
     if(!ASSOC.length) return;
-    if(results.length){
-      /* 스캔한 뒤라면 해당 카드를 수정요청으로 바꿔 대기열에 올린다 */
+    var el=document.getElementById('csAssoc');
+    if(!el){
+      /* 시작 화면이 아니면(스캔한 뒤) 해당 카드를 수정요청으로 바꿔 대기열에 올린다.
+         시작 화면이면 스캔 결과가 남아 있어도 카드를 그린다 — '수정완료만 검토'처럼 일부만 스캔한 뒤 [다시] 와도 보이게. */
+      if(!results.length) return;
       var hit=0; ASSOC.forEach(function(x){ if(results.some(function(y){ return String(y.id)===String(x.e.id) && !y.applied; })){ assocJob(x); hit++; } });
       if(hit) renderQueue(SCAN_DATE);
       return;
     }
-    var el=document.getElementById('csAssoc'); if(!el) return;
     el.innerHTML='<div style="margin-top:10px;background:#132019;border:1px solid #3ddc97;border-radius:9px;padding:9px 11px">'
       +'<div style="font-weight:800;color:#9fe3c4">🆕 방금 등록한 제품과 이어진 리뷰 '+ASSOC.length+'건</div>'
       +ASSOC.slice(0,6).map(function(x){ return '<div style="font-size:11.5px;color:#9fb4ab;margin-top:3px">#'+esc(x.e.id)+' «'+esc(x.e.p)+'» → <span style="color:#3ddc97">「'+esc(x.p.name)+'」</span></div>'; }).join('')
@@ -2765,7 +2765,7 @@
   if(SYNC_ONLY){
     /* 업무일지 [업데이트] — 판정·처리 없이 조회만 한다.
        ① 짝수일 최근 60일 남은 검수(미등록 제품수 칸) ② 최근 60일 내 승인·등록(리뷰·제품 수, 금액)을 모아 업무일지에 넘긴다 */
-    box.innerHTML='<b style="color:#3ddc97">📒 업무일지 '+(SYNC_AUTO?'자동 동기화':'업데이트')+'</b>'
+    box.innerHTML='<b style="color:#3ddc97">📒 업무일지 업데이트</b>'
       +'<button id="csSyncX" title="닫기" style="float:right;background:none;border:0;color:#6b7f77;font-size:15px;cursor:pointer;line-height:1">✕</button>'
       +'<div id="csSync" style="margin-top:4px;font-size:11.5px;color:#9fb4ab">CMS 계정 확인 중…</div>';
     preOpen();
