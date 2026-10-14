@@ -149,7 +149,14 @@ td input.memo.auto{box-shadow:inset 3px 0 0 var(--mint,#3ddc97);font-weight:700}
 .xday{margin-top:14px;font-weight:800;font-size:13px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .xrow{display:grid;grid-template-columns:auto 1fr auto;gap:4px 10px;padding:6px 0;border-bottom:1px dashed var(--line);font-size:13px;align-items:baseline}
 .xrow .why{grid-column:2/4;color:var(--mid);font-size:12.3px;line-height:1.5}
-@media (max-width:560px){.xrow{grid-template-columns:1fr auto}.xrow .why{grid-column:1/3}}
+.xrow .xact{display:inline-flex;gap:6px;align-items:center;justify-self:end}
+.xk.ign{background:var(--line);color:var(--dim)}
+.xrow.ign a{color:var(--dim)}
+.xbtn{background:var(--surface);border:1px solid var(--line2);color:var(--mid);border-radius:7px;padding:2px 9px;font:inherit;font-size:11.5px;font-weight:700;cursor:pointer;white-space:nowrap}
+.xbtn:hover{color:var(--tx);border-color:var(--line3)}
+.xbtn.back{border-color:var(--mint);color:var(--mint-dk)}
+.xrow>.xk{justify-self:start}
+@media (max-width:560px){.xrow{grid-template-columns:auto 1fr}.xrow .xact{grid-column:1/3;justify-self:start}.xrow .why{grid-column:1/3}}
 details.old>summary{cursor:pointer;font-weight:800;color:var(--mid);padding:6px 2px;margin-bottom:10px}
 td input.memo{color:var(--mid);font-size:12.3px;font-weight:400}
 td input::placeholder{color:#b9c4c0}
@@ -468,7 +475,8 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
       <div class="chd"><h2>🚩 검수 예외</h2><span class="hint" id="excHint">리뷰 작성일 기준 · 제품명을 누르면 CMS 리뷰로 이동</span></div>
       <div class="xtabs" id="excTabs" role="tablist" aria-label="예외 분류"></div>
       <div class="excnote">일반 규칙대로 처리하지 못했거나 따로 세어 둘 리뷰를 날짜별로 모읍니다.
-        <b>리뷰 대상 아님</b>은 수정요청을 보내기 전에 먼저 여기 적고, <b>해외직구</b>는 정상 처리하되 하루 몇 건인지 셉니다.</div>
+        <b>리뷰 대상 아님</b>은 수정요청을 보내기 전에 먼저 여기 적고, <b>해외직구</b>는 정상 처리하되 하루 몇 건인지 셉니다.
+        더 볼 필요가 없는 건은 <b>무시</b>를 누르면 <b>무시</b> 탭으로 옮겨지고(✏️ 수정완료 배지에서도 빠짐), 무시 탭의 <b>↩ 복원</b>으로 되돌립니다.</div>
       <div id="excSum"></div>
       <div id="excBody"></div>
     </div>
@@ -1072,17 +1080,20 @@ $('#updCopy').onclick=async()=>{
 
 /* ── ✏️ 수정완료 배지 ──
    검수 콘솔(또는 📒 업데이트)이 동기화할 때 넘긴 CMS 남은 검수 목록(unpa-pending-v1 의 backlog)에서
-   유저가 수정완료(UPDATED)한 리뷰만 센다. 정지 사용자 건은 미노출 대상이라 뺀다. */
+   유저가 수정완료(UPDATED)한 리뷰만 센다. 정지 사용자 건은 미노출 대상이라 빼고, 검수 예외에서 '무시'한 건도 뺀다. */
 function updatedReviews(){
-  let o=null; try{ o=JSON.parse(localStorage.getItem('unpa-pending-v1')||'null'); }catch(e){}
+  let o=null, ex=null;
+  try{ o=JSON.parse(localStorage.getItem('unpa-pending-v1')||'null'); }catch(e){}
+  try{ ex=JSON.parse(localStorage.getItem('unpa-exceptions-v1')||'null'); }catch(e){}
   if(!o||!Array.isArray(o.backlog)) return {at:null,list:[]};
-  return {at:o.at||null, list:o.backlog.filter(x=>x&&x.status==='UPDATED'&&!x.blocked)};
+  const ign=(ex&&ex.items)||{};
+  return {at:o.at||null, list:o.backlog.filter(x=>x&&x.status==='UPDATED'&&!x.blocked&&!(ign[x.id]&&ign[x.id].ign===true))};
 }
 function renderUpdList(){
   const {at,list}=updatedReviews(), p2=n=>String(n).padStart(2,'0'), mdd=d=>(+d.slice(5,7))+'/'+(+d.slice(8,10));
   const t=at?new Date(at):null;
   $('#updListHint').innerHTML=(t&&isFinite(t)?'CMS 기준 <b>'+p2(t.getMonth()+1)+'-'+p2(t.getDate())+' '+p2(t.getHours())+':'+p2(t.getMinutes())+'</b> 확인':'아직 CMS에서 확인한 적이 없습니다')
-    +' · 짝수일 최근 60일 · 정지 사용자 제외 · <b>'+list.length+'건</b>';
+    +' · 짝수일 최근 60일 · 정지 사용자·무시한 건 제외 · <b>'+list.length+'건</b>';
   if(!list.length){ $('#updListBody').innerHTML='<div style="color:var(--mint-dk);font-weight:700">수정완료된 리뷰가 없습니다 🎉</div>'; return; }
   const byD={}; list.forEach(x=>{ (byD[x.d]=byD[x.d]||[]).push(x); });
   $('#updListBody').innerHTML=Object.keys(byD).sort().map(d=>'<div class="updday">'+htmlEscape(/^\d{4}-\d{2}-\d{2}$/.test(d)?mdd(d)+' 작성':String(d))+' · '+byD[d].length+'건</div>'
@@ -1105,7 +1116,7 @@ $('#updListCopy').onclick=async()=>{
   try{ await navigator.clipboard.writeText(text); toast('복사됨 — 채팅에 붙여넣으세요'); }catch(e){ toast('복사 실패 — '+text,true); }
 };
 /* 동기화 창(sync.html)이 남은 검수 목록을 새로 쓰면 배지도 다시 센다 */
-window.addEventListener('storage',e=>{ if(e.key==='unpa-pending-v1'||e.key===null) renderUpdBadge(); });
+window.addEventListener('storage',e=>{ if(e.key==='unpa-pending-v1'||e.key==='unpa-exceptions-v1'||e.key===null) renderUpdBadge(); });
 
 /* ── 초기화 ── */
 cur = TODAY_M;
@@ -1156,9 +1167,14 @@ const BOOT_READY=(async () => {
 const SB_CFG = 'unpa-sb-cfg';
 /* 검수 예외 합치기 — worklog-core.js 가 캐시된 옛 버전이어도 동작하도록 같은 규칙을 여기에도 둔다 */
 function mergeExc(a,b){
-  if(window.WorklogCore&&WorklogCore.mergeExceptions) return WorklogCore.mergeExceptions(a,b);
-  const out=Object.assign({},(a&&a.items)||{}), bi=(b&&b.items)||{};
+  /* 무시(ign) 규칙을 아는 새 worklog-core 일 때만 맡긴다 — 캐시된 옛 파일이면 아래 같은 규칙으로 */
+  if(window.WorklogCore&&WorklogCore.EXC_IGN&&WorklogCore.mergeExceptions) return WorklogCore.mergeExceptions(a,b);
+  const ai=(a&&a.items)||{}, bi=(b&&b.items)||{}, out=Object.assign({},ai);
   for(const k of Object.keys(bi)){const v=bi[k],p=out[k];if(!v)continue;if(!p||String(v.at||'')>=String(p.at||''))out[k]=v;}
+  for(const k of Object.keys(out)){const x=ai[k],y=bi[k];if(!x||!y||(!x.ignUpd&&!y.ignUpd))continue;
+    const src=String(y.ignUpd||'')>=String(x.ignUpd||'')?y:x, o=Object.assign({},out[k]);
+    ['ign','ignAt','ignBy','ignUpd'].forEach(f=>{ if(src[f]===undefined) delete o[f]; else o[f]=src[f]; });
+    out[k]=o;}
   return {v:1,items:out};
 }
 let SB = null, SB_USER = null, SB_BUSY = false;
@@ -1743,18 +1759,22 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
 
   /* ═══ 검수 예외 ═══
      규칙대로 처리하지 못했거나 따로 세어 둘 리뷰. 리뷰 작성일 기준으로 모으고, 서버 '~exc' 행으로 다른 기기와 나눈다.
-     항목: {id, d:작성일, kind, brand, product, reason, status, at}. 리뷰 콘솔·Claude 가 WorklogExc.add() 로 적는다. */
+     항목: {id, d:작성일, kind, brand, product, reason, status, at, ign?, ignAt?, ignBy?}. 리뷰 콘솔·Claude 가 WorklogExc.add() 로 적는다.
+     ign=true 면 '무시' — 더 볼 필요 없는 건. 무시한 리뷰 번호는 동기화 때 검수 콘솔에도 넘겨 수정완료 검토에서 뺀다. */
   var XK='unpa-exceptions-v1';
   var XKIND={ not_reviewable:'리뷰 대상 아님', no_price:'정보 확인 불가 · 보류', overseas:'해외직구 (일시 허용)', prelaunch:'출시 전 체험단 (현재 승인)', medicine:'의약품 · 약국 전용', other:'기타' };
   var XST={ listed:'리스트업', sent:'수정요청 보냄', done:'처리 완료', hold:'보류' };
   function xLoad(){ var o=jget(XK); return (o&&o.items)?o:{v:1,items:{}}; }
   function xSave(o){ try{ localStorage.setItem(XK, JSON.stringify(o)); return true; }catch(e){ return false; } }
-  /* 분류 탭 — 보류(보류·리스트업 = 아직 손이 필요한 건) / 처리 완료(처리 완료·수정요청 보냄) / 전체. 열 때마다 보류부터 */
-  var XTABS=[['hold','보류'],['done','처리 완료'],['all','전체']], XTAB='hold';
-  function xGroup(x){ return (x.status==='done'||x.status==='sent') ? 'done' : 'hold'; }
+  /* 분류 탭 — 보류(보류·리스트업 = 아직 손이 필요한 건) / 처리 완료(처리 완료·수정요청 보냄) / 전체 / 무시. 열 때마다 보류부터.
+     무시(ign)는 상태와 따로 둔다 — 복원하면 원래 상태(보류·처리 완료)로 돌아간다. */
+  var XTABS=[['hold','보류'],['done','처리 완료'],['all','전체'],['ign','무시']], XTAB='hold';
+  var XTABNAME={hold:'보류',done:'처리 완료',all:'전체',ign:'무시'};
+  function xBase(x){ return (x.status==='done'||x.status==='sent') ? 'done' : 'hold'; }
+  function xGroup(x){ return x.ign===true ? 'ign' : xBase(x); }
   function renderExcTabs(items){
     var el=document.getElementById('excTabs'); if(!el) return;
-    var n={hold:0,done:0,all:items.length}; items.forEach(function(x){ n[xGroup(x)]++; });
+    var n={hold:0,done:0,ign:0,all:items.length}; items.forEach(function(x){ n[xGroup(x)]++; });
     el.innerHTML=XTABS.map(function(t){
       return '<button class="xtab'+(XTAB===t[0]?' on':'')+'" role="tab" aria-selected="'+(XTAB===t[0])+'" data-xtab="'+t[0]+'">'
         +t[1]+'<span class="n">'+n[t[0]]+'</span></button>';
@@ -1770,24 +1790,49 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
     renderExcTabs(every);
     if(!every.length){ sum.innerHTML=''; body.innerHTML='<div class="warn">아직 기록된 예외가 없습니다.</div>'; return; }
     var items=XTAB==='all' ? every : every.filter(function(x){ return xGroup(x)===XTAB; });
-    if(!items.length){ sum.innerHTML=''; body.innerHTML='<div class="warn">'+(XTAB==='hold'?'보류 중인 예외가 없습니다.':'처리 완료된 예외가 없습니다.')+'</div>'; return; }
+    if(!items.length){ sum.innerHTML=''; body.innerHTML='<div class="warn">'+(XTAB==='hold'?'보류 중인 예외가 없습니다.':XTAB==='ign'?'무시한 예외가 없습니다.':'처리 완료된 예외가 없습니다.')+'</div>'; return; }
     var byD={}; items.forEach(function(x){ var d=x.d||'날짜 없음'; (byD[d]||(byD[d]=[])).push(x); });
     var tot={}; items.forEach(function(x){ tot[x.kind]=(tot[x.kind]||0)+1; });
-    sum.innerHTML='<div class="xday" style="margin-top:0">'+(XTAB==='hold'?'보류':XTAB==='done'?'처리 완료':'전체')+' '+items.length+'건 '
+    sum.innerHTML='<div class="xday" style="margin-top:0">'+XTABNAME[XTAB]+' '+items.length+'건 '
       +Object.keys(XKIND).filter(function(k){ return tot[k]; }).map(function(k){ return '<span class="xk '+k+'">'+XKIND[k]+' '+tot[k]+'</span>'; }).join(' ')+'</div>';
     body.innerHTML=Object.keys(byD).sort().reverse().map(function(d){
       var list=byD[d], cnt={}; list.forEach(function(x){ cnt[x.kind]=(cnt[x.kind]||0)+1; });
       return '<div class="xday">'+esc(/^\d{4}-\d{2}-\d{2}$/.test(d)?md(d)+' 작성':d)+' · '+list.length+'건 '
         +Object.keys(XKIND).filter(function(k){ return cnt[k]; }).map(function(k){ return '<span class="xk '+k+'">'+XKIND[k]+' '+cnt[k]+'</span>'; }).join(' ')+'</div>'
         +list.sort(function(a,b){ return String(a.id)<String(b.id)?-1:1; }).map(function(x){
-          return '<div class="xrow"><span class="xk '+esc(x.kind)+'">'+esc(XKIND[x.kind]||x.kind||'')+'</span>'
+          var ig=x.ign===true;
+          return '<div class="xrow'+(ig?' ign':'')+'"><span class="xk '+esc(x.kind)+'">'+esc(XKIND[x.kind]||x.kind||'')+'</span>'
             +'<a href="https://cms.unpa.me/review/detail/'+encodeURIComponent(x.id)+'" target="_blank" rel="noopener"><b>'+esc(x.brand||'')+'</b> / '+esc(x.product||'')+' <span style="color:var(--dim)">#'+esc(x.id)+' ↗</span></a>'
-            +'<span class="xk '+(x.status==='done'||x.status==='sent'?'done':'')+'">'+esc(XST[x.status]||x.status||'')+'</span>'
-            +(x.reason?'<span class="why">'+esc(x.reason)+'</span>':'')+'</div>';
+            +'<span class="xact">'
+            +(ig ? '<span class="xk ign">무시</span><button class="xbtn back" data-xign="'+esc(x.id)+'" data-on="0" title="'+esc(XTABNAME[xBase(x)])+'로 되돌립니다">↩ 복원</button>'
+                 : '<span class="xk '+(xBase(x)==='done'?'done':'')+'">'+esc(XST[x.status]||x.status||'')+'</span><button class="xbtn" data-xign="'+esc(x.id)+'" data-on="1" title="무시 탭으로 옮깁니다 (복원 가능)">무시</button>')
+            +'</span>'
+            +(x.reason||ig?'<span class="why">'+(ig?'<b>무시 '+esc(xWhen(x.ignAt))+(x.ignBy==='claude'?' · Claude':x.ignBy==='user'?' · 직접':'')+'</b> — 복원하면 '+esc(XTABNAME[xBase(x)])+'로 돌아갑니다'+(x.reason?'<br>':''):'')+esc(x.reason||'')+'</span>':'')+'</div>';
         }).join('');
     }).join('');
   }
   window.renderExc=renderExc;
+  function xWhen(iso){ var d=iso?new Date(iso):null; if(!d||!isFinite(d)) return ''; var p=function(n){ return (n<10?'0':'')+n; };
+    return (d.getMonth()+1)+'/'+d.getDate()+' '+p(d.getHours())+':'+p(d.getMinutes()); }
+  /* 무시 / 복원 — 상태는 그대로 두고 ign 표시만 바꾼다. 무시는 자기 시각(ignUpd)으로 따로 합쳐지므로 at 은 건드리지 않는다
+     (오래 열어 둔 화면에서 눌러도 다른 기기에서 고친 상태·사유를 덮지 않게) */
+  function xIgnore(id, on, by){
+    var o=xLoad(), k=String(id), x=o.items[k]; if(!x) return false;
+    var now=new Date().toISOString(), y=Object.assign({}, x, { ign:!!on, ignUpd:now });
+    if(on){ y.ignAt=now; y.ignBy=by==='claude'?'claude':'user'; } else { delete y.ignAt; delete y.ignBy; }
+    o.items[k]=y; xSave(o); renderExc();
+    if(typeof window.renderUpdBadge==='function') window.renderUpdBadge();
+    return true;
+  }
+  document.getElementById('excBody').addEventListener('click', function(e){
+    /* 더블클릭의 두 번째 클릭은 버리기 — 줄이 빠지면 아래 줄 버튼이 같은 자리에 와서 두 건이 함께 바뀐다 */
+    if(e.detail>1) return;
+    var b=e.target.closest('[data-xign]'); if(!b) return;
+    var on=b.dataset.on==='1', id=b.dataset.xign, x=xLoad().items[id];
+    if(!x || !xIgnore(id, on, 'user')) return;
+    toast(on ? '무시 탭으로 옮겼습니다 — 무시 탭의 ↩ 복원으로 되돌릴 수 있어요' : '복원했습니다 — '+XTABNAME[xBase(x)]+' 탭으로 돌아갔어요');
+    pushExc();
+  });
   /* 서버 '~exc' 행과 합쳐 올린다 — 다른 기기가 먼저 올렸으면 받아 합친 뒤 한 번 더 */
   async function pushExc(retried){
     if(typeof SB==='undefined'||!SB||!SB_USER) return false;
@@ -1796,6 +1841,7 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
     if(r.error) return false;
     var row=r.data&&r.data[0];
     var merged=mergeExc(row&&row.data, xLoad()); xSave(merged);
+    if(typeof window.renderUpdBadge==='function') window.renderUpdBadge();   /* 다른 기기에서 무시한 것이 합쳐졌을 수 있다 */
     var at=new Date().toISOString(), value={user_id:account,month:'~exc',data:merged,updated_at:at};
     var q=row ? SB.from('worklog_months').update(value).eq('user_id',account).eq('month','~exc').eq('updated_at',row.updated_at)
               : SB.from('worklog_months').insert(value);
@@ -1814,7 +1860,12 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
       xSave(o); renderExc();
       return pushExc().then(function(ok){ return {added:n, total:Object.keys(xLoad().items).length, pushed:ok}; });
     },
-    list:function(){ return xLoad(); }
+    list:function(){ return xLoad(); },
+    /* Claude 가 무시·복원할 때: WorklogExc.ignore('478039', true, 'claude') */
+    ignore:function(id, on, by){
+      if(!xIgnore(id, on, by)) return Promise.resolve({ok:false});
+      return pushExc().then(function(ok){ return {ok:true, pushed:ok}; });
+    }
   };
   window.addEventListener('storage', function(e){ if(e.key===XK) renderExc(); });
   renderExc();

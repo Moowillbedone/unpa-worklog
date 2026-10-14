@@ -181,8 +181,16 @@
   function mergeTexts(a,b,cap){const out=Object.assign({},a||{});for(const k of Object.keys(b||{})){const v=b[k],p=out[k];if(!v)continue;if(!p){out[k]=v;continue;}const orig=String(v.d||'')<String(p.d||'')?v:p;out[k]=Object.assign({},orig,{t:String(v.t||'')>String(p.t||'')?v.t:p.t});}const ks=Object.keys(out),c=cap||8000;if(ks.length>c)ks.sort((x,y)=>String(out[x].t||'')<String(out[y].t||'')?-1:1).slice(0,ks.length-c).forEach(k=>{delete out[k];});return out;}
   function mergeGate(a,b){const m=new Map();for(const x of [...(a||[]),...(b||[])])if(x&&x.t)m.set(x.t+'|'+(x.d||''),x);return [...m.values()].sort((x,y)=>x.t<y.t?-1:1).slice(-200);}
   function mergeConsole(a,b){a=a||{};b=b||{};return {alias:mergeAlias(a.alias,b.alias),gate:mergeGate(a.gate,b.gate),done:mergeByTime(a.done,b.done),pending:mergeByTime(a.pending,b.pending,'u'),texts:mergeTexts(a.texts,b.texts),sent:mergeSent(a.sent,b.sent),hidefp:mergeByTime(a.hidefp,b.hidefp)};}
-  /* 검수 예외(리뷰 대상 아님·보류·해외직구 등): 리뷰마다 나중에 고친 쪽 */
-  function mergeExceptions(a,b){a=a||{};b=b||{};return {v:1,items:mergeByTime(a.items,b.items)};}
+  /* 검수 예외(리뷰 대상 아님·보류·해외직구 등): 리뷰마다 나중에 고친 쪽.
+     '무시'(ign·ignAt·ignBy)는 따로 시각(ignUpd)을 두고 그 시각이 나중인 쪽을 따른다 —
+     오래 열어 둔 화면에서 상태를 고치거나 무시를 눌러도 다른 기기에서 한 무시·상태 변경을 덮지 않게 */
+  const IGN_FIELDS=['ign','ignAt','ignBy','ignUpd'];
+  function mergeExceptions(a,b){a=a||{};b=b||{};const ai=a.items||{},bi=b.items||{},items=mergeByTime(ai,bi);
+    for(const k of Object.keys(items)){const x=ai[k],y=bi[k];if(!x||!y||(!x.ignUpd&&!y.ignUpd))continue;
+      const src=String(y.ignUpd||'')>=String(x.ignUpd||'')?y:x,out=Object.assign({},items[k]);
+      for(const f of IGN_FIELDS){if(src[f]===undefined)delete out[f];else out[f]=src[f];}
+      items[k]=out;}
+    return {v:1,items};}
   function monthsBack(now,n){const out=[],y=now.getFullYear(),m=now.getMonth();for(let i=0;i<n;i++){const d=new Date(y,m-i,1);out.push(d.getFullYear()+'-'+pad2(d.getMonth()+1));}return out;}
 
   /* ── 서버와 한 번에 주고받기 ──────────────────────────────
@@ -305,5 +313,5 @@
             verdicts:verdictsFor(audit,p.backlog),goal};
   }
   return {date,months,mergeAudit,unappliedIds,applyWork,applyRemain,isAutoUnreg,syncStore,syncAudit,syncWindow,latestVerdicts,verdictsFor,
-          evidenceFrom,mergeEvidence,mergeMonth,mergeAlias,mergeSent,mergeTexts,mergeGate,mergeConsole,mergeByTime,mergeExceptions,monthsBack,cloudSync};
+          evidenceFrom,mergeEvidence,mergeMonth,mergeAlias,mergeSent,mergeTexts,mergeGate,mergeConsole,mergeByTime,mergeExceptions,EXC_IGN:1,monthsBack,cloudSync};
 });

@@ -78,11 +78,31 @@
       try{ var r=await fetch('data/log.json?t='+Date.now(),{cache:'no-store'}); if(r.ok){ var o=await r.json(); base={v:1,months:(o&&o.months)||o,dirty:[]}; } }catch(e){}
     }
     st.textContent='업무일지 서버 확인 중…';
-    var c=await cloudIO();
+    var c=await CLOUD;
     st.textContent=c ? '다른 컴퓨터 기록과 합치는 중…' : '이 브라우저에 반영 중…';
+    if(c && !EXC_PULLED) try{ await pullExc(c); }catch(e){}     /* 준비 신호 전에 못 받았으면 한 번 더 */
     return WorklogCore.syncWindow(localStorage, p, c && c.io, { uid:c && c.uid, base:base });
   }
+  /* 다른 컴퓨터에서 무시·복원한 검수 예외를 서버에서 받아 이 브라우저에 합쳐 둔다.
+     준비 신호를 보내기 전에 해야 콘솔이 만드는 집계(수정완료 수)부터 맞는다. 무시 규칙을 아는 새 worklog-core 일 때만 */
+  var CLOUD=cloudIO(), EXC_PULLED=false;
+  async function pullExc(c){
+    if(!c || !WorklogCore.EXC_IGN) return;
+    var xr=await c.io.pull(['~exc']), xrow=xr && xr[0];
+    if(xrow && xrow.data){
+      var loc=null; try{ loc=JSON.parse(localStorage.getItem('unpa-exceptions-v1')||'null'); }catch(e){}
+      localStorage.setItem('unpa-exceptions-v1', JSON.stringify(WorklogCore.mergeExceptions(loc, xrow.data)));
+    }
+    EXC_PULLED=true;
+  }
+  function within(p, ms){ return Promise.race([p, new Promise(function(r){ setTimeout(function(){ r(null); }, ms); })]); }
   function md(d){ return (+d.slice(5,7))+'/'+(+d.slice(8,10)); }
+  /* 업무일지 검수 예외에서 '무시'한 리뷰 번호 — 콘솔이 수정완료 검토·전체 스캔에서 뺀다 */
+  function ignoredIds(){
+    try{ var o=JSON.parse(localStorage.getItem('unpa-exceptions-v1')||'null'), it=(o&&o.items)||{};
+      return Object.keys(it).filter(function(k){ return it[k] && it[k].ign===true; }).map(String).slice(0,2000); }
+    catch(e){ return null; }
+  }
   function show(res){
     if(!res.ok){ st.innerHTML='<span class="bad">반영 실패</span> — '+String(res.error||'').replace(/[<>&]/g,''); return; }
     st.innerHTML='<span class="ok">반영 완료</span> · 오늘('+md(res.today.d)+') 리뷰 <b>'+res.today.r+'</b> · 제품 <b>'+res.today.p+'</b>'
@@ -107,10 +127,14 @@
     var res;
     try{ res=await apply(ev.data.payload); }catch(e){ res={ok:false,error:String(e&&e.message||e)}; }
     show(res);
-    try{ src.postMessage(Object.assign({type:'unpa-sync-done',nonce:nonce,seq:ev.data.payload&&ev.data.payload.seq},res), CMS); }catch(e){}
+    try{ src.postMessage(Object.assign({type:'unpa-sync-done',nonce:nonce,seq:ev.data.payload&&ev.data.payload.seq},res,{ignored:ignoredIds()}), CMS); }catch(e){}
     setTimeout(function(){ window.close(); }, res.ok ? (res.nChanges ? 6000 : 2500) : 15000);
   });
-  src.postMessage({type:'unpa-sync-ready',nonce:nonce}, CMS);
+  /* 서버 무시 목록은 길어야 몇 초만 기다린다 — 늦으면 이 브라우저 것으로 먼저 시작하고, 반영 끝에 다시 알린다 */
+  (async function(){
+    try{ var c=await within(CLOUD, 5000); if(c) await within(pullExc(c), 5000); }catch(e){}
+    src.postMessage({type:'unpa-sync-ready',nonce:nonce,ignored:ignoredIds()}, CMS);
+  })();
   setTimeout(function(){ if(!done) st.textContent='콘솔 응답이 없습니다. 이 창을 닫고 콘솔에서 다시 시도하세요.'; }, 60000);
 })();
 </script>

@@ -1475,22 +1475,31 @@
     if(t && t.id==='csKeepTab'){ ev.preventDefault(); clearTimeout(CLOSE_TIMER); t.parentNode.textContent='이 탭은 그대로 둡니다.'; }
   });
 
-  async function renderStart(sd){
-    var manual='<div style="margin-top:12px;border-top:1px solid #22392e;padding-top:10px;font-size:12px;color:#9fb4ab">날짜 하나만 '
+  /* 시작 화면 아래 "날짜 하나만 스캔" */
+  function manualHtml(sd){
+    return '<div style="margin-top:12px;border-top:1px solid #22392e;padding-top:10px;font-size:12px;color:#9fb4ab">날짜 하나만 '
       +'<input id="csDate" value="'+esc(sd)+'" style="width:112px;background:#132019;color:#e8f1ed;border:1px solid #2c4a3c;border-radius:7px;padding:4px 7px;font:inherit"> '
       +'<button id="csScan" style="background:#132019;color:#9fb4ab;border:1px solid #2c4a3c;border-radius:7px;padding:5px 10px;font:inherit;cursor:pointer">이 날짜만 스캔</button></div>'
       +'<div style="margin-top:8px;font-size:11px;color:#6b7f77">스캔은 조회만 합니다. 실제 처리는 이후 대기열·그리드에서 승인해야 나갑니다.</div>';
-    var bindManual=function(){
-      document.getElementById('csScan').onclick=function(){ var d=document.getElementById('csDate').value.trim(); if(!validDate(d)){alert('실제 존재하는 YYYY-MM-DD 날짜를 입력해주세요.');return;} scan(d); };
-    };
-
+  }
+  function bindManual(){
+    document.getElementById('csScan').onclick=function(){ var d=document.getElementById('csDate').value.trim(); if(!validDate(d)){alert('실제 존재하는 YYYY-MM-DD 날짜를 입력해주세요.');return;} scan(d); };
+  }
+  async function renderStart(sd){
     var backlog=await loadBacklog();
     if(backlog===null){
-      box.innerHTML=head('<div style="margin-top:9px;color:#ff8f6b">목록 조회 실패 — 관리 화면에서 목록을 한 번 불러온 뒤 다시 실행해주세요.</div>'+manual);
+      box.innerHTML=head('<div style="margin-top:9px;color:#ff8f6b">목록 조회 실패 — 관리 화면에서 목록을 한 번 불러온 뒤 다시 실행해주세요.</div>'+manualHtml(sd));
       bindManual(); return;
     }
     BACKLOG=backlog;
-    var total=0, upd=0; backlog.forEach(function(b){ total+=b.rows.length; upd+=b.updated; });
+    paintStart(backlog, sd);
+  }
+  /* 시작 화면 그리기 — 목록은 다시 받지 않는다. 동기화로 '무시' 목록이 바뀌면 이것만 다시 부른다 */
+  function paintStart(backlog, sd){
+    START_SD=sd;
+    var manual=manualHtml(sd);
+    var total=0, upd=0, ign=0;
+    backlog.forEach(function(b){ total+=b.rows.length; upd+=bUpdated(b); ign+=bIgnored(b); });
     var warns='';
     if(backlog.failed && backlog.failed.length)
       warns+='<div style="margin-top:8px;font-size:11.5px;color:#ff8f6b">⚠ 조회 실패 '+backlog.failed.length+'일 ('
@@ -1502,19 +1511,22 @@
       ? backlog.slice(0,14).map(function(b){
           return '<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed #1a2b23">'
             +'<span>'+b.date.slice(5)+'</span><span><b style="color:#e8f1ed">'+b.rows.length+'</b>건'
-            +(b.updated?' <span style="color:#f5c451">✏️수정완료 '+b.updated+'</span>':'')+'</span></div>';
+            +(bUpdated(b)?' <span style="color:#f5c451">✏️수정완료 '+bUpdated(b)+'</span>':'')
+            +(bIgnored(b)?' <span style="color:#6b7f77">무시 '+bIgnored(b)+'</span>':'')+'</span></div>';
         }).join('') + (backlog.length>14?'<div style="color:#6b7f77;font-size:11px;margin-top:3px">… 외 '+(backlog.length-14)+'일</div>':'')
       : '<div style="color:#3ddc97">짝수일에 남은 일이 없습니다 🎉</div>';
     box.innerHTML=head(
       '<div style="margin-top:9px;color:#9fb4ab">📋 남은 일 · 짝수일 최근 '+BACKLOG_DAYS+'일</div>'
-      +'<div style="margin-top:6px;font-size:12px;color:#9fb4ab">'+list+'</div>'+warns+'<div id="csAssoc"></div>'
+      +'<div style="margin-top:6px;font-size:12px;color:#9fb4ab">'+list+'</div>'+warns
+      +(ign?'<div style="margin-top:8px;font-size:11.5px;color:#9fb4ab">🙈 업무일지 검수 예외에서 <b>무시</b>한 '+ign+'건은 스캔하지 않습니다 (업무일지에서 복원하면 다시 들어옵니다)</div>':'')
+      +'<span id="csStart" hidden></span><div id="csAssoc"></div>'
       +(upd?'<button id="csScanUpd" style="margin-top:11px;width:100%;background:#2c2410;color:#f5c451;border:1px solid #f5c451;border-radius:9px;padding:10px;font-weight:800;cursor:pointer">'
         +'✏️ 수정완료만 검토 ('+upd+'건) — 남은 것 전부를 스캔하지 않고 바로</button>':'')
-      +(backlog.length?'<button id="csScanAll" style="margin-top:11px;width:100%;background:#3ddc97;color:#04130c;border:0;border-radius:9px;padding:10px;font-weight:800;cursor:pointer">'
-        +'▶ 남은 것 전부 스캔 ('+backlog.length+'일 · '+total+'건'+(upd?' · 수정완료 '+upd:'')+')</button>':'')
+      +(total>ign?'<button id="csScanAll" style="margin-top:11px;width:100%;background:#3ddc97;color:#04130c;border:0;border-radius:9px;padding:10px;font-weight:800;cursor:pointer">'
+        +'▶ 남은 것 전부 스캔 ('+backlog.length+'일 · '+(total-ign)+'건'+(upd?' · 수정완료 '+upd:'')+')</button>':'')
       +manual);
     bindManual();
-    if(backlog.length) document.getElementById('csScanAll').onclick=function(){ scanAll(backlog); };
+    if(total>ign) document.getElementById('csScanAll').onclick=function(){ scanAll(backlog); };
     if(upd) document.getElementById('csScanUpd').onclick=function(){ scanUpdated(backlog); };
     renderAssoc();
   }
@@ -1532,7 +1544,36 @@
     }
     return out;
   }
-  var BACKLOG_DAYS=60, SCAN_LABEL='', BACKLOG=null, SCAN_ABORT=null;
+  var BACKLOG_DAYS=60, SCAN_LABEL='', BACKLOG=null, SCAN_ABORT=null, START_SD='';
+
+  /* 업무일지 검수 예외에서 '무시'한 리뷰 — 동기화 창이 번호를 알려 주면 이 브라우저에 적어 둔다.
+     CMS 에는 그대로 남아 있으니 남은 건수(미등록 칸)는 그대로 세고, 수정완료 검토·전체 스캔에서만 뺀다. */
+  var IGN_KEY='unpa-console-ignored-v1';
+  function ignLoad(){ try{ var o=JSON.parse(localStorage.getItem(IGN_KEY)||'null'); return (o && o.ids && typeof o.ids==='object') ? o.ids : {}; }catch(e){ return {}; } }
+  var IGN=ignLoad();
+  function isIgn(id){ return IGN[String(id)]===1; }
+  /* 바뀌었으면 true */
+  function ignSet(list){
+    var next={}; (list||[]).forEach(function(k){ if(k!=null && String(k).length<20) next[String(k)]=1; });
+    var a=Object.keys(IGN).sort().join(','), b=Object.keys(next).sort().join(',');
+    IGN=next;
+    try{ localStorage.setItem(IGN_KEY, JSON.stringify({ at:new Date().toISOString(), ids:next })); }catch(e){}
+    return a!==b;
+  }
+  /* 동기화 창이 준 무시 목록을 적용 — 바뀌었으면 이 콘솔 화면에 반영한다.
+     목록이 오기 전에 스캔해 둔 건 결과에서 뺀다(실행 직전에도 runJobs 가 한 번 더 거른다) */
+  function ignApply(list){
+    if(!Array.isArray(list)) return;
+    var changed=ignSet(list);                         /* 업데이트 전용 모드에서도 목록은 저장해 둔다 */
+    if(!changed || SYNC_ONLY) return;
+    var mine=box && box.isConnected;                  /* 콘솔을 다시 열었으면 예전 콘솔은 손대지 않는다 */
+    if(mine && BACKLOG && box.querySelector('#csStart')){ paintStart(BACKLOG, START_SD); return; }
+    var before=results.length;
+    results=results.filter(function(r){ return r.applied || !isIgn(r.id); });
+    if(mine && results.length!==before && !window.__CONSOLE_RUNNING && !document.getElementById('csGrid') && box.querySelector('#csRun')) renderQueue(SCAN_DATE);
+  }
+  function bUpdated(b){ return b.rows.filter(function(x){ return x.status==='UPDATED' && !isIgn(x.id); }).length; }
+  function bIgnored(b){ return b.rows.filter(function(x){ return isIgn(x.id); }).length; }
 
   /* 한 날짜의 "검수 필요" 목록 전부 (수정완료 UPDATED 도 여기 섞여 있다) */
   async function listAll(sd, onPage){
@@ -1582,7 +1623,7 @@
         if(rows===null) res[i]={ date:dates[i], failed:true, rows:[], updated:0 };
         else {
           var todo=backlogTodo(rows, sent);
-          res[i]={ date:dates[i], rows:todo, updated:todo.filter(function(x){ return x.status==='UPDATED'; }).length };
+          res[i]={ date:dates[i], rows:todo, updated:todo.filter(function(x){ return x.status==='UPDATED' && !isIgn(x.id); }).length };
         }
         doneN++; paint();
         await delay(40);
@@ -1614,7 +1655,8 @@
     SCAN_DATE = dates.length===1 ? dates[0] : dates[0]+'_'+dates[dates.length-1];
     SCAN_LABEL = dates.length===1 ? dates[0] : dates[0].slice(5)+' ~ '+dates[dates.length-1].slice(5)+' ('+dates.length+'일)';
     var rows=[];
-    backlog.forEach(function(b){ b.rows.forEach(function(x){ x._date=b.date; rows.push(x); }); });
+    backlog.forEach(function(b){ b.rows.forEach(function(x){ if(isIgn(x.id)) return; x._date=b.date; rows.push(x); }); });
+    if(!rows.length){ alert('스캔할 리뷰가 없습니다 — 남은 건은 모두 업무일지에서 무시한 건입니다.'); return; }
     await scanRows(rows);
   }
 
@@ -1622,7 +1664,7 @@
      판정 규칙은 전체 스캔과 같다: 제품이 연결됐으면 승인 후보(그리드), 아직 엑박이면 재선택 요청(같은 요청 2번째부터는 확인으로). */
   function updatedRows(backlog){
     var rows=[];
-    backlog.forEach(function(b){ b.rows.forEach(function(x){ if(x.status==='UPDATED'){ x._date=b.date; rows.push(x); } }); });
+    backlog.forEach(function(b){ b.rows.forEach(function(x){ if(x.status==='UPDATED' && !isIgn(x.id)){ x._date=b.date; rows.push(x); } }); });
     return rows;
   }
   async function scanUpdated(backlog){
@@ -1638,6 +1680,7 @@
     results=[]; SCAN_ABORT=null;
     var fails=0;
     for(var i=0;i<pending.length;i++){
+      if(isIgn(pending[i].id)) continue;          /* 스캔 도중에 무시 목록이 와도 그 뒤부터는 보지 않는다 */
       box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">판정 중… <b>'+(i+1)+' / '+pending.length+'</b><br>'
         +esc(pending[i].brandName||'')+' — '+esc(pending[i].productName||'')+'</div>');
       var dr=await get(API+'/admin/reviews/'+pending[i].id);
@@ -1691,6 +1734,7 @@
       }
       await delay(60);
     }
+    results=results.filter(function(r){ return r.applied || !isIgn(r.id); });
     await postScan();
     pendingRecord(results);
     hideRecord(results);
@@ -1991,6 +2035,12 @@
     var already=sentLoad();
     jobs=jobs.filter(function(r){ return canSend(r, already[String(r.id)]); });   /* 이미 보낸 건은 빼고 보낸다 */
     if(!jobs.length){ alert('선택한 건은 모두 이미 처리되었습니다.'); return; }
+    /* 업무일지에서 '무시'한 리뷰는 보내지 않는다 — 무시 목록이 오기 전에 스캔해 둔 건이 남아 있어도 */
+    var nIgn=jobs.filter(function(r){ return isIgn(r.id); }).length;
+    if(nIgn){
+      jobs=jobs.filter(function(r){ return !isIgn(r.id); });
+      if(!jobs.length){ alert('선택한 건은 모두 업무일지에서 무시한 리뷰입니다.\n처리하려면 업무일지 › 검수 예외 › 무시 탭에서 복원한 뒤 다시 여세요.'); return; }
+    }
     /* 안내 문구를 못 불러왔으면 수정요청은 만들 수 없다 — 실행 도중이 아니라 지금 알린다 */
     var noReq=jobs.filter(function(r){ return !buildReq(r); });
     if(noReq.length){
@@ -2027,7 +2077,7 @@
       return;
     }
     var summ=Object.keys(byAct).map(function(k){ return ACT[k].t+' '+byAct[k]+'건'; }).join(' · ');
-    if(!confirm('실제로 '+jobs.length+'건을 처리합니다.\n\n'+summ+goalNote+'\n\n진행할까요?')) return;
+    if(!confirm('실제로 '+jobs.length+'건을 처리합니다.\n\n'+summ+goalNote+(nIgn?'\n\n업무일지에서 무시한 '+nIgn+'건은 뺐습니다.':'')+'\n\n진행할까요?')) return;
 
     window.__CONSOLE_RUNNING=true;
     var run=document.getElementById('csRun'); if(run){ run.disabled=true; run.textContent='실행 중…'; }
@@ -2396,7 +2446,7 @@
     PRE={ win:PRE_WIN, nonce:nonce, ready:false };
     window.addEventListener('message', function(ev){
       if(!PRE || ev.origin!==WL_ORIGIN || ev.source!==PRE.win || !ev.data || ev.data.nonce!==PRE.nonce) return;
-      if(ev.data.type==='unpa-sync-ready') PRE.ready=true;
+      if(ev.data.type==='unpa-sync-ready'){ PRE.ready=true; PRE.ignored=ev.data.ignored; }
     });
   }
   function preProgress(text){
@@ -2416,21 +2466,24 @@
       return false;
     }
     SYNCING=true;
-    var payload=workPayload();
+    /* 넘길 집계는 창이 '준비' 신호와 함께 최신 무시 목록을 준 다음에 만든다 — 수정완료 수가 한 번 늦게 따라가지 않게 */
+    var payload=null;
+    var postData=function(ignored){ ignApply(ignored); payload=workPayload(); w.postMessage({ type:'unpa-sync-data', nonce:nonce, payload:payload }, WL_ORIGIN); };
     syncStatus('📒 업무일지에 반영 중…');
     var timer;
     var finish=function(){ SYNCING=false; clearTimeout(timer); window.removeEventListener('message', onMsg); };
     var onMsg=function(ev){
       if(ev.origin!==WL_ORIGIN || ev.source!==w || !ev.data || ev.data.nonce!==nonce) return;
-      if(ev.data.type==='unpa-sync-ready'){ w.postMessage({ type:'unpa-sync-data', nonce:nonce, payload:payload }, WL_ORIGIN); return; }
+      if(ev.data.type==='unpa-sync-ready'){ if(!payload) postData(ev.data.ignored); return; }
       if(ev.data.type!=='unpa-sync-done') return;
       finish();
+      ignApply(ev.data.ignored);     /* 서버에서 받아 합친 무시 목록 (다른 컴퓨터에서 한 것까지) */
       if(!ev.data.ok){ syncButton('<span style="color:#ff8f6b">⚠ 업무일지 반영 실패 — '+esc(String(ev.data.error||'').slice(0,80))+'</span>'); return; }
       if(ev.data.console) applyConsoleState(ev.data.console);
       if(ev.data.goal && ev.data.goal.target>0){ goalSave(Object.assign({ at:new Date().toISOString() }, ev.data.goal)); if(results.length) renderQueue(SCAN_DATE); }
       if(ev.data.verdicts && seedFromVerdicts(ev.data.verdicts)) matchPending();   /* 예전 판정으로 채운 건도 바로 짝지어 본다 */
       /* 보낸 뒤로 보관함에 새로 쌓인 게 없으면 비운다 (새로 쌓였으면 다음에 함께 다시 보낸다 — 합칠 때 중복은 걸러진다) */
-      if((outboxLoad().seq||0)===payload.seq){ try{ localStorage.removeItem(OUTBOX_KEY); }catch(e){} }
+      if(payload && (outboxLoad().seq||0)===payload.seq){ try{ localStorage.removeItem(OUTBOX_KEY); }catch(e){} }
       var t=ev.data.today||{}, hm=new Date().toTimeString().slice(0,5);
       syncStatus('<span style="color:#3ddc97">📒 업무일지 반영 '+hm+'</span> · 오늘 리뷰 <b>'+(t.r||0)+'</b> · 제품 <b>'+(t.p||0)+'</b>'
         +(ev.data.nChanges?' · 바뀐 날 '+ev.data.nChanges+'일':'')
@@ -2446,7 +2499,7 @@
     };
     window.addEventListener('message', onMsg);
     /* 미리 연 창이 이미 준비 신호를 보냈으면 기다리지 않고 바로 넘긴다 */
-    if(pre && pre.ready) w.postMessage({ type:'unpa-sync-data', nonce:nonce, payload:payload }, WL_ORIGIN);
+    if(pre && pre.ready) postData(pre.ignored);
     timer=setTimeout(function(){ finish(); syncButton('<span style="color:#ff8f6b">⚠ 업무일지 창 응답 없음</span>'); }, 45000);
     return true;
   }
@@ -2529,7 +2582,7 @@
       var live=rows.filter(function(x){ return x.userBlocked!==true; });
       days[b.date]={ n:live.length,
         reg:rows.filter(function(x){ var e=pend[String(x.id)]; return e && (e.a==='register_product' || e.a==='register_brand') && e.st!=='resolved' && e.st!=='learned'; }).length,
-        upd:live.filter(function(x){ return x.status==='UPDATED'; }).length,
+        upd:live.filter(function(x){ return x.status==='UPDATED' && !isIgn(x.id); }).length,
         blocked:rows.filter(function(x){ return x.userBlocked===true; }).length };
     });
     return { at:BACKLOG.at || new Date().toISOString(), days:days };
