@@ -468,10 +468,11 @@ td input.memo.auto{box-shadow:inset 3px 0 0 var(--mint,#3ddc97);font-weight:700}
 .xtab .n{margin-left:5px;font-weight:600;opacity:.85}
 .xk{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:9px;white-space:nowrap;background:var(--sunk);color:var(--mid)}
 .xk.not_reviewable{background:#fde8e6;color:#b23b30}.xk.no_price{background:var(--amber-lt);color:#7c5408}
-.xk.overseas{background:#e6f0fd;color:#2c5ea8}.xk.prelaunch{background:#f1e9fb;color:#6b3fa0}.xk.medicine{background:#fdeee2;color:#a3521b}.xk.done{background:#e3f4ec;color:#1f7a52}
+.xk.overseas{background:#e6f0fd;color:#2c5ea8}.xk.prelaunch{background:#f1e9fb;color:#6b3fa0}.xk.medicine{background:#fdeee2;color:#a3521b}.xk.plagiarism{background:#8f1d1d;color:#fff}.xk.done{background:#e3f4ec;color:#1f7a52}
 .xday{margin-top:14px;font-weight:800;font-size:13px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .xrow{display:grid;grid-template-columns:auto 1fr auto;gap:4px 10px;padding:6px 0;border-bottom:1px dashed var(--line);font-size:13px;align-items:baseline}
 .xrow .why{grid-column:2/4;color:var(--mid);font-size:12.3px;line-height:1.5}
+.xrow .xsrc{display:block;margin-top:3px}.xrow .xsrc a{color:#8f1d1d;font-weight:700;text-decoration:none;word-break:break-all}.xrow .xsrc a:hover{text-decoration:underline}
 .xrow .xact{display:inline-flex;gap:6px;align-items:center;justify-self:end}
 .xk.ign{background:var(--line);color:var(--dim)}
 .xrow.ign a{color:var(--dim)}
@@ -1483,6 +1484,12 @@ function askWork(o,ex){
   if(upd.length) parts.push('수정완료 '+upd.length+'건 검토해줘: '+upd.join(', '));
   return {at:(o&&o.at)||null, dates, n, upd, text:parts.length?'언파 검수 — '+parts.join(' / '):''};
 }
+/* 검수 예외 중 컨펌을 기다리는 건 — 검수 예외 화면의 탭과 같은 기준(도용은 상태와 관계없이 도용 탭)으로 나눠 센다 */
+function askWaiting(ex){
+  const n={hold:0,plag:0};
+  Object.values((ex&&ex.items)||{}).forEach(x=>{ if(x&&x.ign!==true&&(x.status==='hold'||x.status==='listed')) n[x.kind==='plagiarism'?'plag':'hold']++; });
+  return n;
+}
 function askLoad(){
   let o=null, ex=null;
   try{ o=JSON.parse(localStorage.getItem('unpa-pending-v1')||'null'); }catch(e){}
@@ -1493,13 +1500,15 @@ function renderAsk(){
   const w=askLoad(), p2=n=>String(n).padStart(2,'0'), t=w.at?new Date(w.at):null;
   $('#askN').textContent=(w.n+w.upd.length)||'';
   if($('#askMask').hidden) return;
-  let hold=0;
-  try{ const ex=JSON.parse(localStorage.getItem('unpa-exceptions-v1')||'null'); Object.values((ex&&ex.items)||{}).forEach(x=>{ if(x&&x.ign!==true&&(x.status==='hold'||x.status==='listed')) hold++; }); }catch(e){}
+  let wait={hold:0,plag:0};
+  try{ wait=askWaiting(JSON.parse(localStorage.getItem('unpa-exceptions-v1')||'null')); }catch(e){}
+  const waitTxt=[wait.hold?'보류 <b>'+wait.hold+'</b>건':'',wait.plag?'도용 <b>'+wait.plag+'</b>건':''].filter(Boolean).join(' · ');
+  const waitTabs=[wait.hold?'보류':'',wait.plag?'도용':''].filter(Boolean).join('·');
   $('#askHint').innerHTML=(t&&isFinite(t)?'CMS 기준 <b>'+p2(t.getMonth()+1)+'-'+p2(t.getDate())+' '+p2(t.getHours())+':'+p2(t.getMinutes())+'</b> 확인':'아직 CMS에서 확인한 적이 없습니다 — 🔄 업데이트를 먼저 눌러 주세요')
     +' · 새 리뷰 <b>'+w.n+'</b>건 · 수정완료 <b>'+w.upd.length+'</b>건';
   $('#askText').className='askbox'+(w.text?'':' none');
   $('#askText').textContent=w.text||'남은 새 리뷰도, 수정완료 건도 없습니다 🎉';
-  $('#askBody').innerHTML=hold?'<div class="step" style="font-size:12.3px;color:var(--amber)">검수 예외에 컨펌을 기다리는 건이 <b>'+hold+'</b>건 있어요 — 🚩 검수 예외 탭에서 보고 채팅으로 알려 주세요.</div>':'';
+  $('#askBody').innerHTML=waitTxt?'<div class="step" style="font-size:12.3px;color:var(--amber)">검수 예외에 컨펌을 기다리는 건이 '+waitTxt+' 있어요 — 🚩 검수 예외의 '+waitTabs+' 탭에서 보고 채팅으로 알려 주세요.</div>':'';
   $('#askCopy').disabled=!w.text;
 }
 window.renderAsk=renderAsk;
@@ -2154,22 +2163,32 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
 
   /* ═══ 검수 예외 ═══
      규칙대로 처리하지 못했거나 따로 세어 둘 리뷰. 리뷰 작성일 기준으로 모으고, 서버 '~exc' 행으로 다른 기기와 나눈다.
-     항목: {id, d:작성일, kind, brand, product, reason, status, at, ign?, ignAt?, ignBy?}. 리뷰 콘솔·Claude 가 WorklogExc.add() 로 적는다.
+     항목: {id, d:작성일, kind, brand, product, reason, src?, status, at, ign?, ignAt?, ignBy?}. src = 근거 링크(도용 원본 등). 리뷰 콘솔·Claude 가 WorklogExc.add() 로 적는다.
      ign=true 면 '무시' — 더 볼 필요 없는 건. 무시한 리뷰 번호는 동기화 때 검수 콘솔에도 넘겨 수정완료 검토에서 뺀다. */
   var XK='unpa-exceptions-v1';
-  var XKIND={ not_reviewable:'리뷰 대상 아님', no_price:'정보 확인 불가 · 보류', overseas:'해외직구 (일시 허용)', prelaunch:'출시 전 체험단 (현재 승인)', medicine:'의약품 · 약국 전용', other:'기타' };
+  var XKIND={ not_reviewable:'리뷰 대상 아님', no_price:'정보 확인 불가 · 보류', overseas:'해외직구 (일시 허용)', prelaunch:'출시 전 체험단 (현재 승인)', medicine:'의약품 · 약국 전용', plagiarism:'도용', other:'기타' };
   var XST={ listed:'리스트업', sent:'수정요청 보냄', done:'처리 완료', hold:'보류' };
   function xLoad(){ var o=jget(XK); return (o&&o.items)?o:{v:1,items:{}}; }
   function xSave(o){ try{ localStorage.setItem(XK, JSON.stringify(o)); return true; }catch(e){ return false; } }
-  /* 분류 탭 — 보류(보류·리스트업 = 아직 손이 필요한 건) / 처리 완료(처리 완료·수정요청 보냄) / 전체 / 무시. 열 때마다 보류부터.
-     무시(ign)는 상태와 따로 둔다 — 복원하면 원래 상태(보류·처리 완료)로 돌아간다. */
-  var XTABS=[['hold','보류'],['done','처리 완료'],['all','전체'],['ign','무시']], XTAB='hold';
-  var XTABNAME={hold:'보류',done:'처리 완료',all:'전체',ign:'무시'};
+  /* 분류 탭 — 보류(보류·리스트업 = 아직 손이 필요한 건) / 처리 완료(처리 완료·수정요청 보냄) / 도용 / 전체 / 무시. 열 때마다 보류부터.
+     도용(kind plagiarism — 남의 리뷰·자기 리뷰 본문 복사가 확실한 건)은 상태와 관계없이 도용 탭에만 모은다.
+     무시(ign)는 상태와 따로 둔다 — 복원하면 원래 자리(보류·처리 완료·도용)로 돌아간다. */
+  var XTABS=[['hold','보류'],['done','처리 완료'],['plag','도용'],['all','전체'],['ign','무시']], XTAB='hold';
+  var XTABNAME={hold:'보류',done:'처리 완료',plag:'도용',all:'전체',ign:'무시'};
   function xBase(x){ return (x.status==='done'||x.status==='sent') ? 'done' : 'hold'; }
-  function xGroup(x){ return x.ign===true ? 'ign' : xBase(x); }
+  function xHome(x){ return x.kind==='plagiarism' ? 'plag' : xBase(x); }
+  /* 근거 링크 — 도용 건의 원본(베낀 리뷰·기사) 등. src: [{u:주소, t:이름}] 또는 주소 문자열. http(s) 주소만 링크로 단다 */
+  function xSrc(x){
+    var list=[].concat(x.src||[]).map(function(v){ return typeof v==='string'?{u:v}:v; })
+      .filter(function(v){ return v&&/^https?:\/\//i.test(String(v.u||'')); });
+    return list.map(function(v){ return '<span class="xsrc">🔗 근거 <a href="'+esc(v.u)+'" target="_blank" rel="noopener noreferrer">'+esc(v.t||v.u)+' ↗</a></span>'; }).join('');
+  }
+  /* '보류로'·'처리 완료로'·'도용으로' — 받침(ㄹ 제외) 있으면 '으로' */
+  function xRo(w){ var c=String(w).charCodeAt(String(w).length-1)-0xAC00, j=(c>=0&&c<11172)?c%28:0; return w+(j&&j!==8?'으로':'로'); }
+  function xGroup(x){ return x.ign===true ? 'ign' : xHome(x); }
   function renderExcTabs(items){
     var el=document.getElementById('excTabs'); if(!el) return;
-    var n={hold:0,done:0,ign:0,all:items.length}; items.forEach(function(x){ n[xGroup(x)]++; });
+    var n={hold:0,done:0,plag:0,ign:0,all:items.length}; items.forEach(function(x){ n[xGroup(x)]++; });
     el.innerHTML=XTABS.map(function(t){
       return '<button class="xtab'+(XTAB===t[0]?' on':'')+'" role="tab" aria-selected="'+(XTAB===t[0])+'" data-xtab="'+t[0]+'">'
         +t[1]+'<span class="n">'+n[t[0]]+'</span></button>';
@@ -2185,7 +2204,7 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
     renderExcTabs(every);
     if(!every.length){ sum.innerHTML=''; body.innerHTML='<div class="warn">아직 기록된 예외가 없습니다.</div>'; return; }
     var items=XTAB==='all' ? every : every.filter(function(x){ return xGroup(x)===XTAB; });
-    if(!items.length){ sum.innerHTML=''; body.innerHTML='<div class="warn">'+(XTAB==='hold'?'보류 중인 예외가 없습니다.':XTAB==='ign'?'무시한 예외가 없습니다.':'처리 완료된 예외가 없습니다.')+'</div>'; return; }
+    if(!items.length){ sum.innerHTML=''; body.innerHTML='<div class="warn">'+(XTAB==='hold'?'보류 중인 예외가 없습니다.':XTAB==='ign'?'무시한 예외가 없습니다.':XTAB==='plag'?'도용으로 올린 리뷰가 없습니다.':'처리 완료된 예외가 없습니다.')+'</div>'; return; }
     var byD={}; items.forEach(function(x){ var d=x.d||'날짜 없음'; (byD[d]||(byD[d]=[])).push(x); });
     var tot={}; items.forEach(function(x){ tot[x.kind]=(tot[x.kind]||0)+1; });
     sum.innerHTML='<div class="xday" style="margin-top:0">'+XTABNAME[XTAB]+' '+items.length+'건 '
@@ -2199,10 +2218,10 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
           return '<div class="xrow'+(ig?' ign':'')+'"><span class="xk '+esc(x.kind)+'">'+esc(XKIND[x.kind]||x.kind||'')+'</span>'
             +'<a href="https://cms.unpa.me/review/detail/'+encodeURIComponent(x.id)+'" target="_blank" rel="noopener"><b>'+esc(x.brand||'')+'</b> / '+esc(x.product||'')+' <span style="color:var(--dim)">#'+esc(x.id)+' ↗</span></a>'
             +'<span class="xact">'
-            +(ig ? '<span class="xk ign">무시</span><button class="xbtn back" data-xign="'+esc(x.id)+'" data-on="0" title="'+esc(XTABNAME[xBase(x)])+'로 되돌립니다">↩ 복원</button>'
+            +(ig ? '<span class="xk ign">무시</span><button class="xbtn back" data-xign="'+esc(x.id)+'" data-on="0" title="'+esc(xRo(XTABNAME[xHome(x)]))+' 되돌립니다">↩ 복원</button>'
                  : '<span class="xk '+(xBase(x)==='done'?'done':'')+'">'+esc(XST[x.status]||x.status||'')+'</span><button class="xbtn" data-xign="'+esc(x.id)+'" data-on="1" title="무시 탭으로 옮깁니다 (복원 가능)">무시</button>')
             +'</span>'
-            +(x.reason||ig?'<span class="why">'+(ig?'<b>무시 '+esc(xWhen(x.ignAt))+(x.ignBy==='claude'?' · Claude':x.ignBy==='user'?' · 직접':'')+'</b> — 복원하면 '+esc(XTABNAME[xBase(x)])+'로 돌아갑니다'+(x.reason?'<br>':''):'')+esc(x.reason||'')+'</span>':'')+'</div>';
+            +(x.reason||ig||xSrc(x)?'<span class="why">'+(ig?'<b>무시 '+esc(xWhen(x.ignAt))+(x.ignBy==='claude'?' · Claude':x.ignBy==='user'?' · 직접':'')+'</b> — 복원하면 '+esc(xRo(XTABNAME[xHome(x)]))+' 돌아갑니다'+(x.reason?'<br>':''):'')+esc(x.reason||'')+xSrc(x)+'</span>':'')+'</div>';
         }).join('');
     }).join('');
   }
@@ -2225,7 +2244,7 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
     var b=e.target.closest('[data-xign]'); if(!b) return;
     var on=b.dataset.on==='1', id=b.dataset.xign, x=xLoad().items[id];
     if(!x || !xIgnore(id, on, 'user')) return;
-    toast(on ? '무시 탭으로 옮겼습니다 — 무시 탭의 ↩ 복원으로 되돌릴 수 있어요' : '복원했습니다 — '+XTABNAME[xBase(x)]+' 탭으로 돌아갔어요');
+    toast(on ? '무시 탭으로 옮겼습니다 — 무시 탭의 ↩ 복원으로 되돌릴 수 있어요' : '복원했습니다 — '+XTABNAME[xHome(x)]+' 탭으로 돌아갔어요');
     pushExc();
   });
   /* 서버 '~exc' 행과 합쳐 올린다 — 다른 기기가 먼저 올렸으면 받아 합친 뒤 한 번 더 */

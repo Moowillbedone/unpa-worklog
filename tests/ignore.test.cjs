@@ -40,16 +40,16 @@ const base={
   '481030':{id:'481030',d:'2026-10-10',kind:'overseas',status:'done',brand:'더마 씨루어',product:'아이크림',reason:'승인',at:'2026-10-14T00:00:00Z'},
 };
 
-test('the 검수 예외 tabs are 보류 / 처리 완료 / 전체 / 무시, and 무시 moves a row out of 보류 into its own tab',()=>{
+test('the 검수 예외 tabs are 보류 / 처리 완료 / 도용 / 전체 / 무시, and 무시 moves a row out of 보류 into its own tab',()=>{
   const t=excCtx(JSON.parse(JSON.stringify(base)));
-  assert.equal(JSON.stringify(t.tabs()),JSON.stringify({hold:2,done:1,all:3,ign:0}));
+  assert.equal(JSON.stringify(t.tabs()),JSON.stringify({hold:2,done:1,plag:0,all:3,ign:0}));
   assert.match(t.els.excBody.innerHTML,/data-xign="478039" data-on="1"[^>]*>무시</);
   t.click('478039',true);
   const x=t.items()['478039'];
   assert.equal(x.ign,true); assert.equal(x.ignBy,'user'); assert.equal(x.status,'hold','상태는 그대로 둔다');
   assert.equal(x.at,'2026-10-14T00:00:00Z','상태 시각은 그대로 — 다른 기기에서 고친 상태를 덮지 않게');
   assert.ok(x.ignUpd>'2026-10-14T00:00:00Z','무시는 자기 시각으로 합쳐진다');
-  assert.equal(JSON.stringify(t.tabs()),JSON.stringify({hold:1,done:1,all:3,ign:1}));
+  assert.equal(JSON.stringify(t.tabs()),JSON.stringify({hold:1,done:1,plag:0,all:3,ign:1}));
   assert.doesNotMatch(t.els.excBody.innerHTML,/#478039/,'보류 탭에서는 사라진다');
   assert.ok(t.ctx.badge>0,'✏️ 배지도 다시 센다');
   assert.match(t.toasts.at(-1),/무시 탭/);
@@ -64,13 +64,13 @@ test('복원 puts a row back where it was, without touching its status',()=>{
   const items=JSON.parse(JSON.stringify(base));
   items['481030'].ign=true; items['481030'].ignAt='2026-10-14T01:00:00Z'; items['481030'].ignBy='claude';
   const t=excCtx(items);
-  assert.equal(JSON.stringify(t.tabs()),JSON.stringify({hold:2,done:0,all:3,ign:1}));
+  assert.equal(JSON.stringify(t.tabs()),JSON.stringify({hold:2,done:0,plag:0,all:3,ign:1}));
   t.ctx.__tab('ign');
   assert.match(t.els.excBody.innerHTML,/· Claude/,'누가 무시했는지 보인다');
   t.click('481030',false);
   const x=t.items()['481030'];
   assert.equal(x.ign,false); assert.equal(x.ignAt,undefined); assert.equal(x.ignBy,undefined); assert.equal(x.status,'done');
-  assert.equal(JSON.stringify(t.tabs()),JSON.stringify({hold:2,done:1,all:3,ign:0}));
+  assert.equal(JSON.stringify(t.tabs()),JSON.stringify({hold:2,done:1,plag:0,all:3,ign:0}));
   assert.match(t.toasts.at(-1),/처리 완료 탭으로 돌아갔어요/);
   assert.match(t.els.excBody.innerHTML,/무시한 예외가 없습니다/);
 });
@@ -265,4 +265,56 @@ test('reviews scanned before the ignored list arrived are dropped, and are never
   assert.equal(JSON.stringify(ctx.api.getResults().map(r=>r.id)),'[477000,481077]','이미 처리한 건은 기록으로 남긴다');
   await ctx.api.runJobs([{id:478039,action:'revise_product'}]);
   assert.match(ctx.__alert,/무시한 리뷰입니다/);
+});
+
+test('도용 (plagiarism) gets its own tab and a dark-red label, whatever its status, and 무시·복원 brings it back to 도용',()=>{
+  const items=JSON.parse(JSON.stringify(base));
+  items['482750']={id:'482750',d:'2026-10-14',kind:'plagiarism',status:'sent',brand:'존슨즈',product:'핑크 로션',reason:'477042 본문 그대로',at:'2026-10-17T00:00:00Z'};
+  items['482754']={id:'482754',d:'2026-10-14',kind:'plagiarism',status:'hold',brand:'김정문알로에',product:'에멀전 S',reason:'482753 본문 복사',at:'2026-10-17T00:00:00Z'};
+  const t=excCtx(items);
+  assert.equal(JSON.stringify(t.tabs()),JSON.stringify({hold:2,done:1,plag:2,all:5,ign:0}),'보류 상태여도 도용은 보류 탭이 아니라 도용 탭에');
+  assert.doesNotMatch(t.els.excBody.innerHTML,/#482754/,'보류 탭에 섞이지 않는다');
+  t.ctx.__tab('plag');
+  assert.match(t.els.excBody.innerHTML,/<span class="xk plagiarism">도용<\/span>/);
+  assert.match(t.els.excBody.innerHTML,/#482750/); assert.match(t.els.excBody.innerHTML,/#482754/);
+  assert.match(t.els.excSum.innerHTML,/도용 2건/);
+  t.ctx.__tab('done');
+  assert.doesNotMatch(t.els.excBody.innerHTML,/#482750/,'수정요청 보냄이어도 처리 완료 탭에는 안 나온다');
+  t.ctx.__tab('plag');
+  t.click('482750',true);
+  assert.equal(JSON.stringify(t.tabs()),JSON.stringify({hold:2,done:1,plag:1,all:5,ign:1}));
+  t.ctx.__tab('ign');
+  assert.match(t.els.excBody.innerHTML,/복원하면 도용으로 돌아갑니다/);
+  assert.match(t.els.excBody.innerHTML,/title="도용으로 되돌립니다"/);
+  t.click('482750',false);
+  assert.match(t.toasts.at(-1),/도용 탭으로 돌아갔어요/);
+  assert.equal(JSON.stringify(t.tabs()),JSON.stringify({hold:2,done:1,plag:2,all:5,ign:0}));
+  t.ctx.__tab('plag'); t.items();
+  const empty=excCtx(JSON.parse(JSON.stringify(base))); empty.ctx.__tab('plag');
+  assert.match(empty.els.excBody.innerHTML,/도용으로 올린 리뷰가 없습니다/);
+});
+
+test('the 도용 label is a dark red chip like the other kind labels',()=>{
+  const css=html.match(/\.xk\.plagiarism\{([^}]*)\}/);
+  assert.ok(css,'.xk.plagiarism 스타일이 있다');
+  assert.match(css[1],/background:#8f1d1d/); assert.match(css[1],/color:#fff/);
+  assert.match(html,/plagiarism:'도용'/);
+});
+
+test('도용 rows carry source links (original review / article); only http(s) addresses become links',()=>{
+  const items={
+    '482750':{id:'482750',d:'2026-10-14',kind:'plagiarism',status:'sent',brand:'존슨즈',product:'핑크 로션',reason:'본문 그대로',
+      src:[{u:'https://cms.unpa.me/review/detail/477042',t:'원본 리뷰 #477042'}],at:'2026-10-17T00:00:00Z'},
+    '483314':{id:'483314',d:'2026-10-16',kind:'plagiarism',status:'hold',brand:'벨먼',product:'바디로션',reason:'',
+      src:['https://kpinews.kr/newsView/1065577882459078'],at:'2026-10-17T00:00:00Z'},
+    '1':{id:'1',d:'2026-10-16',kind:'plagiarism',status:'hold',brand:'x',product:'y',reason:'r',src:[{u:'javascript:alert(1)',t:'bad'},{u:'https://a.example/"><b>x',t:'<i>t</i>'}],at:'2026-10-17T00:00:00Z'},
+  };
+  const t=excCtx(items); t.ctx.__tab('plag');
+  const h=t.els.excBody.innerHTML;
+  assert.match(h,/🔗 근거 <a href="https:\/\/cms\.unpa\.me\/review\/detail\/477042" target="_blank" rel="noopener noreferrer">원본 리뷰 #477042 ↗<\/a>/);
+  assert.match(h,/<a href="https:\/\/kpinews\.kr\/newsView\/1065577882459078"[^>]*>https:\/\/kpinews\.kr\/newsView\/1065577882459078 ↗<\/a>/,'이름이 없으면 주소를 보여 준다, 사유가 비어 있어도');
+  assert.doesNotMatch(h,/javascript:/,'http(s) 아닌 주소는 버린다');
+  assert.doesNotMatch(h,/<i>t<\/i>/,'이름은 이스케이프');
+  assert.match(h,/href="https:\/\/a\.example\/&quot;&gt;&lt;b&gt;x"/,'주소도 이스케이프 — 속성을 깨고 나오지 못한다');
+  assert.match(h,/&lt;i&gt;t&lt;\/i&gt;/);
 });

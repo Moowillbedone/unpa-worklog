@@ -59,3 +59,18 @@ test('the header button, the modal and its copy button are wired to the same tex
   const badge=html.split('function renderUpdBadge(){')[1].split('\n}')[0];
   assert.match(badge,/renderAsk\(\);/);
 });
+
+test('the 컨펌 대기 hint counts 보류 and 도용 separately, matching the 검수 예외 tabs',()=>{
+  const fn=html.split('function askWaiting(ex){')[1].split('\nfunction askLoad')[0];
+  const ctx={Object}; vm.createContext(ctx); vm.runInContext('function askWaiting(ex){'+fn+';globalThis.f=askWaiting;',ctx);
+  const n=ex=>JSON.parse(JSON.stringify(ctx.f(ex)));
+  assert.deepEqual(n({items:{
+    '483314':{id:'483314',kind:'plagiarism',status:'hold'},      /* 도용인데 아직 컨펌 대기 → 도용 탭 */
+    '482750':{id:'482750',kind:'plagiarism',status:'sent'},      /* 수정요청 보냄 → 대기 아님 */
+    '483589':{id:'483589',kind:'medicine',status:'hold'},
+    '483418':{id:'483418',kind:'no_price',status:'listed'},
+    '478039':{id:'478039',kind:'other',status:'hold',ign:true},  /* 무시 → 안 셈 */
+  }}),{hold:2,plag:1});
+  assert.deepEqual(n(null),{hold:0,plag:0});
+  assert.match(html,/검수 예외의 '\+waitTabs\+' 탭에서/,'안내 문구가 보류·도용 탭 이름을 함께 말한다');
+});
