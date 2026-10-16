@@ -1890,12 +1890,12 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
     if(!items.length){ sum.innerHTML=''; body.innerHTML='<div class="warn">'+(XTAB==='hold'?'보류 중인 예외가 없습니다.':XTAB==='ign'?'무시한 예외가 없습니다.':XTAB==='plag'?'도용으로 올린 리뷰가 없습니다.':'처리 완료된 예외가 없습니다.')+'</div>'; return; }
     var byD={}; items.forEach(function(x){ var d=x.d||'날짜 없음'; (byD[d]||(byD[d]=[])).push(x); });
     var tot={}; items.forEach(function(x){ tot[x.kind]=(tot[x.kind]||0)+1; });
-    sum.innerHTML='<div class="xday" style="margin-top:0">'+XTABNAME[XTAB]+' '+items.length+'건 '
-      +Object.keys(XKIND).filter(function(k){ return tot[k]; }).map(function(k){ return '<span class="xk '+k+'">'+XKIND[k]+' '+tot[k]+'</span>'; }).join(' ')+'</div>';
+    /* 종류별 개수 칩 — 도용 탭은 전부 도용이라 같은 라벨이 반복돼 빼고, 각 줄 앞 라벨만 둔다 */
+    var kinds=function(c){ return XTAB==='plag' ? '' : Object.keys(XKIND).filter(function(k){ return c[k]; }).map(function(k){ return '<span class="xk '+k+'">'+XKIND[k]+' '+c[k]+'</span>'; }).join(' '); };
+    sum.innerHTML='<div class="xday" style="margin-top:0">'+XTABNAME[XTAB]+' '+items.length+'건 '+kinds(tot)+'</div>';
     body.innerHTML=Object.keys(byD).sort().reverse().map(function(d){
       var list=byD[d], cnt={}; list.forEach(function(x){ cnt[x.kind]=(cnt[x.kind]||0)+1; });
-      return '<div class="xday">'+esc(/^\d{4}-\d{2}-\d{2}$/.test(d)?md(d)+' 작성':d)+' · '+list.length+'건 '
-        +Object.keys(XKIND).filter(function(k){ return cnt[k]; }).map(function(k){ return '<span class="xk '+k+'">'+XKIND[k]+' '+cnt[k]+'</span>'; }).join(' ')+'</div>'
+      return '<div class="xday">'+esc(/^\d{4}-\d{2}-\d{2}$/.test(d)?md(d)+' 작성':d)+' · '+list.length+'건 '+kinds(cnt)+'</div>'
         +list.sort(function(a,b){ return String(a.id)<String(b.id)?-1:1; }).map(function(x){
           var ig=x.ign===true;
           return '<div class="xrow'+(ig?' ign':'')+'"><span class="xk '+esc(x.kind)+'">'+esc(XKIND[x.kind]||x.kind||'')+'</span>'

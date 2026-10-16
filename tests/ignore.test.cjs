@@ -278,8 +278,13 @@ test('도용 (plagiarism) gets its own tab and a dark-red label, whatever its st
   assert.match(t.els.excBody.innerHTML,/<span class="xk plagiarism">도용<\/span>/);
   assert.match(t.els.excBody.innerHTML,/#482750/); assert.match(t.els.excBody.innerHTML,/#482754/);
   assert.match(t.els.excSum.innerHTML,/도용 2건/);
+  assert.doesNotMatch(t.els.excSum.innerHTML,/xk plagiarism/,'도용 탭 합계 옆에는 [도용 N] 칩을 안 붙인다');
+  assert.doesNotMatch(t.els.excBody.innerHTML,/<div class="xday">[^<]*<span class="xk/,'날짜 줄에도 종류 칩이 없다');
+  assert.match(t.els.excBody.innerHTML,/<span class="xk plagiarism">도용<\/span><a /,'각 줄 앞 도용 라벨은 남긴다');
   t.ctx.__tab('done');
   assert.doesNotMatch(t.els.excBody.innerHTML,/#482750/,'수정요청 보냄이어도 처리 완료 탭에는 안 나온다');
+  t.ctx.__tab('all');
+  assert.match(t.els.excSum.innerHTML,/<span class="xk plagiarism">도용 2<\/span>/,'전체 탭에서는 종류별 칩을 그대로 보여 준다');
   t.ctx.__tab('plag');
   t.click('482750',true);
   assert.equal(JSON.stringify(t.tabs()),JSON.stringify({hold:2,done:1,plag:1,all:5,ign:1}));
