@@ -447,6 +447,12 @@ td input.memo.auto{box-shadow:inset 3px 0 0 var(--mint,#3ddc97);font-weight:700}
 .btn.ghost.updb{color:var(--amber);border-color:#efcf94;background:var(--amber-lt)}
 .btn.ghost.updb:hover{color:#8a5a0b;border-color:var(--amber)}
 .btn.ghost.updb b{font-weight:800;margin-left:2px}
+.btn.ghost.askb{color:var(--mint-dk);border-color:#a9dcc6;background:var(--mint-lt)}
+.btn.ghost.askb:hover{color:var(--mint-dk);border-color:var(--mint)}
+.btn.ghost.askb b{font-weight:800;margin-left:2px}
+.btn.ghost.askb b:empty{display:none}
+.askbox{white-space:pre-wrap;word-break:break-all;padding:12px 14px;border:1px solid var(--line2);border-radius:var(--r2);background:var(--raise);font-size:13.5px;line-height:1.55;font-weight:600}
+.askbox.none{color:var(--dim);font-weight:500}
 .updday{font-size:12.5px;font-weight:800;color:var(--tx);margin:12px 0 2px}
 .updday:first-child{margin-top:0}
 .evrow a{color:var(--mint-dk);font-weight:700;text-decoration:none;min-width:74px}
@@ -584,6 +590,7 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
     </div>
     <button class="btn ghost" id="today">오늘로</button>
     <button class="btn ghost updb" id="updBadge" hidden title="유저가 수정완료한 리뷰 — 눌러서 목록 보기">✏️ 수정완료<b id="updBadgeN">0</b></button>
+    <button class="btn ghost askb" id="askBtn" title="채팅에 붙여 넣을 검수 요청 문구 — 남은 새 리뷰 날짜와 수정완료 번호를 담아 복사">📋 요청 문구<b id="askN"></b></button>
     <button class="btn" id="updBtn" title="CMS 기준으로 리뷰·제품 수, 금액, 미등록 제품수를 다시 채웁니다">🔄 업데이트</button>
     <button class="btn ghost" id="sbBtn" title="기기 간 동기화">☁️ 동기화</button>
     <button class="btn ghost" id="imp" title="백업 JSON 불러오기">가져오기</button>
@@ -817,6 +824,27 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
       </div>
       <div class="mact">
         <button class="btn" id="updListCopy">채팅용으로 복사</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="mask" id="askMask" hidden>
+  <div class="modal">
+    <div class="mhd">
+      <h3>📋 Claude에게 보낼 검수 요청</h3>
+      <button class="mx" id="askClose" title="닫기">✕</button>
+    </div>
+    <div class="mbd">
+      <div class="stat off" id="askHint">확인 중…</div>
+      <div class="askbox" id="askText"></div>
+      <div id="askBody"></div>
+      <div class="step" style="font-size:12.3px">
+        맨 앞의 <b>언파 검수</b>가 우리 키워드입니다. 이 문구를 채팅에 붙여 넣으면 적힌 날짜의 새 리뷰를 끝까지(승인·수정요청·미노출·제품/브랜드 등록) 처리하고, 수정완료 건은 다시 검토합니다.
+        숫자는 마지막 🔄 업데이트 기준이라, 오래됐으면 업데이트를 먼저 누르세요. 검수 예외에 올라간 건(보류·무시)은 새 리뷰에서 뺍니다.
+      </div>
+      <div class="mact">
+        <button class="btn" id="askCopy">채팅용으로 복사</button>
       </div>
     </div>
   </div>
@@ -1421,6 +1449,7 @@ function renderUpdBadge(){
   const n=updatedReviews().list.length;
   $('#updBadge').hidden=!n; $('#updBadgeN').textContent=n;
   if(!$('#updListMask').hidden) renderUpdList();
+  renderAsk();   /* 📋 요청 문구도 같은 목록을 쓴다 */
 }
 window.renderUpdBadge=renderUpdBadge;
 $('#updBadge').onclick=()=>{ renderUpdList(); $('#updListMask').hidden=false; };
@@ -1434,6 +1463,55 @@ $('#updListCopy').onclick=async()=>{
 };
 /* 동기화 창(sync.html)이 남은 검수 목록을 새로 쓰면 배지도 다시 센다 */
 window.addEventListener('storage',e=>{ if(e.key==='unpa-pending-v1'||e.key==='unpa-exceptions-v1'||e.key===null) renderUpdBadge(); });
+
+/* ── 📋 요청 문구 ──
+   채팅에 붙여 넣을 한 줄. 키워드 '언파 검수'로 시작하고, CMS 에 남은 새 리뷰(작성일별 건수)와 유저 수정완료 번호를 담는다.
+   새 리뷰 = 남은 목록(backlog)에서 수정완료·정지 사용자·검수 예외에 올린 건(보류·무시 — 이미 아는 건)을 뺀 것.
+   수정완료 = ✏️ 배지와 같은 기준(무시한 건만 뺀다). */
+function askWork(o,ex){
+  const items=(ex&&ex.items)||{}, rows=(o&&Array.isArray(o.backlog))?o.backlog:[], days={}, upd=[];
+  rows.forEach(x=>{
+    if(!x||!x.id||x.blocked) return;
+    const e=items[x.id];
+    if(x.status==='UPDATED'){ if(!(e&&e.ign===true)) upd.push(String(x.id)); return; }
+    if(e||!/^\d{4}-\d{2}-\d{2}$/.test(x.d)) return;
+    days[x.d]=(days[x.d]||0)+1;
+  });
+  const dates=Object.keys(days).sort().map(d=>({d,n:days[d]})), n=dates.reduce((a,x)=>a+x.n,0);
+  const mdd=d=>(+d.slice(5,7))+'/'+(+d.slice(8,10)), parts=[];
+  if(dates.length) parts.push(dates.map(x=>mdd(x.d)+' '+x.n+'건').join(' · ')+' 전체 진행해줘 (승인·수정요청·미노출·제품/브랜드 등록까지)');
+  if(upd.length) parts.push('수정완료 '+upd.length+'건 검토해줘: '+upd.join(', '));
+  return {at:(o&&o.at)||null, dates, n, upd, text:parts.length?'언파 검수 — '+parts.join(' / '):''};
+}
+function askLoad(){
+  let o=null, ex=null;
+  try{ o=JSON.parse(localStorage.getItem('unpa-pending-v1')||'null'); }catch(e){}
+  try{ ex=JSON.parse(localStorage.getItem('unpa-exceptions-v1')||'null'); }catch(e){}
+  return askWork(o,ex);
+}
+function renderAsk(){
+  const w=askLoad(), p2=n=>String(n).padStart(2,'0'), t=w.at?new Date(w.at):null;
+  $('#askN').textContent=(w.n+w.upd.length)||'';
+  if($('#askMask').hidden) return;
+  let hold=0;
+  try{ const ex=JSON.parse(localStorage.getItem('unpa-exceptions-v1')||'null'); Object.values((ex&&ex.items)||{}).forEach(x=>{ if(x&&x.ign!==true&&(x.status==='hold'||x.status==='listed')) hold++; }); }catch(e){}
+  $('#askHint').innerHTML=(t&&isFinite(t)?'CMS 기준 <b>'+p2(t.getMonth()+1)+'-'+p2(t.getDate())+' '+p2(t.getHours())+':'+p2(t.getMinutes())+'</b> 확인':'아직 CMS에서 확인한 적이 없습니다 — 🔄 업데이트를 먼저 눌러 주세요')
+    +' · 새 리뷰 <b>'+w.n+'</b>건 · 수정완료 <b>'+w.upd.length+'</b>건';
+  $('#askText').className='askbox'+(w.text?'':' none');
+  $('#askText').textContent=w.text||'남은 새 리뷰도, 수정완료 건도 없습니다 🎉';
+  $('#askBody').innerHTML=hold?'<div class="step" style="font-size:12.3px;color:var(--amber)">검수 예외에 컨펌을 기다리는 건이 <b>'+hold+'</b>건 있어요 — 🚩 검수 예외 탭에서 보고 채팅으로 알려 주세요.</div>':'';
+  $('#askCopy').disabled=!w.text;
+}
+window.renderAsk=renderAsk;
+$('#askBtn').onclick=()=>{ $('#askMask').hidden=false; renderAsk(); };
+$('#askClose').onclick=()=>{ $('#askMask').hidden=true; };
+$('#askMask').addEventListener('click',e=>{ if(e.target===$('#askMask')) $('#askMask').hidden=true; });
+$('#askCopy').onclick=async()=>{
+  const {text}=askLoad();
+  if(!text){ toast('복사할 검수 요청이 없습니다'); return; }
+  try{ await navigator.clipboard.writeText(text); toast('복사됨 — 채팅에 붙여넣으세요'); }catch(e){ toast('복사 실패 — '+text,true); }
+};
+window.addEventListener('storage',e=>{ if(e.key==='unpa-pending-v1'||e.key==='unpa-exceptions-v1'||e.key===null) renderAsk(); });
 
 /* ── 초기화 ── */
 cur = TODAY_M;
