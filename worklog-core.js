@@ -50,11 +50,28 @@
     /* 새 달의 목표는 직전 달 것을 이어받는다 (사람이 바꾼 목표가 다음 달에도 그대로) */
     const carry=m=>{const prev=Object.keys(out).filter(k=>k<m&&out[k]&&integer(out[k].target)).sort().pop();return prev?out[prev].target:target;};
     const mon=m=>{if(!out[m])out[m]=blankMonth(m,carry(m));const t=out[m];if(!t.days)t.days={};const n=new Date(Date.UTC(+m.slice(0,4),+m.slice(5,7),0)).getUTCDate();for(let i=1;i<=n;i++)if(!t.days[pad2(i)])t.days[pad2(i)]={r:0,p:0,memo:'',unreg:''};if(t.target==null)t.target=carry(m);return t;};
-    for(const k of ['r','p'])for(const [id,d] of lists[k]){
-      if(d<p.from||d>p.to)continue;
-      const t=mon(d.slice(0,7));t._auto=t._auto||{r:{},p:{}};t._auto[k]=t._auto[k]||{};
-      const day=t._auto[k][d.slice(8)]||(t._auto[k][d.slice(8)]=[]);
-      if(day.indexOf(String(id))<0)day.push(String(id));
+    /* 한 번호는 한 날에만 센다 — 콘솔 보관함(내 컴퓨터 날짜)과 CMS 집계(승인 시각)의 날짜가 다르거나, 같은 리뷰가 다시 승인돼
+       날짜가 바뀌어도 수입이 두 번 들어가지 않게. 이번에 들어온 목록은 CMS 집계가 앞, 보관함이 뒤라 먼저 온 날짜를 쓰고,
+       예전 동기화가 다른 날에 둔 번호는 새 날짜로 옮긴다(옛 날이 이번 범위 밖이면 옮기지 않고 그대로 둔다). */
+    for(const k of ['r','p']){
+      const where={},placed=new Set();
+      for(const m of Object.keys(out)){const a=out[m]&&out[m]._auto&&out[m]._auto[k];if(!a)continue;
+        for(const dd of Object.keys(a))for(const x of (a[dd]||[]))where[String(x)]=m+'-'+dd;}
+      for(const [id0,d] of lists[k]){
+        if(d<p.from||d>p.to)continue;
+        const id=String(id0);
+        if(placed.has(id))continue;
+        const prev=where[id];
+        if(prev&&prev!==d){
+          if(prev<p.from||prev>p.to){placed.add(id);continue;}
+          const pa=out[prev.slice(0,7)]._auto[k],pl=pa[prev.slice(8)]||[];
+          pa[prev.slice(8)]=pl.filter(x=>String(x)!==id);
+        }
+        const t=mon(d.slice(0,7));t._auto=t._auto||{r:{},p:{}};t._auto[k]=t._auto[k]||{};
+        const day=t._auto[k][d.slice(8)]||(t._auto[k][d.slice(8)]=[]);
+        if(day.indexOf(id)<0)day.push(id);
+        where[id]=d;placed.add(id);
+      }
     }
     const changes=[],touched=new Set();
     for(let d=p.from;d<=p.to;d=nextDay(d)){
@@ -308,7 +325,10 @@
     /* 이번 달 목표·수입 — 콘솔이 목표 금액 안에서만 승인하도록 (단가는 업무일지와 같게 리뷰 500 · 제품 600) */
     let goal=null;
     try{const fin=JSON.parse(store.getItem(key)),mk=p.work.to.slice(0,7),md=fin&&fin.months&&fin.months[mk];
-      if(md&&integer(md.target)){let r=0,pp=0;Object.values(md.days||{}).forEach(d=>{r+=d.r||0;pp+=d.p||0;});goal={month:mk,target:md.target,r,p:pp,won:r*500+pp*600};}}catch(e){}
+      if(md&&integer(md.target)){let r=0,pp=0;Object.values(md.days||{}).forEach(d=>{r+=d.r||0;pp+=d.p||0;});
+        /* 이번 달 수입에 이미 들어간 리뷰·제품 번호 — 목표 가드가 "아직 안 센 승인"만 더하도록 번호로 대조한다 */
+        const ids=k=>{const a=(md._auto&&md._auto[k])||{},out=new Set();Object.values(a).forEach(l=>(l||[]).forEach(x=>out.add(String(x))));return [...out];};
+        goal={month:mk,target:md.target,r,p:pp,won:r*500+pp*600,ids:{r:ids('r'),p:ids('p')}};}}catch(e){}
     return {ok:true,today:res.today,changes:res.changes.slice(0,20),nChanges:res.changes.length,auditDays,auditError,cloud,console:consoleOut,remain,
             verdicts:verdictsFor(audit,p.backlog),goal};
   }

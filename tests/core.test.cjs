@@ -455,7 +455,9 @@ test('the sync window hands the console this month\'s target and income',async()
   const s=fakeStore();
   s.setItem('unpa-worklog-v1',JSON.stringify({v:1,months:{'2026-09':Object.assign(monthOf('2026-09'),{target:1430000})},dirty:[]}));
   const r=await W.syncWindow(s,{v:1,seq:1,work:{v:1,from:'2026-09-01',to:'2026-09-30',reviews:[['1','2026-09-30'],['2','2026-09-29']],products:[['9','2026-09-29']]}},null,{now:new Date('2026-09-30T12:00:00Z')});
-  assert.deepEqual(r.goal,{month:'2026-09',target:1430000,r:2,p:1,won:1600});
+  assert.deepEqual({...r.goal,ids:undefined},{month:'2026-09',target:1430000,r:2,p:1,won:1600,ids:undefined});
+  /* 이번 달 수입에 이미 들어간 번호 — 목표 가드가 같은 승인을 두 번 세지 않게 */
+  assert.deepEqual([...r.goal.ids.r].sort(),['1','2']); assert.deepEqual(r.goal.ids.p,['9']);
 });
 test('remaining reviews per even date fill the 미등록 제품수 column without erasing notes',()=>{
   const base={'2026-09':monthOf('2026-09',{'14':{r:0,p:0,memo:'',unreg:'유민지'},'20':{r:0,p:0,memo:'',unreg:'24'},'26':{r:0,p:0,memo:'',unreg:'5'},'30':{r:47,p:0,memo:'',unreg:'이월'}})};
@@ -511,4 +513,15 @@ test('review exceptions merge per review, the later edit wins, nothing is lost a
   assert.equal(m.items['478541'].status,'sent','나중에 고친 상태가 이긴다');
   assert.deepEqual(C.mergeExceptions(null,home).items,home.items);
   assert.deepEqual(C.mergeExceptions(work,undefined).items,work.items);
+});
+
+test('a review id is counted on one day only: the console outbox day and the CMS approval day may differ, and a re-approval moves it',async()=>{
+  const s=fakeStore();
+  s.setItem('unpa-worklog-v1',JSON.stringify({v:1,months:{'2026-10':Object.assign(monthOf('2026-10'),{target:1000})},dirty:[]}));
+  /* CMS 집계는 18일, 콘솔 보관함(내 컴퓨터 시계)은 19일로 같은 리뷰를 넘김 */
+  let r=await W.syncWindow(s,{v:1,seq:1,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[['1','2026-10-18'],['1','2026-10-19'],['2','2026-10-05']],products:[]}},null,{now:new Date('2026-10-19T12:00:00Z')});
+  assert.equal(r.goal.won,1000,'두 건 — 1번을 두 번 세지 않는다'); assert.deepEqual([...r.goal.ids.r].sort(),['1','2']);
+  /* 2번이 다시 대기로 돌아왔다가 19일에 또 승인됨 → 19일로 옮겨 한 번만 */
+  r=await W.syncWindow(s,{v:1,seq:2,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[['2','2026-10-19']],products:[]}},null,{now:new Date('2026-10-19T13:00:00Z')});
+  assert.equal(r.goal.won,1000); assert.equal(r.goal.r,2);
 });

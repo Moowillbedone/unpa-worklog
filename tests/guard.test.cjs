@@ -8,16 +8,16 @@ const code=fs.readFileSync(path.join(__dirname,'..','cms-claude.js'),'utf8');
 
 const COUNTED='2026-10-18T11:50:00Z';                 /* CMS 집계를 시작한 시각 */
 const NOW='2026-10-18T12:30:00Z';                     /* 40분 뒤 (KST 21:30) */
-const goal=(over)=>Object.assign({at:'2026-10-18T11:54:29Z',countedAt:COUNTED,partial:false,month:'2026-10',target:1430000,r:1646,p:120,won:895000},over||{});
+const goal=(over)=>Object.assign({at:'2026-10-18T11:54:29Z',countedAt:COUNTED,partial:false,month:'2026-10',target:1430000,r:1646,p:120,won:895000,ids:{r:['482561','100'],p:[]}},over||{});
 const plain=x=>JSON.parse(JSON.stringify(x));
 
 /* 가드만 (DOM 없음) */
-function guard(g, nowIso, extra){
+function guard(g, nowIso, extra, onGet){
   const store={};
   if(g) store['unpa-console-goal-v1']=JSON.stringify(g);
   Object.assign(store, extra||{});
   const clock={now:Date.parse(nowIso)};
-  const ctx={localStorage:{getItem:k=>store[k]===undefined?null:store[k],setItem:(k,v)=>{store[k]=String(v);}},Date,JSON,Math,Object,String,isFinite};
+  const ctx={localStorage:{getItem:k=>{ if(onGet) onGet(k,store); return store[k]===undefined?null:store[k]; },setItem:(k,v)=>{store[k]=String(v);}},Date,JSON,Math,Object,String,isFinite,Set};
   ctx.__unpaNow=()=>clock.now;
   vm.createContext(ctx); vm.runInContext(code,ctx);
   return {G:ctx.UnpaGuard,store,clock,ledger:()=>JSON.parse(store['unpa-claude-ledger-v1']||'{"items":{}}')};
@@ -79,6 +79,7 @@ test('refuses everything when the goal is unknown, last month\'s, partial, missi
     [goal({countedAt:'2026-10-18T14:00:00Z'}),/미래입니다/],
     [goal({target:0}),/목표 정보가 없습니다/],
     [goal({won:-5}),/목표 정보가 없습니다/],
+    [goal({ids:undefined}),/리뷰 번호 목록이 없습니다/],
   ];
   for(const [g,re] of cases){ const {G}=guard(g,NOW); assert.equal(G.status().ok,false); assert.match(G.reserve('r','1').why,re); }
 });
@@ -89,18 +90,45 @@ test('month boundary is Korean time: 10/31 15:30 UTC is already 11/1 in Korea',(
   assert.match(G.status().why,/이번 달\(2026-11\)/);
 });
 
-test('counts everything done after the CMS count started (5-minute safety margin), not after the sync finished',()=>{
+test('approvals count by review number: this month and not yet in the worklog total — no time guessing',()=>{
   const c=Date.parse(COUNTED);
-  const items={'r:old':{k:'r',t:c-60*60e3},'r:edge':{k:'r',t:c-3*60e3},'p:after':{k:'p',t:c+20*60e3}};
+  const items={'r:100':{k:'r',t:c+5*60e3},                        /* 업무일지 합계에 이미 있음 → 빼기 */
+               'r:old':{k:'r',t:c-6*3600e3},                      /* 집계 한참 전이어도 합계에 없으면 센다 (60일 밖 리뷰 등) */
+               'r:sep':{k:'r',t:Date.parse('2026-09-30T10:00:00Z')}, /* 지난달 승인 — 이번 달 수입 아님 */
+               'p:before':{k:'p',t:c-60*60e3},                    /* 제품은 시각으로: 집계 전 등록은 이미 합계에 */
+               'p:edge':{k:'p',t:c-3*60e3},'p:after':{k:'p',t:c+20*60e3}};
   const {G}=guard(goal(),NOW,{'unpa-claude-ledger-v1':JSON.stringify({v:1,items})});
-  assert.equal(G.status().spent,1100,'집계 1시간 전 것은 이미 won 에 들어 있어 빼고, 집계 3분 전·뒤 것은 센다');
+  const s=G.status();
+  assert.equal(s.spent,500+600+600); assert.deepEqual(plain(s.n),{r:1,p:2,c:0});
+});
+
+test('a sync in the middle of a run neither drops nor double counts: approvals already in the new total stop counting, the rest stay',()=>{
+  const {G,store,clock}=guard(goal(),NOW);
+  ['a','b','c'].forEach(id=>assert.equal(G.reserve('r',id).ok,true));
+  assert.equal(G.status().won,896500);
+  /* 새 동기화: a·b 는 업무일지에 들어감(won +1000), c 는 아직 */
+  store['unpa-console-goal-v1']=JSON.stringify(goal({won:896000,countedAt:'2026-10-18T12:40:00Z',ids:{r:['482561','100','a','b'],p:[]}}));
+  clock.now=Date.parse('2026-10-18T12:45:00Z');
+  assert.equal(G.status().won,896500,'같은 금액 — 빠지지도 두 번 세지도 않는다');
+});
+
+test('a review the worklog already counted that is pending again is a re-approval: budget-checked and counted again until the next count',()=>{
+  const {G,ledger,store,clock}=guard(goal({won:1429500}),NOW);          /* 500원 남음, 100 은 업무일지 합계에 있음 */
+  const r=G.reserve('r','100');
+  assert.equal(r.ok,true); assert.equal(r.created,true); assert.equal(ledger().items['r:100'].re,1);
+  assert.equal(G.status().won,1430000,'재승인도 500원');
+  assert.equal(G.reserve('r','482561').ok,false,'다음 재승인은 목표를 넘으므로 멈춘다');
+  /* 다음 집계에 재승인이 들어가면(업무일지가 새 날짜로 한 번 더 셈) 원장 쪽은 더 세지 않는다 */
+  store['unpa-console-goal-v1']=JSON.stringify(goal({won:1430000,countedAt:'2026-10-18T12:40:00Z'}));
+  clock.now=Date.parse('2026-10-18T12:50:00Z');
+  assert.equal(G.status().won,1430000);
 });
 
 test('approvals sent by the review console after the count are counted too (even if its sync never finished), without double counting',()=>{
   const c=Date.parse(COUNTED);
   const sent={ '900':{action:'approve',at:new Date(c+60e3).toISOString()},
                '901':{action:'revise_swatch',at:new Date(c+60e3).toISOString()},
-               '902':{action:'approve',at:new Date(c-3600e3).toISOString()},       /* 집계 전 — 이미 won 에 있음 */
+               '100':{action:'approve',at:new Date(c-3600e3).toISOString()},       /* 업무일지 합계에 이미 있음 */
                '903':{action:'approve',at:new Date(c+120e3).toISOString()} };
   const items={'r:903':{k:'r',t:c+120e3}};                                          /* 같은 리뷰를 Claude 원장도 가짐 */
   const {G}=guard(goal(),NOW,{'unpa-console-sent-v1':JSON.stringify(sent),'unpa-claude-ledger-v1':JSON.stringify({v:1,items})});
@@ -109,12 +137,43 @@ test('approvals sent by the review console after the count are counted too (even
 });
 
 test('a retry of an old reservation that is no longer counted goes through the budget check again',()=>{
-  const c=Date.parse(COUNTED);
-  const items={'r:7':{k:'r',t:c-3*3600e3}};                    /* 지난 집계 전 기록 → 지금 셈에 없음 */
+  const items={'r:7':{k:'r',t:Date.parse('2026-09-29T03:00:00Z')}};   /* 지난달 기록 → 이번 달 셈에 없음 */
   const {G,ledger}=guard(goal({won:1430000}),NOW,{'unpa-claude-ledger-v1':JSON.stringify({v:1,items})});
   const r=G.reserve('r','7');
   assert.equal(r.ok,false,'예전 기록이 있다고 그냥 통과시키지 않는다'); assert.equal(r.again,undefined);
   assert.ok(ledger().halt);
+});
+
+test('reserve says whether it made a new entry; only that very reservation may be taken back, and never once another caller joined it',()=>{
+  const {G,ledger}=guard(goal(),NOW);
+  const a=G.reserve('r','11'); assert.equal(a.created,true); assert.ok(a.token);
+  assert.equal(G.release('r','11',a.token+1),false,'다른 예약의 토큰으로는 못 지운다');
+  const b=G.reserve('r','11'); assert.equal(b.again,true); assert.equal(b.created,undefined);
+  assert.equal(G.release('r','11',a.token),false,'다른 쪽이 함께 쓴 예약(j)은 주인도 못 지운다 — 그쪽이 실제로 승인했을 수 있다');
+  assert.deepEqual(Object.keys(ledger().items),['r:11']);
+  const c=G.reserve('r','12'); assert.equal(G.release('r','12',c.token),true);
+  assert.deepEqual(Object.keys(ledger().items),['r:11']);
+});
+
+test('a revise request that went out clears a leftover approval reservation of that review (it was pending, so it was never approved)',()=>{
+  const c=Date.parse(COUNTED);
+  const {G,ledger}=guard(goal({won:1429000}),NOW,{'unpa-claude-ledger-v1':JSON.stringify({v:1,items:{'r:555':{k:'r',t:c+60e3,src:'c'}}})});
+  assert.equal(G.status().left,500);
+  assert.equal(G.forget('555'),true); assert.equal(G.status().left,1000);
+  assert.equal(G.forget('555'),false); assert.deepEqual(Object.keys(ledger().items),[]);
+});
+
+test('two tabs reserving at the same moment cannot both pass: the write is re-checked and the later one backs out and stops',()=>{
+  const LK='unpa-claude-ledger-v1'; let reads=0, armed=false;
+  /* 원장 읽기 순서: status(1) → 지금 항목(2) → 쓰기 직전 다시 읽기(3). 3번째 읽기 직전에 다른 탭이 마지막 500원을 예약해 둔다 */
+  const {G,ledger}=guard(goal({won:1429500}),NOW,null,(k,store)=>{
+    if(!armed || k!==LK) return; if(++reads===3){ const l=JSON.parse(store[LK]||'{"v":1,"items":{}}'); l.items['r:other']={k:'r',t:Date.parse(NOW)}; store[LK]=JSON.stringify(l); }
+  });
+  armed=true;
+  const r=G.reserve('r','mine');
+  assert.equal(r.ok,false); assert.equal(r.stop,true); assert.match(r.why,/동시에 예약/);
+  assert.deepEqual(Object.keys(ledger().items),['r:other'],'내 예약은 거두고 다른 탭 예약은 남긴다');
+  assert.ok(ledger().halt); assert.equal(G.status().won,1430000,'목표 그대로 — 넘지 않는다');
 });
 
 /* ── 실제 흐름: 가짜 CMS 리뷰 상세 화면에서 UnpaOps.approve 를 돌린다 ── */
@@ -180,6 +239,14 @@ test('no confirm dialog → not approved → taken back out of the ledger',async
   assert.match(out,/1 STOP nomodal/); assert.equal(Object.keys(ledger().items).length,0);
 });
 
+test('no confirm dialog on a retry of an earlier (maybe done) approval → the earlier entry is kept',async()=>{
+  const c=Date.parse(COUNTED);
+  const {ctx,store,ledger}=cms(goal(),{'1':rv({modal:false})});
+  store['unpa-claude-ledger-v1']=JSON.stringify({v:1,items:{'r:1':{k:'r',t:c+60e3}}});
+  const out=await ctx.UnpaOps.approve(['1']);
+  assert.match(out,/1 STOP nomodal/); assert.deepEqual(Object.keys(ledger().items),['r:1'],'이번에 만든 예약이 아니면 지우지 않는다');
+});
+
 test('confirm clicked but no result seen → stays counted (it may have gone through)',async()=>{
   const {ctx,st,ledger}=cms(goal(),{'1':rv({finish:false})});
   const out=await ctx.UnpaOps.approve(['1']);
@@ -228,4 +295,12 @@ test('editing an existing product (/product/edit?id=…) is not income and is no
 test('the review console no longer approves without a known goal',()=>{
   const src=fs.readFileSync(path.join(__dirname,'..','cms-console.js'),'utf8');
   assert.doesNotMatch(src,/목표 금액 제한 없이 승인합니다/);
+});
+
+test('after a CMS count, approval reservations made before it for reviews the count saw as not approved by me are dropped (they never happened)',()=>{
+  const c=Date.parse(COUNTED);
+  const items={'r:555':{k:'r',t:c-3600e3,src:'c'},'r:556':{k:'r',t:c-3600e3},'r:557':{k:'r',t:c+60e3},'p:x|y|1':{k:'p',t:c-3600e3}};
+  const {G,ledger}=guard(goal(),NOW,{'unpa-claude-ledger-v1':JSON.stringify({v:1,items})});
+  assert.equal(G.prune({'555':1,'557':1},c-5*60e3),1,'555 만 — 556 은 집계가 못 본 리뷰(60일 밖 등)라 남기고, 557 은 집계 뒤 예약이라 남긴다');
+  assert.deepEqual(Object.keys(ledger().items).sort(),['p:x|y|1','r:556','r:557']);
 });

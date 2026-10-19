@@ -2068,6 +2068,8 @@
         appr.forEach(function(r){ r.deferred=true; });
         jobs=jobs.filter(function(r){ return r.action!=='approve'; });
         goalNote='\n\n⛔ '+B.why+' — 목표를 넘지 않게 승인 '+appr.length+'건은 하지 않고 남겨 둡니다 (업무일지 동기화 뒤 다시).';
+        /* 스냅샷이 오래됐거나 없으면 지금 다시 집계·동기화해 둔다 — 끝나면 다시 실행하면 된다 (조회만) */
+        if(ME && !SYNCING && !WORK_SYNC) startWorkSync().catch(function(){});
         if(!jobs.length){ alert('🎯 '+B.why+'\n목표 금액을 확인할 수 없어 승인은 하지 않습니다. 업무일지 동기화 뒤 다시 실행해 주세요.'); if(results.length) renderQueue(SCAN_DATE); return; }
       }
     }
@@ -2111,7 +2113,7 @@
         r.applied=ok;
         if(!ok && r.action==='approve' && window.UnpaGuard){
           /* 4xx = 서버가 거절(확실히 안 됨) → 예약을 되돌린다. 0·5xx = 됐을 수도 있음 → 수입에 센 채로 둔다 */
-          if(res.status>=400 && res.status<500) window.UnpaGuard.release('r', r.id);
+          if(res.status>=400 && res.status<500 && gr && gr.created) window.UnpaGuard.release('r', r.id, gr.token);   /* 이번에 만든 그 예약만 — 예전 승인 기록·다른 쪽이 함께 쓴 예약은 지우지 않는다 */
           else log('&nbsp;&nbsp;<span style="color:#f5c451">결과 불확실 — 이번 달 수입에는 센 채로 둡니다</span>');
         }
         /* 나중에 "무엇을 보고 무엇을 안내했는지" 검증할 수 있게 판단 근거를 함께 남긴다 */
@@ -2123,6 +2125,7 @@
         if(ok){
           if(r.action==='approve') SESSION_APPROVED[String(r.id)]=ymd(new Date());   /* 목표 계산에 바로 반영 */
           if(r.action==='hide') hidefpMark(r, 'confirmed', true);
+          if(isRevise(r.action) && window.UnpaGuard) window.UnpaGuard.forget(r.id);   /* 수정요청이 나갔다 = 승인 안 된 리뷰 — 남은 승인 예약은 수입이 아니다 */
           if(pendingLoad()[String(r.id)]) pendingMark(r.id, r.action==='revise_product' ? 'learned' : isRevise(r.action) ? 'sent' : 'resolved',
                                                      r.action==='revise_product' ? { pid:r.product_id, pname:r.product_exact } : null);
           if(!sentMark(r)) log('&nbsp;&nbsp;<span style="color:#ff8f6b">⚠ 전송 기록 저장 실패 — 브라우저 저장공간을 확인하세요 (재스캔 때 다시 보낼 수 있음)</span>');
@@ -2336,7 +2339,7 @@
   async function collectWork(me, onProgress){
     var now=new Date(), dates=[], startedAt=now.toISOString();   /* 이 시각 뒤에 한 승인은 이번 집계에 없을 수 있다 — 목표 가드가 따로 센다 */
     for(var i=0;i<WORK_DAYS;i++) dates.push(ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate()-i)));
-    var reviews={}, products={}, failed=[], next=0, doneN=0, watch={}, mine=[];
+    var reviews={}, products={}, failed=[], next=0, doneN=0, watch={}, mine=[], notMine={};
     var watchIds=Object.assign({}, pendingLoad(), hidefpLoad());
     async function worker(){
       while(next<dates.length){
@@ -2351,7 +2354,7 @@
             /* 대기 목록에 있는 리뷰는 그 뒤 상태를 지켜본다 (배우기) */
             if(watchIds[String(x.id)]) watch[String(x.id)]={ status:x.status, productName:x.productName||'', brandName:x.brandName||'',
                                                              visible:x.visible, actor:lastActor(x) };
-            if(!x.approvedAt || lastActor(x)!==me) return;
+            if(!x.approvedAt || lastActor(x)!==me){ notMine[String(x.id)]=1; return; }   /* 내 승인이 아닌 리뷰 — 남아 있던 애매한 승인 예약을 정리할 때 쓴다(저장하지 않음) */
             var d=localDay(x.approvedAt);
             /* [승인한 날, 브랜드, 제품, 작성일] — 업무일지 작업 증빙 */
             if(d && d>=AUTO_FROM) reviews[String(x.id)]=[d, x.brandName||'', x.productName||'', localDay(x.createdAt)||''];
@@ -2382,7 +2385,7 @@
       if(prow.length<300 || (oldest && oldest<since)) break;
       pg++;
     }
-    return { reviews:reviews, products:products, failed:failed, watch:watch, mine:mine, at:new Date().toISOString(), startedAt:startedAt };
+    return { reviews:reviews, products:products, failed:failed, watch:watch, mine:mine, notMine:notMine, at:new Date().toISOString(), startedAt:startedAt };
   }
 
   /* ── 보관함: 아직 업무일지에 못 넘긴 검수기록·실행 결과 ── */
@@ -2455,7 +2458,7 @@
   /* 업무일지 동기화 창을 열어 넘긴다.
      클릭 없이 열리면 팝업 차단에 걸릴 수 있다 — 그때는 버튼 한 번으로 연다.
      (주소창의 팝업 차단 아이콘에서 cms.unpa.me 를 "항상 허용"하면 이후 자동) */
-  var SYNCING=false;
+  var SYNCING=false, RESYNC=false;
   /* 업데이트 북마클릿이 미리 연 창 — 집계하는 동안 동기화 창(sync.html)을 띄워 두고 진행 상황을 보여 준다 */
   var PRE=null;
   function preOpen(){
@@ -2475,7 +2478,7 @@
   function preClose(){ try{ if(PRE && !PRE.win.closed) PRE.win.close(); }catch(e){} PRE=null; }
   function syncNow(){
     if(!ME){ preClose(); syncStatus('<span style="color:#ff8f6b">⚠ CMS 계정을 확인하지 못해 업무일지 동기화를 건너뜀</span>'); return false; }
-    if(SYNCING) return false;
+    if(SYNCING){ RESYNC=true; return false; }      /* 지금 반영 중이면 끝난 뒤 새 집계로 한 번 더 */
     var pre=(PRE && !PRE.win.closed) ? PRE : null; PRE=null;
     var nonce=pre ? pre.nonce : syncNonce(), sx=(window.screenX||0)+Math.max(0,(window.outerWidth||1200)-460);
     var w=pre ? pre.win : null;
@@ -2499,7 +2502,11 @@
       ignApply(ev.data.ignored);     /* 서버에서 받아 합친 무시 목록 (다른 컴퓨터에서 한 것까지) */
       if(!ev.data.ok){ syncButton('<span style="color:#ff8f6b">⚠ 업무일지 반영 실패 — '+esc(String(ev.data.error||'').slice(0,80))+'</span>'); return; }
       if(ev.data.console) applyConsoleState(ev.data.console);
-      if(ev.data.goal && ev.data.goal.target>0){
+      /* 다른 탭이 더 최근 집계로 남긴 스냅샷은 덮지 않는다 — 단 가드가 받아 주는 스냅샷일 때만(미래 시각·1시간 넘음·일부 실패·번호 목록 없음이면 새 것으로 바꾼다) */
+      var prevGoal=goalLoad(), pc=prevGoal ? Date.parse(prevGoal.countedAt)||0 : 0, nowT=Date.now();
+      var prevGood=!!(prevGoal && pc && pc<=nowT+5*60e3 && nowT-pc<=60*60e3 && !prevGoal.partial && prevGoal.ids && Array.isArray(prevGoal.ids.r));
+      var newer=!!(prevGood && payload && pc>(Date.parse(payload.countedAt)||0) && prevGoal.month===(ev.data.goal||{}).month && prevGoal.target===(ev.data.goal||{}).target);
+      if(ev.data.goal && ev.data.goal.target>0 && !newer){
         /* countedAt = 이 합계의 바탕이 된 CMS 집계를 시작한 시각, partial = 이번 달 집계가 일부 실패.
            Claude 용 가드(cms-claude.js)는 countedAt 뒤의 승인·등록을 따로 더하고, partial 이면 아무것도 하지 않는다 */
         goalSave(Object.assign({ at:new Date().toISOString(), countedAt:(payload && payload.countedAt) || null,
@@ -2521,6 +2528,7 @@
         +(LEARN_NOTE?' · '+LEARN_NOTE:'')
         +(function(){ var b=budget(); return b.known ? '<br><span style="color:#f5c451">'+esc(budgetLine(b))+'</span>' : ''; })());
       if(SYNC_ONLY) syncOnlyDone();
+      if(RESYNC){ RESYNC=false; setTimeout(function(){ syncNow(); }, 300); }
     };
     window.addEventListener('message', onMsg);
     /* 미리 연 창이 이미 준비 신호를 보냈으면 기다리지 않고 바로 넘긴다 */
@@ -2548,11 +2556,20 @@
     box.appendChild(el);
     CLOSE_TIMER=setTimeout(function(){ try{ history.replaceState(null,'',location.pathname+location.search); }catch(e){} window.close(); }, 5000);
   }
-  async function startWorkSync(){
+  /* 집계·동기화는 한 번에 하나만 — 이미 돌고 있으면 그걸 기다린다 */
+  var WORK_SYNC=null;
+  function startWorkSync(){
+    if(WORK_SYNC) return WORK_SYNC;
+    WORK_SYNC=runWorkSync().finally(function(){ WORK_SYNC=null; });
+    return WORK_SYNC;
+  }
+  async function runWorkSync(){
     if(!ME) ME=await whoAmI();
     if(!ME){ preClose(); syncStatus('<span style="color:#ff8f6b">⚠ CMS 계정을 확인하지 못해 업무일지 동기화를 건너뜀</span>'); return; }
     syncStatus('📒 업무일지 집계 중… (CMS 최근 '+WORK_DAYS+'일, 조회만)');
     WORK=await collectWork(ME, function(d,n){ if(!SYNCING) syncStatus('📒 업무일지 집계 중… '+d+' / '+n+'일'); preProgress('CMS 집계 중… '+d+' / '+n+'일'); });
+    /* 집계를 시작하기(5분 여유) 전에 남긴 승인 예약 중, 집계가 '내 승인 아님'으로 본 리뷰는 실제로 승인되지 않은 것 — 목표 셈에서 뺀다 */
+    try{ if(window.UnpaGuard && WORK.notMine) window.UnpaGuard.prune(WORK.notMine, (Date.parse(WORK.startedAt)||0)-5*60e3); }catch(e){}
     try{ await learnAndMatch(); }catch(e){}
     try{ if(results.length && document.getElementById('csRun') && !window.__CONSOLE_RUNNING) renderQueue(SCAN_DATE); }catch(e){}
     syncNow();

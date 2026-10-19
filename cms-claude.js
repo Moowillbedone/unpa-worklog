@@ -37,23 +37,29 @@
     if(!counted) return { ok:false, why:'목표 정보에 CMS 집계 시각이 없습니다 — 새 콘솔로 동기화를 다시 하세요' };
     if(counted>now+MARGIN) return { ok:false, why:'목표 정보의 집계 시각이 미래입니다 — 컴퓨터 시계를 확인하고 동기화를 다시 하세요' };
     if(now-counted>MAX_AGE) return { ok:false, why:'CMS 집계가 '+Math.round((now-counted)/60e3)+'분 전 것입니다 — 동기화를 다시 하세요(1시간 이내)' };
-    /* 콘솔이 한 승인은 스냅샷을 만든 시각(builtAt)까지 이미 won 에 들어 있다(보관함으로 넘어감) — 그 뒤 것만 센다 (2분 여유) */
-    var built=Date.parse(g.builtAt)||0;
-    return { ok:true, g:g, month:month, base:counted-MARGIN, baseC:Math.max(counted-MARGIN, built ? built-2*60e3 : 0) };
+    if(!g.ids || !Array.isArray(g.ids.r)) return { ok:false, why:'목표 정보에 이번 달 리뷰 번호 목록이 없습니다 — 새 버전으로 동기화를 다시 하세요' };
+    return { ok:true, g:g, month:month, base:counted-MARGIN, have:new Set(g.ids.r.map(String)) };
   }
-  function counted(x, gi){ return x && x.t>=(x.src==='c' ? gi.baseC : gi.base) && kstMonth(x.t)===gi.month; }
+  /* 리뷰 승인: 이번 달에 했고, 업무일지 합계(번호 목록)에 아직 없으면 센다 — 시각으로 추측하지 않는다.
+     제품 등록과 재승인(업무일지가 이미 한 번 센 리뷰가 다시 대기로 돌아와 또 승인 — 업무일지는 새 날짜로 한 번 더 센다)은
+     번호로 가를 수 없어 시각으로 — CMS 집계를 시작한 뒤(5분 여유) 한 것만 (그 전 것은 집계에 들어 있다) */
+  function counted(k, x, gi){
+    if(!x || kstMonth(x.t)!==gi.month) return false;
+    if(x.k==='r' && !x.re) return !gi.have.has(k.slice(2));
+    return x.t>=gi.base;
+  }
   function status(){
     var now=nowMs(), gi=goalInfo(now); if(!gi.ok) return gi;
     var g=gi.g, l=ledger(), spent=0, n={ r:0, p:0, c:0 }, seenR={};
     Object.keys(l.items).forEach(function(k){
-      var x=l.items[k]; if(!RATE[x && x.k] || !counted(x, gi)) return;
+      var x=l.items[k]; if(!RATE[x && x.k] || !counted(k, x, gi)) return;
       spent+=RATE[x.k]; n[x.k]++; if(x.k==='r') seenR[k.slice(2)]=1;
     });
-    /* 검수 콘솔이 집계 뒤에 한 승인 (콘솔 동기화가 아직 안 끝났어도) */
+    /* 검수 콘솔 전송 기록의 승인 (원장에 없던 예전 기록 대비 — 번호로 중복 없이) */
     var sent=load(SENT_KEY)||{};
     Object.keys(sent).forEach(function(id){
       var e=sent[id]; if(!e || e.action!=='approve' || seenR[id]) return;
-      var t=Date.parse(e.at)||0; if(!counted({ t:t, src:'c' }, gi)) return;
+      if(!counted('r:'+id, { k:'r', t:Date.parse(e.at)||0 }, gi)) return;
       spent+=RATE.r; n.c++; seenR[id]=1;
     });
     var w=g.won+spent, left=g.target-w;
@@ -69,27 +75,53 @@
     return '🎯 목표 '+won(s.target)+' · 이번 달 '+won(s.won)+(s.spent?' (집계 뒤 +'+won(s.spent)+')':'')
       +' · 남은 '+won(Math.max(0,s.left))+' → 승인 '+s.approvals+'건 / 제품 '+s.products+'건까지';
   }
-  /* 한 건 하기 직전에 부른다. ok 면 원장에 적고, 아니면 절대 실행하지 않는다.
-     같은 리뷰를 다시 부르면: 이미 세고 있는 기록이면 그대로 ok, 셈에서 빠진 옛 기록이면 새 건처럼 예산부터 본다. */
+  /* 한 건 하기 직전에 부른다(리뷰는 지금 검수 대기인 것만). ok 면 원장에 적고, 아니면 절대 실행하지 않는다.
+     같은 리뷰를 다시 부르면: 지금 세고 있는 예약이 있으면 그대로 ok(again — 그 예약에 '함께 씀' 표시를 남겨 주인이 지우지 못하게),
+     셈에서 빠진 옛 기록이면 새 건처럼 예산부터 본다. 업무일지가 이미 센 리뷰가 다시 대기면 재승인 — 500원을 또 센다. */
+  function haltAt(s, now){ var l=ledger(); l.halt={ month:s.month, target:s.target, t:now, won:s.won }; save(LEDGER_KEY, l); }
   function reserve(kind, id, opt){
     var c=RATE[kind]; if(!c) return { ok:false, why:'알 수 없는 종류 '+kind };
-    var key=kind+':'+String(id), l=ledger(), now=nowMs(), s=status();
+    var key=kind+':'+String(id), now=nowMs(), s=status();
     if(!s.ok) return { ok:false, stop:true, why:s.why };
-    var gi=goalInfo(now);
-    if(l.items[key] && counted(l.items[key], gi)) return { ok:true, again:true, left:s.left };
+    var gi=goalInfo(now), l=ledger(), cur=l.items[key];
+    if(cur && counted(key, cur, gi)){ cur.j=now; save(LEDGER_KEY, l); return { ok:true, again:true, left:s.left }; }
     if(s.won+c>s.target){
-      l.halt={ month:s.month, target:s.target, t:now, won:s.won }; save(LEDGER_KEY, l);     /* 이 금액이 이번 달 최종 — 이후 모든 승인·등록 정지 */
+      haltAt(s, now);                                                     /* 이 금액이 이번 달 최종 — 이후 모든 승인·등록 정지 */
       return { ok:false, stop:true, why:'목표 초과 — 이번 달 '+won(s.won)+' + '+NAME[kind]+' '+won(c)+' > 목표 '+won(s.target)+'. 여기서 멈추고 이번 달은 '+won(s.won)+'로 끝냅니다' };
     }
-    l.items[key]={ k:kind, t:now }; if(opt && opt.src) l.items[key].src=String(opt.src);
+    l=ledger();                                                           /* 다른 탭이 그사이 쓴 것과 합쳐 쓴다 */
+    l.items[key]={ k:kind, t:now }; if(kind==='r' && gi.have.has(String(id))) l.items[key].re=1;
+    if(opt && opt.src) l.items[key].src=String(opt.src);
     Object.keys(l.items).forEach(function(k){ if(!(l.items[k] && now-l.items[k].t<KEEP)) delete l.items[k]; });
     save(LEDGER_KEY, l);
-    return { ok:true, left:s.left-c };
+    /* 쓴 뒤 다시 센다 — 다른 탭이 같은 순간 예약해 합계가 넘었으면 내 예약을 거두고 멈춘다 */
+    var s2=status();
+    if(typeof s2.left==='number' && s2.left<0){
+      l=ledger(); if(l.items[key] && l.items[key].t===now) delete l.items[key]; save(LEDGER_KEY, l);
+      haltAt(s2.ok ? s2 : s, now);
+      return { ok:false, stop:true, why:'목표 초과 — 다른 탭과 동시에 예약돼 합계가 목표를 넘어 이 건은 하지 않고 멈춥니다' };
+    }
+    return { ok:true, created:true, token:now, left:s.left-c };
   }
-  /* 원장에서 지우기 — 일이 실제로 일어나지 않은 게 확실할 때만 (예: 확인 창이 아예 안 떴음) */
-  function release(kind, id){ var l=ledger(), key=kind+':'+String(id); if(l.items[key]){ delete l.items[key]; save(LEDGER_KEY, l); return true; } return false; }
+  /* 원장에서 지우기 — 이번 시도가 새로 만든 그 예약(token)이고, 일이 실제로 일어나지 않은 게 확실할 때만 (예: 확인 창이 아예 안 떴음).
+     다른 쪽이 그 예약을 함께 썼으면(j) 지우지 않는다 — 그쪽이 실제로 했을 수 있다 */
+  function release(kind, id, token){
+    var l=ledger(), key=kind+':'+String(id), x=l.items[key];
+    if(!x || x.j || (token!=null && x.t!==token)) return false;
+    delete l.items[key]; save(LEDGER_KEY, l); return true;
+  }
+  /* 수정요청이 실제로 나갔다 = 그 리뷰는 대기였고 승인되지 않았다 → 남아 있던 그 리뷰 승인 예약(5xx·애매해서 남긴 것)을 지운다 */
+  function forget(id){ var l=ledger(), key='r:'+String(id); if(l.items[key]){ delete l.items[key]; save(LEDGER_KEY, l); return true; } return false; }
 
-  root.UnpaGuard={ RATE:RATE, status:status, line:line, reserve:reserve, release:release, kstMonth:kstMonth,
+  /* CMS 집계가 '내 승인 아님'으로 본 리뷰(notMine)의 승인 예약 중 집계 시작 전(before) 것은 실제로 승인되지 않았다 — 지운다.
+     집계 범위(최근 60일 작성) 밖 리뷰는 notMine 에 없으니 지우지 않는다(센 채로 둠) */
+  function prune(notMine, before){
+    var l=ledger(), n=0;
+    Object.keys(l.items).forEach(function(k){ var x=l.items[k]; if(x && x.k==='r' && x.t<before && notMine[k.slice(2)]){ delete l.items[k]; n++; } });
+    if(n) save(LEDGER_KEY, l);
+    return n;
+  }
+  root.UnpaGuard={ RATE:RATE, status:status, line:line, reserve:reserve, release:release, forget:forget, prune:prune, kstMonth:kstMonth,
                    keys:{ goal:GOAL_KEY, ledger:LEDGER_KEY, sent:SENT_KEY } };
 
   /* ── 리뷰 상세에서 하는 일 (승인 · 수정요청) ──
@@ -132,9 +164,9 @@
       if(!g.ok){ out.push(id+' ⛔ '+g.why); out.push('NOT DONE '+ids.slice(k).join(',')); break; }
       a.click();
       var m=await waitFor(function(){ return [].slice.call(document.querySelectorAll('.ant-modal, .ant-modal-confirm')).find(function(x){ return /리뷰 검수를 완료하시겠습니까/.test(x.innerText); }); }, 4000);
-      if(!m){ release('r', id); out.push(id+' STOP nomodal'); continue; }      /* 확인 창이 안 떴다 = 승인 안 됨 → 원장에서 뺀다 */
+      if(!m){ if(g.created) release('r', id, g.token); out.push(id+' STOP nomodal'); continue; }      /* 확인 창이 안 떴다 = 이번엔 승인 안 됨 → 이번에 만든 예약만 뺀다 */
       var ok=[].slice.call(m.querySelectorAll('button')).find(function(b){ return T(b.innerText)==='확인'; });
-      if(!ok){ release('r', id); out.push(id+' STOP no-confirm-button'); continue; }
+      if(!ok){ if(g.created) release('r', id, g.token); out.push(id+' STOP no-confirm-button'); continue; }
       ok.click();
       var fin=await waitFor(function(){ var b=btn('검수 완료'); return b && b.disabled ? 'y' : null; }, 7000);
       /* 확인을 누른 뒤에는 결과가 안 보여도 원장에 남긴다 — 실제로 됐을 수 있으니 센 채로 둔다 */
@@ -169,6 +201,7 @@
       if(!good){ out.push(id+' STOP verify'); var cancel=[].slice.call(m.querySelectorAll('button')).find(function(b){ return T(b.innerText)==='취소'; }); if(cancel) cancel.click(); await sleep(400); continue; }
       [].slice.call(m.querySelectorAll('button')).find(function(b){ return T(b.innerText)==='확인'; }).click();
       var fin=await waitFor(function(){ var b=btn('수정 요청 완료'); return b && b.disabled ? 'y' : null; }, 7000);
+      if(fin) forget(id);
       out.push(id+(fin?' SENT':' NOTDONE'));
     }
     return out.join(' ; ');

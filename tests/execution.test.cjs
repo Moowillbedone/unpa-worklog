@@ -8,7 +8,7 @@ const root=path.resolve(__dirname,'..');
 
 /* 업무일지 동기화가 남기는 목표 스냅샷 — 이번 달(한국 시간) · 방금 센 것 */
 function snap(o){ const now=Date.now(); return Object.assign({month:new Date(now+9*3600e3).toISOString().slice(0,7),target:1430000,won:0,
-  at:new Date(now).toISOString(),countedAt:new Date(now-60e3).toISOString(),builtAt:new Date(now-30e3).toISOString(),partial:false},o||{}); }
+  at:new Date(now).toISOString(),countedAt:new Date(now-60e3).toISOString(),builtAt:new Date(now-30e3).toISOString(),partial:false,ids:{r:[],p:[]}},o||{}); }
 /* cms-console.js 를 통째로 실행하고 내부를 꺼내 온다.
    네트워크는 전부 가짜이며 실제 CMS 로는 아무것도 나가지 않는다. */
 function harness(opts){
@@ -54,7 +54,7 @@ function harness(opts){
                      budget,planApprovals,goalSave,openGrid,refreshSkipped,remainList,
                      hideRecord,learnHides,hidefpLoad,hidefpMark,hideOverridden,kindUnsure,hideKind,renderQueue,
                      setUncheck:(id,v)=>{UNCHECK[id]=v;},
-                     setMe:e=>{ME=e;},setWork:w=>{WORK=w;},getSyncHtml:()=>SYNC_HTML,
+                     setMe:e=>{ME=e;},setWork:w=>{WORK=w;},getSyncHtml:()=>SYNC_HTML,startWorkSync,
                      listAll,loadBacklog,scanRows,capOf,canSend,sentMark,
                      getAbort:()=>SCAN_ABORT,
                      setResults:r=>{results=r;},
@@ -751,7 +751,7 @@ test('with no known monthly goal the console sends no approvals (revise/hide sti
 /* ── Claude 도구(cms-claude.js)와 한 목표를 나눠 쓴다 (2026-10-18) ── */
 test('the console budget comes from the shared guard: snapshot + everything either tool did after the count',()=>{
   const {api,store}=harness();
-  api.goalSave(snap({target:1430000,won:1359200}));
+  api.goalSave(snap({target:1430000,won:1359200,ids:{r:['old'],p:[]}}));   /* 'old' 는 업무일지 합계에 이미 들어간 리뷰 */
   const now=Date.now();
   store['unpa-claude-ledger-v1']=JSON.stringify({v:1,items:{'r:777':{k:'r',t:now-20e3},'p:무드|다비치|1':{k:'p',t:now-10e3},'r:old':{k:'r',t:now-3*3600e3}}});
   const b=api.budget();
@@ -826,8 +826,85 @@ test('after a sync the goal snapshot carries the count time, build time and part
   fire({type:'unpa-sync-ready',nonce});
   const pl=posted[0][0].payload;
   const m=new Date(Date.now()+9*3600e3).toISOString().slice(0,7);
-  fire({type:'unpa-sync-done',nonce,ok:true,seq:pl.seq,today:{r:0,p:0},goal:{month:m,target:1430000,r:0,p:0,won:900000}});
+  fire({type:'unpa-sync-done',nonce,ok:true,seq:pl.seq,today:{r:0,p:0},goal:{month:m,target:1430000,r:0,p:0,won:900000,ids:{r:['5'],p:[]}}});
   const g=JSON.parse(ctx.localStorage.getItem('unpa-console-goal-v1'));
-  assert.equal(g.countedAt,st); assert.equal(g.builtAt,pl.builtAt); assert.equal(g.partial,false);
+  assert.equal(g.countedAt,st); assert.equal(g.builtAt,pl.builtAt); assert.equal(g.partial,false); assert.deepEqual(g.ids.r,['5']);
   const s=ctx.UnpaGuard.status(); assert.equal(s.ok,true); assert.equal(s.won,900000); assert.equal(s.left,530000);
+});
+
+test('a sync built on an older CMS count does not overwrite a newer goal snapshot left by another tab',()=>{
+  const {api,ctx}=harness({noGoal:true}); api.setDate('2026-09-24');
+  const m=new Date(Date.now()+9*3600e3).toISOString().slice(0,7);
+  const newer=snap({won:910000,countedAt:new Date(Date.now()-20e3).toISOString()});
+  api.goalSave(newer);
+  const st=new Date(Date.now()-90e3).toISOString();
+  api.setMe('me@example.com'); api.setWork({reviews:{},products:{},failed:[],watch:{},mine:[],at:new Date().toISOString(),startedAt:st});
+  const posted=[]; const win={postMessage:(mm,o)=>posted.push([mm,o])};
+  ctx.__open=()=>win;
+  assert.equal(api.syncNow(),true);
+  const nonce=/#n=([a-f0-9]+)/.exec(ctx.__opened[0])[1];
+  const fire=data=>ctx.__listeners.slice().forEach(f=>f({origin:'https://moowillbedone.github.io',source:win,data}));
+  fire({type:'unpa-sync-ready',nonce});
+  fire({type:'unpa-sync-done',nonce,ok:true,seq:posted[0][0].payload.seq,today:{r:0,p:0},goal:{month:m,target:1430000,r:0,p:0,won:900000,ids:{r:[],p:[]}}});
+  const g=JSON.parse(ctx.localStorage.getItem('unpa-console-goal-v1'));
+  assert.equal(g.won,910000,'더 최근 집계로 만든 스냅샷이 남는다'); assert.equal(g.countedAt,newer.countedAt);
+});
+
+test('a console approve refused with 4xx keeps the reservation when the Claude tab joined it meanwhile (it may have approved the review itself)',async()=>{
+  const {api,ctx}=harness(); api.setTpl(TPL); api.setDate('2026-09-02');
+  api.goalSave(snap({target:100000,won:0}));
+  ctx.__route=(url)=>{ if(/\/71\/approve$/.test(url)){ assert.equal(ctx.UnpaGuard.reserve('r','71').again,true); return {status:400,body:{message:'already approved'}}; } return {status:201,body:{}}; };
+  await api.runJobs([{id:71,action:'approve',reasons:[]}]);
+  assert.equal(ctx.UnpaGuard.status().spent,500,'함께 쓴 예약은 지우지 않는다 — 수입에 센 채로 둔다');
+});
+
+test('a revise request the console sent clears a leftover (unclear) approval reservation of that review',async()=>{
+  const {api,ctx}=harness(); api.setTpl(TPL); api.setDate('2026-09-02');
+  api.goalSave(snap({target:100000,won:0}));
+  ctx.__route=(url)=> /\/81\/approve$/.test(url) ? {status:502,body:{}} : {status:201,body:{}};
+  await api.runJobs([{id:81,action:'approve',reasons:[]}]);
+  assert.equal(ctx.UnpaGuard.status().spent,500,'애매한 승인은 센 채로');
+  await api.runJobs([{id:81,action:'revise_swatch',reasons:[],brand:'b',product:'p'}]);
+  assert.equal(ctx.UnpaGuard.status().spent,0,'수정요청이 나갔으면 승인되지 않은 리뷰 — 예약을 지운다');
+});
+
+test('a goal snapshot the guard would refuse (future count time) is replaced by the next sync instead of being protected',()=>{
+  const {api,ctx}=harness({noGoal:true}); api.setDate('2026-09-24');
+  const m=new Date(Date.now()+9*3600e3).toISOString().slice(0,7);
+  api.goalSave(snap({won:910000,countedAt:new Date(Date.now()+3*3600e3).toISOString()}));   /* 시계가 3시간 빨랐을 때 남은 것 */
+  const st=new Date(Date.now()-90e3).toISOString();
+  api.setMe('me@example.com'); api.setWork({reviews:{},products:{},failed:[],watch:{},mine:[],at:new Date().toISOString(),startedAt:st});
+  const posted=[]; const win={postMessage:(mm,o)=>posted.push([mm,o])};
+  ctx.__open=()=>win;
+  assert.equal(api.syncNow(),true);
+  const nonce=/#n=([a-f0-9]+)/.exec(ctx.__opened[0])[1];
+  const fire=data=>ctx.__listeners.slice().forEach(f=>f({origin:'https://moowillbedone.github.io',source:win,data}));
+  fire({type:'unpa-sync-ready',nonce});
+  fire({type:'unpa-sync-done',nonce,ok:true,seq:posted[0][0].payload.seq,today:{r:0,p:0},goal:{month:m,target:1430000,r:0,p:0,won:900000,ids:{r:[],p:[]}}});
+  const g=JSON.parse(ctx.localStorage.getItem('unpa-console-goal-v1'));
+  assert.equal(g.countedAt,st); assert.equal(ctx.UnpaGuard.status().ok,true);
+});
+
+test('only one CMS count runs at a time: asking again while one is running waits for it',async()=>{
+  const {api,ctx}=harness(); api.setMe('me@example.com');
+  let gets=0; ctx.__route=(url)=>{ if(/\/admin\/reviews\?/.test(url)) gets++; return {status:200,body:{results:[],totalCount:0}}; };
+  const p1=api.startWorkSync(), p2=api.startWorkSync();
+  assert.equal(p1,p2,'같은 작업을 돌려준다');
+  await p1.catch(()=>{});
+  const one=gets; const p3=api.startWorkSync(); assert.notEqual(p3,p1,'끝난 뒤에는 새로 시작한다'); await p3.catch(()=>{});
+  assert.ok(gets>=one);
+});
+
+test('after the CMS count, a leftover approval reservation for a review the count saw as not approved by me is dropped',async()=>{
+  const {api,ctx}=harness(); api.setMe('me@example.com');
+  api.goalSave(snap({target:100000,won:0}));
+  ctx.localStorage.setItem('unpa-claude-ledger-v1',JSON.stringify({v:1,items:{'r:555':{k:'r',t:Date.now()-3600e3,src:'c'},'r:556':{k:'r',t:Date.now()-3600e3}}}));
+  assert.equal(ctx.UnpaGuard.status().spent,1000);
+  ctx.__route=(url)=>{
+    if(/\/admin\/reviews\?/.test(url)) return {status:200,body:{results:/startDate=(\d{4}-\d\d-\d\d)/.exec(url)[1]===api.workPayload().work.to?[{id:555,status:'PENDING_APPROVAL',createdAt:new Date().toISOString()}]:[],totalCount:0}};
+    return {status:200,body:{results:[],totalCount:0}};
+  };
+  await api.startWorkSync();
+  const items=JSON.parse(ctx.localStorage.getItem('unpa-claude-ledger-v1')).items;
+  assert.deepEqual(Object.keys(items),['r:556'],'집계가 대기로 본 555 는 지우고, 집계가 못 본 556 은 남긴다');
 });
