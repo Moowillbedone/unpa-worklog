@@ -2093,7 +2093,11 @@
         if(r.action==='approve'){
           /* 보내기 직전에 공용 원장에 예약 — 다른 탭·Claude 도구가 같은 금액을 동시에 쓰지 못하게. 걸리면 남은 승인은 전부 남겨 둔다 */
           var gr=!guardOk() ? { ok:false, why:'목표 가드가 예전 버전입니다 — 콘솔을 다시 여세요' }
-                 : await window.UnpaGuard.reserveSafe('r', r.id, { src:'c' });
+                 : await window.UnpaGuard.reserveSafe('r', r.id, { src:'c', written:r.date||null });
+          if(!gr.ok && !gr.stop){                       /* 이 리뷰만 못 함(작성일 등) — 남겨 두고 다음 건으로 */
+            log('&nbsp;&nbsp;<span style="color:#f5c451">⏸ #'+r.id+' '+esc(gr.why)+'</span>');
+            r.deferred=true; jobs.splice(i,1); i--; continue;
+          }
           if(!gr.ok){
             log('&nbsp;&nbsp;<span style="color:#f5c451">⛔ 🎯 '+esc(gr.why)+' — 남은 승인은 하지 않음</span>');
             jobs.slice(i).forEach(function(x){ if(x.action==='approve') x.deferred=true; });
@@ -2323,7 +2327,7 @@
   var SYNC_URL = WORKLOG_URL + 'sync.html';
   var WL_ORIGIN = 'https://moowillbedone.github.io';
   var AUTO_FROM = '2026-09-01';          /* 이날부터 업무일지 리뷰·제품 수를 CMS 기준으로 채운다 */
-  var WORK_DAYS = 60;
+  var WORK_DAYS = 75;     /* 남은 검수 목록(60일)보다 넉넉히 — 승인한 리뷰가 다음 집계에도 잡히게(작업 권한 넘겨받기 기준) */
   var OUTBOX_KEY = 'unpa-console-outbox-v1';
   var ME = null, WORK = null, SYNC_HTML = '';
 
@@ -2449,11 +2453,12 @@
         rv.push([id, x[0], x[1]||'', x[2]||'', x[3]||'', (J[id] && J[id].action==='approve') ? 'c' : 'm']); });
       Object.keys(WORK.products).forEach(function(id){ var x=arr(WORK.products[id]); pv.push([id, x[0], x[1]||'', x[2]||'']); });
     }
-    (ob.reviews||[]).forEach(function(x){ if(x && validDate(x[1]) && x[1]>=AUTO_FROM) rv.push([String(x[0])].concat(x.slice(1))); });
+    /* 보관함 줄은 CMS 집계에 이미 있는 번호면 건너뛴다(집계 줄에 브랜드·제품·작성일이 있다) */
+    (ob.reviews||[]).forEach(function(x){ if(x && validDate(x[1]) && x[1]>=AUTO_FROM && !(WORK && WORK.reviews[String(x[0])])) rv.push([String(x[0])].concat(x.slice(1))); });
     /* 남은 검수 목록을 못 불러왔으면(BACKLOG 없음) 남은 일·미등록 칸은 비우지 않고 그대로 둔다 */
     /* acct = CMS 계정의 해시(계정 이름은 넘기지 않는다) — 업무일지가 계정마다 마지막 집계 시각을 기억한다 */
     var acct=null; if(ME){ var h=5381; for(var i=0;i<ME.length;i++) h=(Math.imul(h,33)^ME.charCodeAt(i))>>>0; acct=h.toString(36); }
-    return { v:1, seq:ob.seq||0, acct:acct, device:deviceId(), view:SYNC_ONLY ? 1 : 0, countedAt:(WORK && WORK.startedAt) || null, builtAt:new Date().toISOString(), monthPartial:!WORK || monthFailed(WORK),
+    return { v:1, gk:3, seq:ob.seq||0, acct:acct, device:deviceId(), view:SYNC_ONLY ? 1 : 0, countedAt:(WORK && WORK.startedAt) || null, builtAt:new Date().toISOString(), monthPartial:!WORK || monthFailed(WORK),
              work:{ v:1, from:AUTO_FROM, to:ymd(new Date()), reviews:rv, products:pv, partial:!!(WORK && WORK.failed.length) },
              audit:ob.audit||{}, pending:(SYNC_ONLY && !BACKLOG) ? null : pendingList(), backlog:backlogList(), remain:remainList(), console:consoleState() };
   }
@@ -2522,7 +2527,9 @@
       if(gcT>nowT+5*60e3) gcT=0;
       var prodBase=Math.max(pcT, gcT) ? new Date(Math.max(pcT, gcT)).toISOString() : null;
       var prevGoal=goalLoad(), pc=prevGoal ? Date.parse(prevGoal.countedAt)||0 : 0;
-      var prevGood=!!(prevGoal && pc && pc<=nowT+5*60e3 && nowT-pc<=60*60e3 && !prevGoal.partial && prevGoal.ids && Array.isArray(prevGoal.ids.r));
+      var pl=prevGoal && prevGoal.lease;
+      var prevGood=!!(prevGoal && pc && pc<=nowT+5*60e3 && nowT-pc<=60*60e3 && !prevGoal.partial && prevGoal.ids && Array.isArray(prevGoal.ids.r)
+                      && (pl===null || (pl && pl.ok && Date.parse(pl.until)>nowT)));   /* 작업 권한이 없는 스냅샷은 지키지 않는다 */
       var newer=!!(prevGood && payload && pc>pcT && prevGoal.month===(ev.data.goal||{}).month && prevGoal.target===(ev.data.goal||{}).target);
       if(ev.data.goal && ev.data.goal.target>0 && !newer){
         /* countedAt = 이 합계의 바탕이 된 CMS 집계를 시작한 시각, partial = 이번 달 집계가 일부 실패.
@@ -2705,7 +2712,7 @@
   }
   /* 월 목표 가드(cms-claude.js)를 업무일지 사이트에서 불러온다 — Claude 도구와 같은 원장·같은 정지 표시를 쓴다 */
   /* 이 콘솔과 맞는 가드(v7 이상)인가 — 예전 버전이 탭에 남아 있으면 새로 불러와 바꾼다 */
-  function guardOk(){ return !!(window.UnpaGuard && window.UnpaGuard.VERSION>=7 && window.UnpaGuard.reserveSafe); }
+  function guardOk(){ var G=window.UnpaGuard; return !!(G && G.VERSION>=8 && G.reserveSafe && G.keys && G.keys.goal===GOAL_KEY); }
   function loadGuard(){
     return new Promise(function(res){
       if(guardOk()) return res(true);      /* 예전 버전 가드가 남아 있으면 새로 불러온다 */

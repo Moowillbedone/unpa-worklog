@@ -13,7 +13,7 @@
    애매하면 센다: 확인을 누른 뒤 결과가 안 보여도 원장에서 지우지 않는다 (늦게 멈추는 것보다 일찍 멈추는 쪽).
    수정요청·미노출·브랜드 등록·기존 제품 편집은 수입에 들어가지 않으므로 막지 않는다. */
 (function(root){
-  var RATE={ r:500, p:600 }, VERSION=7;
+  var RATE={ r:500, p:600 }, VERSION=8, HALT_V=7, OLD_DAYS=70;
   /* 목표 스냅샷은 v2 키에서 읽는다 — v1 키에는 새 콘솔이 '일부 실패'로 막아 둔 값만 남아, 예전 버전 가드(시각 기준)가 열린 탭은 아무것도 하지 않는다 */
   var GOAL_KEY='unpa-console-goal-v3', LEDGER_KEY='unpa-claude-ledger-v1', SENT_KEY='unpa-console-sent-v1', OUTBOX_KEY='unpa-console-outbox-v1';
   var MAX_AGE=60*60e3, MARGIN=5*60e3, KEEP=45*86400e3;
@@ -59,7 +59,8 @@
         version:'업무일지 동기화 창이 예전 버전입니다 — 업무일지를 새로고침한 뒤 동기화하세요',
         clock:'이 컴퓨터 시계가 서버 시각과 '+(L.skew!=null?Math.abs(L.skew)+'초':'1분 넘게')+' 차이 납니다 — 시계를 맞춘 뒤 동기화하세요',
         device:'검수 콘솔이 예전 버전입니다 — CMS 탭을 새로고침하고 콘솔을 다시 여세요',
-        partial:'CMS 집계가 일부 실패했습니다 — 동기화를 다시 하세요' };
+        partial:'CMS 집계가 일부 실패했습니다 — 동기화를 다시 하세요',
+        account:'다른 CMS 계정이 이 업무일지의 이번 달 작업 권한을 갖고 있습니다'+(L.after?' ('+hm(Date.parse(L.after))+' 이후 넘겨받기 가능)':'') };
       if(!g.lease || !g.lease.ok) return { ok:false, why:W[L.why] || '이번 달 작업 권한을 확인하지 못했습니다(서버 연결) — 업무일지 동기화를 다시 하세요' };
       if(!(Date.parse(g.lease.until)>now)) return { ok:false, why:'작업 권한 시간이 지났습니다 — 동기화를 다시 하세요' };
     }
@@ -91,7 +92,7 @@
     });
     var w=g.won+spent, left=g.target-w;
     /* 정지는 지금 셈법(v7)으로 쓴 것만 — 예전 셈법(재승인 500원 등)으로 걸린 정지는 한 번 다시 따진다 */
-    var halt=l.halt && l.halt.v>=VERSION && l.halt.month===gi.month && l.halt.target===g.target ? l.halt : null;
+    var halt=l.halt && l.halt.v>=HALT_V && l.halt.month===gi.month && l.halt.target===g.target ? l.halt : null;
     if(halt) return { ok:false, halted:true, month:gi.month, target:g.target, won:w, left:left,
       why:'이번 달은 목표 직전에서 멈춘 상태입니다 (멈춘 시각 '+hm(halt.t)+' · 이번 달 '+won(w)+' · 목표까지 '+won(Math.max(0,left))+' 남음). 목표를 올리면 다시 진행합니다' };
     return { ok:true, month:gi.month, target:g.target, base:g.won, spent:spent, n:n, won:w, left:left,
@@ -106,12 +107,19 @@
   /* 한 건 하기 직전에 부른다(리뷰는 지금 검수 대기인 것만). ok 면 원장에 적고, 아니면 절대 실행하지 않는다.
      같은 리뷰를 다시 부르면: 지금 세고 있는 예약이 있으면 그대로 ok(again — 그 예약에 '함께 씀' 표시를 남겨 주인이 지우지 못하게),
      셈에서 빠진 옛 기록이면 새 건처럼 예산부터 본다. 업무일지가 이미 센 리뷰가 다시 대기면 재승인 — 500원을 또 센다. */
-  function haltAt(s, now){ save(IK+'!halt', { v:VERSION, month:s.month, target:s.target, t:now, won:s.won }); }
+  function haltAt(s, now){ save(IK+'!halt', { v:HALT_V, month:s.month, target:s.target, t:now, won:s.won }); }
   function reserve(kind, id, opt){
     var c=RATE[kind]; if(!c) return { ok:false, why:'알 수 없는 종류 '+kind };
     var key=kind+':'+String(id), now=nowMs(), s=status();
     if(!s.ok) return { ok:false, stop:true, why:s.why };
     var gi=goalInfo(now), all=ledger().items, cur=all[key];
+    /* 작업 권한을 쓰는 동안(업무일지 서버 로그인)은 작성 70일 넘은 리뷰를 승인하지 않는다 — 다른 기기가 넘겨받을 때 하는
+       CMS 집계(최근 75일 작성)에 안 잡혀 그 승인을 못 볼 수 있다 */
+    if(kind==='r' && gi.g.lease!==null){
+      var wd=Date.parse(String(opt && opt.written || '').slice(0,10)+'T00:00:00+09:00');
+      if(!isFinite(wd)) return { ok:false, why:'리뷰 작성일을 몰라 승인하지 않습니다' };
+      if(now-wd>OLD_DAYS*864e5) return { ok:false, why:'작성 '+OLD_DAYS+'일이 넘은 리뷰라 도구로 승인하지 않습니다 — CMS에서 직접 확인하세요' };
+    }
     if(cur && counted(key, cur, gi)){ cur.j=now; putItem(key, cur); return { ok:true, again:true, left:s.left }; }
     if(kind==='r' && gi.have.has(String(id))) return { ok:true, again:true, free:true, left:s.left };   /* 이미 이번 달 수입에 든 리뷰의 재승인 — 업무일지가 더 세지 않으니 0원 */
     if(s.won+c>s.target){
@@ -166,7 +174,8 @@
   function prune(notMine, before){
     var items=ledger().items, n=0;
     /* 마지막으로 쓴 때(t·함께 쓴 j 중 나중)가 집계 시작 전이어야 한다 — 집계 중에 다시 써서 실제로 승인된 예약은 남긴다 */
-    Object.keys(items).forEach(function(k){ var x=items[k]; if(x && x.k==='r' && Math.max(x.t||0, x.j||0)<before && notMine[k.slice(2)]){ delItem(k); n++; } });
+    /* 결과가 애매했던(u) 예약만 — 확인된 승인은 보관함으로 업무일지에 들어가 번호 목록에 잡힐 때까지 센다 */
+    Object.keys(items).forEach(function(k){ var x=items[k]; if(x && x.k==='r' && x.u && Math.max(x.t||0, x.j||0)<before && notMine[k.slice(2)]){ delItem(k); n++; } });
     return n;
   }
   root.UnpaGuard={ VERSION:VERSION, RATE:RATE, status:status, line:line, reserve:reserve, reserveSafe:reserveSafe, release:release, mark:mark, forget:forget, settled:settled, prune:prune,
@@ -209,7 +218,8 @@
       var th=[].slice.call(document.querySelectorAll('img')).find(function(x){ return /images\.unpa\.me/.test(x.src) && x.alt; });
       if(!th || /\/null$/.test(th.src)){ out.push(id+' STOP xbox(제품 미연결)'); continue; }
       var a=btn('검수 완료'); if(!a || a.disabled){ out.push(id+' already/notpending'); continue; }
-      var g=await reserveSafe('r', id);
+      var g=await reserveSafe('r', id, { written:cells()['최초 작성일'] });
+      if(!g.ok && !g.stop){ out.push(id+' SKIP '+g.why); continue; }      /* 이 리뷰만 못 함(작성일 등) — 나머지는 이어서 */
       if(!g.ok){ out.push(id+' ⛔ '+g.why); out.push('NOT DONE '+ids.slice(k).join(',')); break; }
       a.click();
       var m=await waitFor(function(){ return [].slice.call(document.querySelectorAll('.ant-modal, .ant-modal-confirm')).find(function(x){ return /리뷰 검수를 완료하시겠습니까/.test(x.innerText); }); }, 4000);

@@ -217,7 +217,7 @@ function cms(g, reviews, nowIso){
   const document={
     querySelectorAll(sel){
       const r=R(); if(!r) return [];
-      if(sel==='th') return [el({innerText:'리뷰 ID',nextElementSibling:{innerText:st.cur}}),el({innerText:'최근 수정일',nextElementSibling:{innerText:r.upd}})];
+      if(sel==='th') return [el({innerText:'리뷰 ID',nextElementSibling:{innerText:st.cur}}),el({innerText:'최초 작성일',nextElementSibling:{innerText:r.created||'2026-10-16 09:00:00'}}),el({innerText:'최근 수정일',nextElementSibling:{innerText:r.upd}})];
       if(sel==='button') return [approveBtn()];
       if(sel==='button.ant-switch') return [el({innerText:'노출',getAttribute:()=>r.hidden?'false':'true'})];
       if(sel==='img') return [el({src:'https://images.unpa.me/'+(r.xbox?'null':'123'),alt:'p'})];
@@ -328,10 +328,10 @@ test('the review console no longer approves without a known goal',()=>{
 
 test('after a CMS count, approval reservations made before it for reviews the count saw as not approved by me are dropped (they never happened)',()=>{
   const c=Date.parse(COUNTED);
-  const items={'r:555':{k:'r',t:c-3600e3,src:'c'},'r:556':{k:'r',t:c-3600e3},'r:557':{k:'r',t:c+60e3},'p:x|y|1':{k:'p',t:c-3600e3}};
+  const items={'r:555':{k:'r',t:c-3600e3,src:'c',u:1},'r:556':{k:'r',t:c-3600e3,u:1},'r:557':{k:'r',t:c+60e3,u:1},'r:558':{k:'r',t:c-3600e3},'p:x|y|1':{k:'p',t:c-3600e3}};
   const {G,ledger}=guard(goal(),NOW,{'unpa-claude-ledger-v1':JSON.stringify({v:1,items})});
-  assert.equal(G.prune({'555':1,'557':1},c-5*60e3),1,'555 만 — 556 은 집계가 못 본 리뷰(60일 밖 등)라 남기고, 557 은 집계 뒤 예약이라 남긴다');
-  assert.deepEqual(Object.keys(ledger().items).sort(),['p:x|y|1','r:556','r:557']);
+  assert.equal(G.prune({'555':1,'557':1,'558':1},c-5*60e3),1,'555 만 — 556 은 집계가 못 본 리뷰라, 557 은 집계 뒤 예약이라, 558 은 확인된 승인이라 남긴다');
+  assert.deepEqual(Object.keys(ledger().items).sort(),['p:x|y|1','r:556','r:557','r:558']);
 });
 
 test('prune keeps a reservation that was used again (joined) after the count started — that later use may be the real approval',()=>{
@@ -351,11 +351,16 @@ test('the old snapshot key is not read any more (a stale tab with an older guard
 
 test('with the worklog cloud on, only the device holding this month\'s work right (lease) may approve or register, and only until it expires',()=>{
   const later=new Date(Date.parse(NOW)+30*60e3).toISOString(), past=new Date(Date.parse(NOW)-60e3).toISOString();
-  let r=guard(goal({lease:{ok:false,why:'other',until:later}}),NOW).G.reserve('r','1');
+  const W={written:'2026-10-17'};
+  let r=guard(goal({lease:{ok:false,why:'other',until:later}}),NOW).G.reserve('r','1',W);
   assert.equal(r.ok,false); assert.match(r.why,/다른 컴퓨터\(또는 브라우저\)가 이번 달 작업 권한/);
-  r=guard(goal({lease:{ok:true,until:past}}),NOW).G.reserve('r','1'); assert.equal(r.ok,false); assert.match(r.why,/작업 권한 시간이 지났습니다/);
-  r=guard(goal({lease:{ok:false,why:'version'}}),NOW).G.reserve('r','1'); assert.match(r.why,/예전 버전/);
-  assert.equal(guard(goal({lease:{ok:true,until:later}}),NOW).G.reserve('r','1').ok,true);
+  r=guard(goal({lease:{ok:true,until:past}}),NOW).G.reserve('r','1',W); assert.equal(r.ok,false); assert.match(r.why,/작업 권한 시간이 지났습니다/);
+  r=guard(goal({lease:{ok:false,why:'version'}}),NOW).G.reserve('r','1',W); assert.match(r.why,/예전 버전/);
+  assert.equal(guard(goal({lease:{ok:true,until:later}}),NOW).G.reserve('r','1',W).ok,true);
+  /* 권한을 쓰는 동안은 작성일을 알아야 하고, 70일 넘은 리뷰는 도구로 승인하지 않는다(다음 기기의 집계에 안 잡힐 수 있어서) */
+  let q=guard(goal({lease:{ok:true,until:later}}),NOW).G.reserve('r','1'); assert.equal(q.ok,false); assert.equal(q.stop,undefined); assert.match(q.why,/작성일을 몰라/);
+  q=guard(goal({lease:{ok:true,until:later}}),NOW).G.reserve('r','1',{written:'2026-08-01'}); assert.equal(q.ok,false); assert.match(q.why,/70일이 넘은/);
+  assert.equal(guard(goal({lease:{ok:true,until:later}}),NOW).G.reserve('p','x|y|1').ok,true,'제품은 작성일과 무관');
   assert.equal(guard(goal({lease:undefined}),NOW).G.reserve('r','1').ok,false,'권한 정보가 아예 없으면 막는다');
   assert.equal(guard(goal({lease:null}),NOW).G.reserve('r','1').ok,true,'서버 로그인 안 함(한 기기)');
 });
@@ -387,4 +392,12 @@ test('lease refusal messages say what to do (other device: from when; clock; old
   r=guard(goal({lease:{ok:false,why:'clock',skew:95}}),NOW).G.reserve('r','1'); assert.match(r.why,/시계가 서버 시각과 95초/);
   r=guard(goal({lease:{ok:false,why:'device'}}),NOW).G.reserve('r','1'); assert.match(r.why,/콘솔이 예전 버전/);
   r=guard(goal({lease:{ok:false,why:'cloud'}}),NOW).G.reserve('r','1'); assert.match(r.why,/서버 연결/);
+});
+
+test('with a work right in use, UnpaOps.approve skips (does not stop at) a review written more than 70 days ago and goes on',async()=>{
+  const later=new Date(Date.parse(NOW)+30*60e3).toISOString();
+  const {ctx,st}=cms(goal({lease:{ok:true,until:later}}),{'1':rv({created:'2026-07-20 10:00:00'}),'2':rv({created:'2026-10-17 10:00:00'})});
+  const out=await ctx.UnpaOps.approve(['1','2']);
+  assert.match(out,/1 SKIP 작성 70일이 넘은/); assert.match(out,/2 OK/); assert.deepEqual(plain(st.clicks.approve),['2']);
+  assert.equal(ctx.UnpaGuard.VERSION,8);
 });

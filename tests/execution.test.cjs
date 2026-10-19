@@ -899,7 +899,7 @@ test('only one CMS count runs at a time: asking again while one is running waits
 test('after the CMS count, a leftover approval reservation for a review the count saw as not approved by me is dropped',async()=>{
   const {api,ctx}=harness(); api.setMe('me@example.com');
   api.goalSave(snap({target:100000,won:0}));
-  ctx.localStorage.setItem('unpa-claude-ledger-v1',JSON.stringify({v:1,items:{'r:555':{k:'r',t:Date.now()-3600e3,src:'c'},'r:556':{k:'r',t:Date.now()-3600e3}}}));
+  ctx.localStorage.setItem('unpa-claude-ledger-v1',JSON.stringify({v:1,items:{'r:555':{k:'r',t:Date.now()-3600e3,src:'c',u:1},'r:556':{k:'r',t:Date.now()-3600e3,u:1}}}));
   assert.equal(ctx.UnpaGuard.status().spent,1000);
   ctx.__route=(url)=>{
     if(/\/admin\/reviews\?/.test(url)) return {status:200,body:{results:/startDate=(\d{4}-\d\d-\d\d)/.exec(url)[1]===api.workPayload().work.to?[{id:555,status:'PENDING_APPROVAL',createdAt:new Date().toISOString()}]:[],totalCount:0}};
@@ -958,4 +958,25 @@ test('a console whose tab still holds a pre-v7 guard (even one with reserveSafe)
   const G=ctx.UnpaGuard; ctx.UnpaGuard=Object.assign({},G,{VERSION:undefined});
   await api.runJobs([{id:93,action:'approve',reasons:[]}]);
   assert.equal(sent.filter(x=>/\/approve$/.test(x.url)).length,0);
+});
+
+test('the console swaps out a guard that reads another snapshot key (round-7 v7 guard), refuses a protected snapshot without a usable work right, and skips outbox rows already in the count',async()=>{
+  const {api,sent,ctx}=harness(); api.setTpl(TPL); api.setDate('2026-09-02');
+  api.goalSave(snap({target:100000,won:0}));
+  const G=ctx.UnpaGuard; ctx.UnpaGuard=Object.assign({},G,{VERSION:7,keys:{goal:'unpa-console-goal-v2'}});
+  await api.runJobs([{id:95,action:'approve',reasons:[]}]);
+  assert.equal(sent.filter(x=>/\/approve$/.test(x.url)).length,0,'다른 키를 읽는 가드로는 승인하지 않는다');
+  ctx.localStorage.setItem('unpa-console-outbox-v1',JSON.stringify({seq:3,reviews:[['5','2026-10-19','','','','m'],['6','2026-10-19','','','','m']]}));
+  api.setWork({reviews:{'5':['2026-10-19','B','P','2026-10-10']},products:{},failed:[],watch:{},mine:[],at:new Date().toISOString(),startedAt:new Date().toISOString()});
+  const rv=api.workPayload().work.reviews.map(x=>x[0]);
+  assert.deepEqual(rv.filter(x=>x==='5').length,1); assert.ok(rv.indexOf('6')>=0); assert.equal(api.workPayload().gk,3);
+});
+
+test('a per-review refusal (unknown written date while a work right is used) only defers that review; the console goes on with the others',async()=>{
+  const {api,sent,ctx}=harness(); api.setTpl(TPL); api.setDate('2026-09-02');
+  api.goalSave(snap({target:100000,won:0,lease:{ok:true,until:new Date(Date.now()+30*60e3).toISOString()}}));
+  const jobs=[{id:97,action:'approve',reasons:[]},{id:98,action:'approve',reasons:[],date:new Date(Date.now()-3*864e5).toISOString().slice(0,10)}];
+  await api.runJobs(jobs);
+  const ap=sent.filter(x=>/\/approve$/.test(x.url)).map(x=>x.url);
+  assert.equal(ap.length,1); assert.match(ap[0],/\/98\/approve$/); assert.equal(jobs[0].deferred,true);
 });
