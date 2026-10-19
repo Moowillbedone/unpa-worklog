@@ -20,7 +20,7 @@ function lsOf(store, onGet, onSet){
 }
 function guard(g, nowIso, extra, onGet, onSet){
   const store={};
-  if(g) store['unpa-console-goal-v2']=JSON.stringify(g);
+  if(g) store['unpa-console-goal-v3']=JSON.stringify(g);
   Object.assign(store, extra||{});
   const clock={now:Date.parse(nowIso)};
   const ctx={localStorage:lsOf(store,onGet,onSet),Date,JSON,Math,Object,String,isFinite,Set,Promise,setTimeout};
@@ -69,9 +69,9 @@ test('once anything is refused, that amount is the month\'s final income — a c
 test('the stop holds across re-syncs with the same target and lifts when the worklog target is raised',()=>{
   const {G,store,clock}=guard(goal({won:1429700}),NOW);
   assert.equal(G.reserve('r','1').ok,false);
-  store['unpa-console-goal-v2']=JSON.stringify(goal({won:1429700,countedAt:'2026-10-18T13:00:00Z'})); clock.now=Date.parse('2026-10-18T13:10:00Z');
+  store['unpa-console-goal-v3']=JSON.stringify(goal({won:1429700,countedAt:'2026-10-18T13:00:00Z'})); clock.now=Date.parse('2026-10-18T13:10:00Z');
   assert.equal(G.reserve('r','2').ok,false,'같은 목표로 다시 동기화해도 정지');
-  store['unpa-console-goal-v2']=JSON.stringify(goal({won:1429700,target:1500000,countedAt:'2026-10-18T13:20:00Z'})); clock.now=Date.parse('2026-10-18T13:25:00Z');
+  store['unpa-console-goal-v3']=JSON.stringify(goal({won:1429700,target:1500000,countedAt:'2026-10-18T13:20:00Z'})); clock.now=Date.parse('2026-10-18T13:25:00Z');
   assert.equal(G.status().ok,true); assert.equal(G.reserve('r','3').ok,true);
 });
 
@@ -113,7 +113,7 @@ test('a sync in the middle of a run neither drops nor double counts: approvals a
   ['a','b','c'].forEach(id=>assert.equal(G.reserve('r',id).ok,true));
   assert.equal(G.status().won,896500);
   /* 새 동기화: a·b 는 업무일지에 들어감(won +1000), c 는 아직 */
-  store['unpa-console-goal-v2']=JSON.stringify(goal({won:896000,countedAt:'2026-10-18T12:40:00Z',ids:{r:['482561','100','a','b'],p:[]}}));
+  store['unpa-console-goal-v3']=JSON.stringify(goal({won:896000,countedAt:'2026-10-18T12:40:00Z',ids:{r:['482561','100','a','b'],p:[]}}));
   clock.now=Date.parse('2026-10-18T12:45:00Z');
   assert.equal(G.status().won,896500,'같은 금액 — 빠지지도 두 번 세지도 않는다');
 });
@@ -207,7 +207,7 @@ test('near the target, reservations queue behind a cross-tab lock and wait for o
 
 /* ── 실제 흐름: 가짜 CMS 리뷰 상세 화면에서 UnpaOps.approve 를 돌린다 ── */
 function cms(g, reviews, nowIso){
-  const store={'unpa-console-goal-v2':JSON.stringify(g)}, sess={};
+  const store={'unpa-console-goal-v3':JSON.stringify(g)}, sess={};
   const st={cur:null, modal:false, clicks:{approve:[],confirm:[]}};
   const R=()=>reviews[st.cur];
   const el=(o)=>Object.assign({getAttribute:()=>null,querySelectorAll:()=>[],querySelector:()=>null},o);
@@ -373,4 +373,18 @@ test('products count after the later of this device\'s count and the merged coun
   assert.equal(G.status().spent,600,'a 는 더 나중 집계(20분 뒤)에 이미 들어 있다');
   G=guard(goal({prodBase:new Date(Date.parse(NOW)+3*3600e3).toISOString()}),NOW,{'unpa-claude-ledger-v1':JSON.stringify({v:1,items})}).G;
   assert.equal(G.status().spent,1200,'미래 시각은 버린다');
+});
+
+test('a confirmed approval is also put in the console outbox so the next sync records it even outside the 60-day count window',async()=>{
+  const {ctx,store}=cms(goal(),{'1':rv(),'2':rv({finish:false})});
+  await ctx.UnpaOps.approve(['1','2']);
+  const o=JSON.parse(store['unpa-console-outbox-v1']);
+  assert.deepEqual(o.reviews.map(x=>x[0]),['1'],'결과를 못 본 2번은 넣지 않는다'); assert.match(o.reviews[0][1],/^\d{4}-\d\d-\d\d$/); assert.equal(o.seq,1);
+});
+
+test('lease refusal messages say what to do (other device: from when; clock; old console)',()=>{
+  let r=guard(goal({lease:{ok:false,why:'other',after:'2026-10-18T13:07:00Z'}}),NOW).G.reserve('r','1'); assert.match(r.why,/22:07 이후에 시작한 CMS 집계/);
+  r=guard(goal({lease:{ok:false,why:'clock',skew:95}}),NOW).G.reserve('r','1'); assert.match(r.why,/시계가 서버 시각과 95초/);
+  r=guard(goal({lease:{ok:false,why:'device'}}),NOW).G.reserve('r','1'); assert.match(r.why,/콘솔이 예전 버전/);
+  r=guard(goal({lease:{ok:false,why:'cloud'}}),NOW).G.reserve('r','1'); assert.match(r.why,/서버 연결/);
 });

@@ -291,22 +291,30 @@
       reason:String(v.reason||'').slice(0,90),d:v.d,applied:!!v.applied,manual_done:v.manual_done||null};});
     return out;
   }
-  const LEASE_MS=60*60e3,SKEW_MS=5*60e3;
+  const LEASE_MS=60*60e3,SKEW_MS=5*60e3,CLOCK_MS=60e3;
+  const validDevice=d=>typeof d==='string'&&/^[0-9a-z]{6,32}$/.test(d);
+  /* 이번 달 작업 권한 — 서버 행 하나를 '바뀌지 않았으면 쓰기'(nonce 비교)로만 바꿔 두 기기가 동시에 가질 수 없게.
+     모든 기기 시계가 서버 시각과 1분 안이어야 한다(넘겨받기 기준 5분 여유를 믿을 수 있게) */
   async function claimLease(io,p,now){
-    const dev=typeof p.device==='string'&&/^[0-9a-z]{6,32}$/.test(p.device)?p.device:null,acct=typeof p.acct==='string'&&/^[0-9a-z]{1,16}$/.test(p.acct)?p.acct:null;
+    const dev=validDevice(p.device)?p.device:null,acct=typeof p.acct==='string'&&/^[0-9a-z]{1,16}$/.test(p.acct)?p.acct:null;
     const cAt=Date.parse(p.countedAt)||0,t=now.getTime();
     if(!dev||!acct)return {ok:false,why:'device'};
+    if(typeof io.claim!=='function'||typeof io.skew!=='function')return {ok:false,why:'cloud'};
+    const sk=await io.skew();
+    if(typeof sk!=='number'||!isFinite(sk)||Math.abs(sk)>CLOCK_MS)return {ok:false,why:'clock',skew:typeof sk==='number'?Math.round(sk/1000):null};
     if(p.monthPartial||(p.work&&p.work.partial)||!cAt)return {ok:false,why:'partial'};
     const K='~lease:'+acct;
-    const read=async()=>{const rows=await io.pull([K]);const r=(rows||[]).find(x=>x&&x.month===K);return r&&r.data||null;};
-    const cur=await read();
-    const curUntil=cur?Date.parse(cur.until)||0:0;
-    const mine=!!(cur&&cur.device===dev);
-    if(!mine&&cur&&cur.device!==dev&&curUntil+SKEW_MS>cAt)return {ok:false,why:'other',until:cur.until};
-    const next={device:dev,since:mine&&cur.since?cur.since:now.toISOString(),until:new Date(t+LEASE_MS).toISOString()};
-    await io.push([{month:K,data:next,updated_at:now.toISOString()}]);
-    const back=await read();                                          /* 같은 순간 다른 기기도 썼으면 나중 쓴 쪽만 갖는다 */
-    if(!back||back.device!==dev)return {ok:false,why:'other',until:back&&back.until};
+    const rows=await io.pull([K]),row=(rows||[]).find(x=>x&&x.month===K),cur=row&&row.data||null;
+    const curUntil=cur?Date.parse(cur.until)||0:0,mine=!!(cur&&cur.device===dev);
+    const after=cur?new Date(curUntil+SKEW_MS).toISOString():null;
+    if(cur&&!mine){
+      if(p.view)return {ok:false,why:'other',until:cur.until,after};              /* 조회만 하는 동기화([업데이트])는 남의 권한을 넘겨받지 않는다 */
+      if(curUntil+SKEW_MS>cAt)return {ok:false,why:'other',until:cur.until,after};
+    }
+    const next={device:dev,since:mine&&cur.since?cur.since:now.toISOString(),until:new Date(t+LEASE_MS).toISOString(),
+                nonce:Math.random().toString(36).slice(2,12)+t.toString(36)};
+    const won=await io.claim(K,cur?{nonce:cur.nonce==null?null:cur.nonce}:null,next);
+    if(!won)return {ok:false,why:'other',after};                               /* 그사이 다른 기기가 먼저 바꿨다 */
     return {ok:true,until:next.until};
   }
   async function syncWindow(store,p,io,opts){
@@ -365,6 +373,8 @@
          권한을 넘겨받으려면 앞 기기의 권한이 끝난 뒤(시계 차 5분 여유) 시작한 CMS 집계가 있어야 한다 */
       if(cloud==='on')try{lease=await claimLease(io,p,now);}catch(e){lease={ok:false,why:'cloud'};}
       else lease={ok:false,why:'cloud'};
+    }else if(String(store.getItem('unpa-worklog-active')||'').indexOf('unpa-worklog-v2:')===0){
+      lease={ok:false,why:'cloud'};                                            /* 로그인한 브라우저인데 서버에 못 닿음 — 한 기기로 보지 않는다 */
     }
     /* 작업 증빙은 이 브라우저에 최근 4개월만 (서버에는 전부) */
     const evKeys=Object.keys(ev.months).sort();evKeys.slice(0,Math.max(0,evKeys.length-4)).forEach(k=>{delete ev.months[k];});
@@ -383,7 +393,9 @@
         /* 이번 달 수입에 이미 들어간 리뷰·제품 번호 — 목표 가드가 "아직 안 센 승인"만 더하도록 번호로 대조한다 */
         const ids=k=>{const a=(md._auto&&md._auto[k])||{},out=new Set();Object.values(a).forEach(l=>(l||[]).forEach(x=>out.add(String(x))));return [...out];};
         const ca=(md._countedAt&&typeof md._countedAt==='object'&&typeof p.acct==='string')?md._countedAt[p.acct]:null;
-        goal={month:mk,target:md.target,r,p:pp,won:r*500+pp*600,ids:{r:ids('r'),p:ids('p')},countedAt:ca||null,lease};}}catch(e){}
+        goal={month:mk,target:md.target,r,p:pp,won:r*500+pp*600,ids:{r:ids('r'),p:ids('p')},countedAt:ca||null,lease};
+        /* 기기 번호가 없는 예전 콘솔: 어떤 버전 가드도 쓰지 못하게 남은 금액 0·번호 목록 없음으로 넘긴다 */
+        if(!validDevice(p.device))goal={month:mk,target:md.target,r,p:pp,won:md.target,countedAt:null,partial:true,lease:{ok:false,why:'device'}};}}catch(e){}
     return {ok:true,today:res.today,changes:res.changes.slice(0,20),nChanges:res.changes.length,auditDays,auditError,cloud,console:consoleOut,remain,
             verdicts:verdictsFor(audit,p.backlog),goal};
   }

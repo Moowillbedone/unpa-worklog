@@ -828,7 +828,7 @@ test('after a sync the goal snapshot carries the count time, build time and part
   const pl=posted[0][0].payload;
   const m=new Date(Date.now()+9*3600e3).toISOString().slice(0,7);
   fire({type:'unpa-sync-done',nonce,ok:true,seq:pl.seq,today:{r:0,p:0},goal:{month:m,target:1430000,r:0,p:0,won:900000,ids:{r:['5'],p:[]},lease:null}});
-  const g=JSON.parse(ctx.localStorage.getItem('unpa-console-goal-v2'));
+  const g=JSON.parse(ctx.localStorage.getItem('unpa-console-goal-v3'));
   assert.equal(g.countedAt,st); assert.equal(g.builtAt,pl.builtAt); assert.equal(g.partial,false); assert.deepEqual(g.ids.r,['5']);
   const s=ctx.UnpaGuard.status(); assert.equal(s.ok,true); assert.equal(s.won,900000); assert.equal(s.left,530000);
 });
@@ -847,7 +847,7 @@ test('a sync built on an older CMS count does not overwrite a newer goal snapsho
   const fire=data=>ctx.__listeners.slice().forEach(f=>f({origin:'https://moowillbedone.github.io',source:win,data}));
   fire({type:'unpa-sync-ready',nonce});
   fire({type:'unpa-sync-done',nonce,ok:true,seq:posted[0][0].payload.seq,today:{r:0,p:0},goal:{month:m,target:1430000,r:0,p:0,won:900000,ids:{r:[],p:[]},lease:null}});
-  const g=JSON.parse(ctx.localStorage.getItem('unpa-console-goal-v2'));
+  const g=JSON.parse(ctx.localStorage.getItem('unpa-console-goal-v3'));
   assert.equal(g.won,910000,'더 최근 집계로 만든 스냅샷이 남는다'); assert.equal(g.countedAt,newer.countedAt);
 });
 
@@ -882,7 +882,7 @@ test('a goal snapshot the guard would refuse (future count time) is replaced by 
   const fire=data=>ctx.__listeners.slice().forEach(f=>f({origin:'https://moowillbedone.github.io',source:win,data}));
   fire({type:'unpa-sync-ready',nonce});
   fire({type:'unpa-sync-done',nonce,ok:true,seq:posted[0][0].payload.seq,today:{r:0,p:0},goal:{month:m,target:1430000,r:0,p:0,won:900000,ids:{r:[],p:[]},lease:null}});
-  const g=JSON.parse(ctx.localStorage.getItem('unpa-console-goal-v2'));
+  const g=JSON.parse(ctx.localStorage.getItem('unpa-console-goal-v3'));
   assert.equal(g.countedAt,st); assert.equal(ctx.UnpaGuard.status().ok,true);
 });
 
@@ -931,11 +931,12 @@ test('a sync stores the goal under the new key and blocks the old key, using the
   const pl=posted[0][0].payload; assert.ok(/^[0-9a-z]+$/.test(pl.acct),'계정은 해시로만'); assert.ok(pl.acct.indexOf('@')<0);
   const m=new Date(Date.now()+9*3600e3).toISOString().slice(0,7);
   fire({type:'unpa-sync-done',nonce,ok:true,seq:pl.seq,today:{r:0,p:0},goal:{month:m,target:1430000,r:0,p:0,won:900000,ids:{r:[],p:[]},countedAt:other,lease:null}});
-  const g=JSON.parse(ctx.localStorage.getItem('unpa-console-goal-v2'));
+  const g=JSON.parse(ctx.localStorage.getItem('unpa-console-goal-v3'));
   assert.equal(g.countedAt,st,'신선도는 이 기기 집계 시각으로'); assert.equal(g.prodBase,other,'제품 기준은 같은 계정의 더 나중 집계');
   assert.ok(/^[0-9a-z]{6,32}$/.test(pl.device),'기기 번호');
-  const old=JSON.parse(ctx.localStorage.getItem('unpa-console-goal-v1'));
-  assert.equal(old.partial,true); assert.equal(old.countedAt,null,'예전 키는 막아 둔다');
+  for(const k of ['unpa-console-goal-v1','unpa-console-goal-v2']){ const old=JSON.parse(ctx.localStorage.getItem(k));
+    assert.equal(old.partial,true); assert.equal(old.countedAt,null); assert.equal(old.won,old.target,'예전 키는 남은 금액 0으로 막아 둔다'); }
+  assert.equal(pl.view,0,'콘솔 동기화는 권한을 넘겨받을 수 있는 동기화');
 });
 
 test('a sync whose worklog window is an older version (no lease field) leaves approvals blocked until the worklog is reloaded',()=>{

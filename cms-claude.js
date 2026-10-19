@@ -15,7 +15,7 @@
 (function(root){
   var RATE={ r:500, p:600 }, VERSION=7;
   /* 목표 스냅샷은 v2 키에서 읽는다 — v1 키에는 새 콘솔이 '일부 실패'로 막아 둔 값만 남아, 예전 버전 가드(시각 기준)가 열린 탭은 아무것도 하지 않는다 */
-  var GOAL_KEY='unpa-console-goal-v2', LEDGER_KEY='unpa-claude-ledger-v1', SENT_KEY='unpa-console-sent-v1';
+  var GOAL_KEY='unpa-console-goal-v3', LEDGER_KEY='unpa-claude-ledger-v1', SENT_KEY='unpa-console-sent-v1', OUTBOX_KEY='unpa-console-outbox-v1';
   var MAX_AGE=60*60e3, MARGIN=5*60e3, KEEP=45*86400e3;
   var NAME={ r:'리뷰 승인', p:'제품 등록' };
   var store=function(){ return root.localStorage; };
@@ -54,10 +54,13 @@
     if(!g.ids || !Array.isArray(g.ids.r)) return { ok:false, why:'목표 정보에 이번 달 리뷰 번호 목록이 없습니다 — 새 버전으로 동기화를 다시 하세요' };
     /* 작업 권한: 업무일지 서버에 로그인한 상태면 이 기기가 이번 달 작업 권한을 가져야 한다(lease). 로그인 안 했으면 null(한 기기) */
     if(g.lease!==null){
-      if(!g.lease || !g.lease.ok) return { ok:false, why: g.lease && g.lease.why==='other'
-        ? '다른 컴퓨터(또는 브라우저)가 이번 달 작업 권한을 갖고 있습니다'+(g.lease.until?' ('+hm(Date.parse(g.lease.until))+'까지)':'')+' — 그 뒤 CMS 집계를 새로 해서 동기화하세요'
-        : g.lease && g.lease.why==='version' ? '업무일지 동기화 창이 예전 버전입니다 — 업무일지를 새로고침한 뒤 동기화하세요'
-        : '이번 달 작업 권한을 확인하지 못했습니다 — 업무일지 동기화를 다시 하세요' };
+      var L=g.lease||{}, W={
+        other:'다른 컴퓨터(또는 브라우저)가 이번 달 작업 권한을 갖고 있습니다'+(L.after?' — '+hm(Date.parse(L.after))+' 이후에 시작한 CMS 집계로 검수 콘솔을 열어 동기화하세요':''),
+        version:'업무일지 동기화 창이 예전 버전입니다 — 업무일지를 새로고침한 뒤 동기화하세요',
+        clock:'이 컴퓨터 시계가 서버 시각과 '+(L.skew!=null?Math.abs(L.skew)+'초':'1분 넘게')+' 차이 납니다 — 시계를 맞춘 뒤 동기화하세요',
+        device:'검수 콘솔이 예전 버전입니다 — CMS 탭을 새로고침하고 콘솔을 다시 여세요',
+        partial:'CMS 집계가 일부 실패했습니다 — 동기화를 다시 하세요' };
+      if(!g.lease || !g.lease.ok) return { ok:false, why:W[L.why] || '이번 달 작업 권한을 확인하지 못했습니다(서버 연결) — 업무일지 동기화를 다시 하세요' };
       if(!(Date.parse(g.lease.until)>now)) return { ok:false, why:'작업 권한 시간이 지났습니다 — 동기화를 다시 하세요' };
     }
     /* 제품 기준 시각: 이 기기 집계와 업무일지에 합쳐진 같은 계정의 더 나중 집계 중 나중 것(미래 시각은 버림) — 수입 합계가 그때까지를 담고 있다 */
@@ -218,6 +221,7 @@
       /* 확인을 누른 뒤에는 결과가 안 보여도 원장에 남긴다 — 실제로 됐을 수 있으니 센 채로 둔다 */
       if(!fin && g.created) mark('r', id, g.token);
       if(fin && g.again) settled('r', id);
+      if(fin) outbox(id);                                                 /* 확인된 승인만 — 애매한 건 업무일지 기록에 넣지 않는다(원장에는 센 채로) */
       out.push(id+(fin?' OK':' UNSURE(확인 누름 · 결과 미확인 — 수입에는 센 채로 둠)'));
     }
     return out.join(' ; ')+' || '+line();
@@ -253,6 +257,14 @@
       out.push(id+(fin?' SENT':' NOTDONE'));
     }
     return out.join(' ; ');
+  }
+  /* 승인(또는 결과 미확인)을 콘솔 보관함에도 남긴다 — 다음 동기화가 CMS 집계 범위(최근 60일 작성)와 관계없이 업무일지에 넣게 */
+  function outbox(id){
+    try{ var o=load(OUTBOX_KEY); if(!o || typeof o!=='object') o={}; o.reviews=Array.isArray(o.reviews) ? o.reviews : []; o.audit=o.audit||{};
+      var d=new Date(nowMs()), p2=function(n){ return (n<10?'0':'')+n; }, day=d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate());
+      if(!o.reviews.some(function(x){ return x && String(x[0])===String(id); })) o.reviews.push([String(id), day, '', '', '', 'm']);
+      if(o.reviews.length>5000) o.reviews=o.reviews.slice(-5000);
+      o.seq=(o.seq||0)+1; save(OUTBOX_KEY, o); }catch(e){}
   }
   root.UnpaOps={ approve:approve, revise:revise, hash:H };
 

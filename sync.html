@@ -26,7 +26,7 @@
   <div class="st" style="font-size:12px"><a href="./" target="_blank" rel="noopener">업무일지 열기 ↗</a> · 반영이 끝나면 이 창은 저절로 닫힙니다.</div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-<script src="worklog-core.js?v=7"></script>
+<script src="worklog-core.js?v=8"></script>
 <script>
 /* 검수 콘솔(cms.unpa.me)이 이 창을 열고 CMS 집계를 넘긴다.
    여기서 이 브라우저의 업무일지·검수기록 저장소에 반영하고 결과를 돌려준 뒤 닫힌다.
@@ -53,7 +53,27 @@
       if(!user) return null;
       var T='worklog_months';
       var chunk=function(list, size){ var out=[]; for(var i=0;i<list.length;i+=size) out.push(list.slice(i,i+size)); return out; };
+      var token=s.data.session.access_token;
       return { uid:user.id, io:{
+        /* 서버 시각과 이 컴퓨터 시계의 차(ms) — 응답 Date 헤더(1초 단위)로 잰다. 작업 권한은 시계가 1분 안일 때만 */
+        skew: async function(){
+          var t0=Date.now(), r=await fetch(c.url+'/rest/v1/'+T+'?select=month&limit=0', { headers:{ apikey:c.key, Authorization:'Bearer '+token }, cache:'no-store' }), t1=Date.now();
+          var d=Date.parse(r.headers.get('Date')||''); if(!isFinite(d)) return null;
+          return d+500-(t0+t1)/2;
+        },
+        /* 작업 권한 행을 '안 바뀌었으면'만 쓴다: 없으면 insert(겹치면 실패), 있으면 그 nonce 일 때만 update */
+        claim: async function(K, expect, data){
+          var at=new Date().toISOString(), r;
+          if(!expect){
+            r=await sb.from(T).insert({ user_id:user.id, month:K, data:data, updated_at:at }).select('month');
+            if(r.error){ if(String(r.error.code)==='23505') return false; throw r.error; }
+            return (r.data||[]).length===1;
+          }
+          var q=sb.from(T).update({ data:data, updated_at:at }).eq('user_id',user.id).eq('month',K);
+          q = expect.nonce==null ? q.is('data->>nonce', null) : q.eq('data->>nonce', expect.nonce);
+          r=await q.select('month'); if(r.error) throw r.error;
+          return (r.data||[]).length===1;
+        },
         pull: async function(keys){
           var all=[], parts=chunk(keys, 40);
           for(var i=0;i<parts.length;i++){

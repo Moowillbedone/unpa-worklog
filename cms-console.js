@@ -2224,11 +2224,13 @@
      남은 금액으로 할 수 있는 승인만 고른다: 고신뢰 먼저, 모자라면 사람 확인 건을 오래된 작성일부터.
      수정요청·미노출은 수입(리뷰 수)에 들어가지 않으므로 막지 않는다. */
   var RATE_R=500, RATE_P=600;
-  /* 목표 스냅샷은 v2 키에 둔다. v1 키에는 '일부 실패'로 막은 값을 써서 업데이트 전 버전 가드(시각 기준)가 열린 탭은 승인·등록을 하지 않게 한다 */
-  var GOAL_KEY='unpa-console-goal-v2', GOAL_V1='unpa-console-goal-v1', SESSION_APPROVED={};
+  /* 목표 스냅샷은 v3 키(가드 v7 이상만 읽음)에 둔다. 예전 키(v1·v2)에는 남은 금액 0·'일부 실패'로 막은 값을 써서
+     업데이트 전 버전 가드가 열린 탭은 승인·등록을 하지 않게 한다 */
+  var GOAL_KEY='unpa-console-goal-v3', GOAL_OLD=['unpa-console-goal-v1','unpa-console-goal-v2'], SESSION_APPROVED={};
   function goalLoad(){ try{ var g=JSON.parse(localStorage.getItem(GOAL_KEY)||'null'); return (g && typeof g==='object') ? g : null; }catch(e){ return null; } }
   function goalSave(g){ try{ localStorage.setItem(GOAL_KEY, JSON.stringify(g));
-    localStorage.setItem(GOAL_V1, JSON.stringify({ month:g.month, target:g.target, won:g.won, at:g.at, countedAt:null, partial:true, note:'새 버전 콘솔·도구로 다시 여세요' })); }catch(e){} }
+    var block=JSON.stringify({ month:g.month, target:g.target, won:g.target, at:g.at, countedAt:null, partial:true, note:'새 버전 콘솔·도구로 다시 여세요' });
+    GOAL_OLD.forEach(function(k){ localStorage.setItem(k, block); }); }catch(e){} }
   function wonFmt(n){ return '₩'+Math.round(n||0).toLocaleString('ko-KR'); }
   function dayOf(v){ var d=Array.isArray(v) ? v[0] : v; return typeof d==='string' ? d : ''; }
   /* 조회가 하나라도 실패했으면 이번 달 수입을 믿을 수 없다 — 지난달에 작성된 리뷰도 이번 달에 승인됐을 수 있다 */
@@ -2451,7 +2453,7 @@
     /* 남은 검수 목록을 못 불러왔으면(BACKLOG 없음) 남은 일·미등록 칸은 비우지 않고 그대로 둔다 */
     /* acct = CMS 계정의 해시(계정 이름은 넘기지 않는다) — 업무일지가 계정마다 마지막 집계 시각을 기억한다 */
     var acct=null; if(ME){ var h=5381; for(var i=0;i<ME.length;i++) h=(Math.imul(h,33)^ME.charCodeAt(i))>>>0; acct=h.toString(36); }
-    return { v:1, seq:ob.seq||0, acct:acct, device:deviceId(), countedAt:(WORK && WORK.startedAt) || null, builtAt:new Date().toISOString(), monthPartial:!WORK || monthFailed(WORK),
+    return { v:1, seq:ob.seq||0, acct:acct, device:deviceId(), view:SYNC_ONLY ? 1 : 0, countedAt:(WORK && WORK.startedAt) || null, builtAt:new Date().toISOString(), monthPartial:!WORK || monthFailed(WORK),
              work:{ v:1, from:AUTO_FROM, to:ymd(new Date()), reviews:rv, products:pv, partial:!!(WORK && WORK.failed.length) },
              audit:ob.audit||{}, pending:(SYNC_ONLY && !BACKLOG) ? null : pendingList(), backlog:backlogList(), remain:remainList(), console:consoleState() };
   }
