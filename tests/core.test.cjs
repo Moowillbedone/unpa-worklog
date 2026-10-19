@@ -660,3 +660,28 @@ test('while the previous version\'s per-account right is still live for another 
   r=await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:40:00.000Z'),io,{uid,now:new Date('2026-10-19T10:41:00Z')});
   assert.equal(r.goal.lease.ok,true,'그 권한을 가진 기기는 새 행으로 이어 간다');
 });
+
+test('a right never runs past the month: renewing late on the last day ends 5 minutes before the month, so next month it is free; a handover in the last minutes does not block next month',async()=>{
+  const io=fakeCloud(), uid='u1', mk=(dev,c,o)=>Object.assign({v:1,gk:4,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-31',reviews:[],products:[]}},o||{});
+  let r=await W.syncWindow(fakeStore(),mk('office01','2026-10-31T14:20:00.000Z'),io,{uid,now:new Date('2026-10-31T14:30:00Z')});   /* 한국 10/31 23:30 */
+  assert.equal(r.goal.lease.until,'2026-10-31T14:55:00.000Z','한국 10/31 23:55까지만');
+  const nov=p=>Object.assign(p,{work:{v:1,from:'2026-10-01',to:'2026-11-01',reviews:[],products:[]}});
+  r=await W.syncWindow(fakeStore(),nov(mk('home0001','2026-10-31T15:10:00.000Z')),io,{uid,now:new Date('2026-10-31T15:11:00Z')});
+  assert.equal(r.goal.lease.ok,true,'다음 달엔 다른 기기도 바로 받는다');
+  const io2=fakeCloud();
+  await W.syncWindow(fakeStore(),mk('office01','2026-10-31T14:30:00.000Z',{work:{v:1,from:'2026-10-01',to:'2026-10-31',reviews:[['1','2026-10-31']],products:[]}}),io2,{uid,now:new Date('2026-10-31T14:31:00Z')});
+  await W.syncWindow(fakeStore(),mk('office01','2026-10-31T14:56:00.000Z',{release:1}),io2,{uid,now:new Date('2026-10-31T14:57:00Z')});   /* 23:57 넘기기 */
+  r=await W.syncWindow(fakeStore(),nov(mk('home0001','2026-10-31T15:10:00.000Z')),io2,{uid,now:new Date('2026-10-31T15:11:00Z')});
+  assert.equal(r.goal.lease.ok,true,'지난달 마지막 몇 분에 넘긴 권한은 다음 달 금액과 비교하지 않는다');
+});
+
+test('an inherited target keeps the time it was set, so merging with a stale computer keeps the target the user raised later',()=>{
+  const mkM=(target,o)=>Object.assign({month:'2026-11',target,days:{}},o||{});
+  /* 사용자가 10월에 목표를 1,600,000 으로 올림(_t) → 11월이 이어받음(_tc) / 오래 동기화 안 한 기기는 옛 1,430,000 을 이어받음(_tc 옛 시각) */
+  let m=W.mergeMonth(mkM(1430000,{_tc:1000}),mkM(1600000,{_tc:5000}));
+  assert.equal(m.target,1600000);
+  m=W.mergeMonth(mkM(1600000,{_tc:5000}),mkM(1430000,{_tc:1000}));
+  assert.equal(m.target,1600000);
+  m=W.mergeMonth(mkM(1600000),mkM(1430000));
+  assert.equal(m.target,1430000,'둘 다 시각이 없으면 낮은 쪽');
+});

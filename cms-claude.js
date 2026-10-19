@@ -67,6 +67,8 @@
         device:'검수 콘솔이 예전 버전입니다 — CMS 탭을 새로고침하고 콘솔을 다시 여세요',
         partial:'CMS 집계가 일부 실패했습니다 — 동기화를 다시 하세요',
         account:'다른 CMS 계정이 이 업무일지의 이번 달 작업 권한을 갖고 있습니다 — 다음 달에 풀립니다' };
+      var rel=false; try{ rel=store().getItem('unpa-lease-release')==='1'; }catch(e){ rel=true; }
+      if(rel) return { ok:false, why:W.released };                         /* [작업 권한 넘기기]를 누른 컴퓨터 — 스냅샷과 관계없이 바로 멈춘다 */
       if(!g.lease || !g.lease.ok) return { ok:false, why:W[L.why] || '이번 달 작업 권한을 확인하지 못했습니다(서버 연결) — 업무일지 동기화를 다시 하세요' };
       if(!(Date.parse(g.lease.until)>now)) return { ok:false, why:'작업 권한 시간이 지났습니다 — 동기화를 다시 하세요' };
     }

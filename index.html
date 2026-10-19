@@ -668,16 +668,23 @@ function carryTarget(m){
   const prev = Object.keys(ST).filter(k => k < m && ST[k] && Number.isSafeInteger(ST[k].target)).sort().pop();
   return prev ? ST[prev].target : DEF_TARGET;
 }
+/* 이어받은 목표의 원래 정한 시각(_tc) — 다른 컴퓨터와 합칠 때 나중에 정한 목표가 이기게 */
+function carryTc(m){
+  const prev = Object.keys(ST).filter(k => k < m && ST[k] && Number.isSafeInteger(ST[k].target)).sort().pop();
+  return prev ? (ST[prev]._t || ST[prev]._tc || 0) : 0;
+}
 function blank(m){
   const days = {};
   for (let i = 1; i <= daysIn(m); i++) days[pad(i)] = { r:0, p:0, memo:'', unreg:'' };
-  return { month:m, target:carryTarget(m), days };
+  const out = { month:m, target:carryTarget(m), days }, tc = carryTc(m);
+  if (tc) out._tc = tc;
+  return out;
 }
 function month(m){
   if (!ST[m]) ST[m] = blank(m);
   const t = ST[m];
   for (let i = 1; i <= daysIn(m); i++) if (!t.days[pad(i)]) t.days[pad(i)] = { r:0, p:0, memo:'', unreg:'' };
-  if (t.target == null) t.target = carryTarget(m);
+  if (t.target == null){ t.target = carryTarget(m); const tc = carryTc(m); if (tc) t._tc = tc; }
   return t;
 }
 /* 월 목표 수정 — from 달부터 그 뒤의 모든 달을 이 값으로. 앞으로 새로 생기는 달도 이어받는다.

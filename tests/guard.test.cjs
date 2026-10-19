@@ -424,3 +424,10 @@ test('the outbox row is dated by the reservation time (not after the result), so
   await ctx.UnpaOps.approve(['1']);
   assert.equal(JSON.parse(store['unpa-console-outbox-v1']).reviews[0][1],new Date(Date.parse('2026-10-18T14:59:59Z')).getFullYear()+'-'+String(new Date(Date.parse('2026-10-18T14:59:59Z')).getMonth()+1).padStart(2,'0')+'-'+String(new Date(Date.parse('2026-10-18T14:59:59Z')).getDate()).padStart(2,'0'));
 });
+
+test('a computer that pressed [hand over the work right] stops at once, whatever snapshot it still holds',()=>{
+  const later=new Date(Date.parse(NOW)+30*60e3).toISOString();
+  const {G,store}=guard(goal({lease:{ok:true,until:later}}),NOW,{'unpa-lease-release':'1'});
+  const r=G.reserve('r','1',{written:'2026-10-17'}); assert.equal(r.ok,false); assert.match(r.why,/넘겨 두었습니다/);
+  delete store['unpa-lease-release']; assert.equal(G.reserve('r','1',{written:'2026-10-17'}).ok,true);
+});

@@ -981,3 +981,21 @@ test('a per-review refusal (unknown written date while a work right is used) onl
   const ap=sent.filter(x=>/\/approve$/.test(x.url)).map(x=>x.url);
   assert.equal(ap.length,1); assert.match(ap[0],/\/98\/approve$/); assert.equal(jobs[0].deferred,true);
 });
+
+test('a hand-over sync result is saved even if another tab left a snapshot from a newer count (the release must reach this computer\'s guard)',()=>{
+  const {api,ctx}=harness({noGoal:true}); api.setDate('2026-09-24');
+  const m=new Date(Date.now()+9*3600e3).toISOString().slice(0,7);
+  api.goalSave(snap({won:900000,countedAt:new Date(Date.now()-5*60e3).toISOString(),lease:{ok:true,until:new Date(Date.now()+50*60e3).toISOString()}}));
+  ctx.localStorage.setItem('unpa-lease-release','1');
+  api.setMe('me@example.com'); api.setWork({reviews:{},products:{},failed:[],watch:{},mine:[],at:new Date().toISOString(),startedAt:new Date(Date.now()-20*60e3).toISOString()});
+  const posted=[]; const win={postMessage:(mm,o)=>posted.push([mm,o])}; ctx.__open=()=>win;
+  assert.equal(api.syncNow(),true);
+  const nonce=/#n=([a-f0-9]+)/.exec(ctx.__opened[0])[1];
+  const fire=data=>ctx.__listeners.slice().forEach(f=>f({origin:'https://moowillbedone.github.io',source:win,data}));
+  fire({type:'unpa-sync-ready',nonce});
+  assert.equal(posted[0][0].payload.release,1);
+  fire({type:'unpa-sync-done',nonce,ok:true,seq:posted[0][0].payload.seq,today:{r:0,p:0},goal:{month:m,target:1430000,r:0,p:0,won:900000,ids:{r:[],p:[]},lease:{ok:false,why:'released'}}});
+  const g=JSON.parse(ctx.localStorage.getItem('unpa-console-goal-v4'));
+  assert.deepEqual(g.lease,{ok:false,why:'released'});
+  assert.equal(ctx.UnpaGuard.status().ok,false);
+});

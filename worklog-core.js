@@ -48,8 +48,11 @@
     const target=(opts&&opts.target)||1450000;
     const out=JSON.parse(JSON.stringify(input||{}));
     /* 새 달의 목표는 직전 달 것을 이어받는다 (사람이 바꾼 목표가 다음 달에도 그대로) */
-    const carry=m=>{const prev=Object.keys(out).filter(k=>k<m&&out[k]&&integer(out[k].target)).sort().pop();return prev?out[prev].target:target;};
-    const mon=m=>{if(!out[m])out[m]=blankMonth(m,carry(m));const t=out[m];if(!t.days)t.days={};const n=new Date(Date.UTC(+m.slice(0,4),+m.slice(5,7),0)).getUTCDate();for(let i=1;i<=n;i++)if(!t.days[pad2(i)])t.days[pad2(i)]={r:0,p:0,memo:'',unreg:''};if(t.target==null)t.target=carry(m);return t;};
+    const carrySrc=m=>{const prev=Object.keys(out).filter(k=>k<m&&out[k]&&integer(out[k].target)).sort().pop();return prev?out[prev]:null;};
+    const carry=m=>{const s=carrySrc(m);return s?s.target:target;};
+    /* 이어받은 목표에는 원래 정한 시각(_tc)을 함께 둔다 — 기기끼리 합칠 때 나중에 정한 목표가 이기게 */
+    const carryT=(t,m)=>{const s=carrySrc(m);t.target=s?s.target:target;const tc=s?(s._t||s._tc||0):0;if(tc)t._tc=tc;};
+    const mon=m=>{if(!out[m]){out[m]=blankMonth(m,carry(m));carryT(out[m],m);}const t=out[m];if(!t.days)t.days={};const n=new Date(Date.UTC(+m.slice(0,4),+m.slice(5,7),0)).getUTCDate();for(let i=1;i<=n;i++)if(!t.days[pad2(i)])t.days[pad2(i)]={r:0,p:0,memo:'',unreg:''};if(t.target==null)carryT(t,m);return t;};
     /* 한 번호는 한 날에만 센다 — 콘솔 보관함(내 컴퓨터 날짜)과 CMS 집계(승인 시각)의 날짜가 다르거나, 같은 리뷰가 다시 승인돼
        날짜가 바뀌어도 수입이 두 번 들어가지 않게. 이번에 들어온 목록은 CMS 집계가 앞, 보관함이 뒤라 먼저 온 날짜를 쓰고,
        예전 동기화가 다른 날에 둔 번호는 새 날짜로 옮긴다(옛 날이 이번 범위 밖이면 옮기지 않고 그대로 둔다). */
@@ -102,7 +105,7 @@
       const x=remain.days[d];
       if(!date(d)||!x||!integer(x.n))continue;
       const mm=d.slice(0,7),dd=d.slice(8);
-      if(!out[mm]){const prev=Object.keys(out).filter(k=>k<mm&&out[k]&&integer(out[k].target)).sort().pop();out[mm]=blankMonth(mm,prev?out[prev].target:1450000);}
+      if(!out[mm]){const prev=Object.keys(out).filter(k=>k<mm&&out[k]&&integer(out[k].target)).sort().pop();out[mm]=blankMonth(mm,prev?out[prev].target:1450000);const tc=prev?(out[prev]._t||out[prev]._tc||0):0;if(tc)out[mm]._tc=tc;}
       const t=out[mm];if(!t.days[dd])t.days[dd]={r:0,p:0,memo:'',unreg:''};
       const day=t.days[dd],pend={n:x.n,reg:x.reg|0,upd:x.upd|0,blocked:x.blocked|0,at};
       const want=x.n>0?String(x.n):'';
@@ -186,9 +189,10 @@
       const last={};for(const dd of Object.keys(led[k]).sort())for(const x of led[k][dd])last[String(x)]=dd;
       for(const dd of Object.keys(led[k]))led[k][dd]=led[k][dd].filter(x=>last[String(x)]===dd);}
     if(Object.keys(led.r).length||Object.keys(led.p).length)out._auto=led;
-    if(remote.target!=null&&(remote._t||0)>(local._t||0)){out.target=remote.target;out._t=remote._t;}
-    /* 어느 쪽도 사람이 정한 시각(_t)이 없으면(넘겨받은 목표) 낮은 쪽 — 오래 동기화 안 한 기기의 옛 목표가 이기지 않게 */
-    else if(!local._t&&!remote._t&&integer(remote.target)&&integer(local.target)&&remote.target<local.target)out.target=remote.target;
+    /* 목표: 사람이 정한 시각(_t, 이어받은 것은 원래 정한 시각 _tc)이 나중인 쪽. 둘 다 시각이 없으면 낮은 쪽(넘지 않는 쪽) */
+    const tl=local._t||local._tc||0,tr=remote._t||remote._tc||0;
+    if(remote.target!=null&&tr>tl){out.target=remote.target;if(remote._t)out._t=remote._t;else delete out._t;if(remote._tc)out._tc=remote._tc;else delete out._tc;}
+    else if(!tl&&!tr&&integer(remote.target)&&integer(local.target)&&remote.target<local.target)out.target=remote.target;
     {const a=(local._countedAt&&typeof local._countedAt==='object')?local._countedAt:{},b=(remote._countedAt&&typeof remote._countedAt==='object')?remote._countedAt:{},c=Object.assign({},a);
       for(const k of Object.keys(b))if(String(b[k]||'')>String(c[k]||''))c[k]=b[k];if(Object.keys(c).length)out._countedAt=c;}
     out.days=out.days||{};
@@ -306,6 +310,8 @@
      · 다른 CMS 계정에는 이번 달 안에는 넘기지 않는다(그 계정 집계로는 앞 기기 승인을 확인할 수 없다).
      · 앞 권한이 지난달에 끝났으면(이번 달 시작 5분 전까지) 누구든 새로 받는다. */
   const kstMonthStart=t=>{const d=new Date(t+9*3600e3);return Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),1)-9*3600e3;};
+  const kstMonthOf=t=>new Date(t+9*3600e3).toISOString().slice(0,7);
+  const kstNextMonthStart=t=>kstMonthStart(kstMonthStart(t)+32*864e5);
   async function claimLease(io,p,now,sk,curWon){
     const dev=validDevice(p.device)?p.device:null,acct=typeof p.acct==='string'&&/^[0-9a-z]{1,16}$/.test(p.acct)?p.acct:null;
     const cAt=Date.parse(p.countedAt)||0,t=now.getTime();
@@ -326,12 +332,13 @@
     }
     const mine=!!(cur&&cur.device===dev&&cur.acct===acct);
     if(mine&&p.release){                                                  /* 이 기기가 권한을 넘긴다 — 닫고, 이 기기는 더 하지 않는다 */
-      const next=Object.assign({},cur,{closed:true,closedAt:now.toISOString(),closedWon:typeof curWon==='number'?curWon:null,until:now.toISOString(),nonce:nonce()});
+      const next=Object.assign({},cur,{closed:true,closedAt:now.toISOString(),closedMonth:kstMonthOf(t),closedWon:typeof curWon==='number'?curWon:null,until:now.toISOString(),nonce:nonce()});
       const ok=await io.claim(K,{nonce:cur.nonce==null?null:cur.nonce},next);
       return {ok:false,why:ok?'released':'other'};
     }
     if(cur&&!mine){
-      const prevMonth=(Date.parse(cur.until)||0)+SKEW_MS<=kstMonthStart(t);
+      /* 지난달 권한: 이번 달 시작 5분 전까지 끝났거나, 지난달에 닫혔다(닫을 때 금액은 지난달 것이라 이번 달과 비교하지 않는다) */
+      const prevMonth=(Date.parse(cur.until)||0)+SKEW_MS<=kstMonthStart(t)||!!(cur.closed&&cur.closedMonth&&cur.closedMonth<kstMonthOf(t));
       if(!prevMonth){
         if(p.view)return {ok:false,why:'other',closed:!!cur.closed};          /* 조회만 하는 동기화([업데이트])는 넘겨받지 않는다 */
         if(!cur.closed)return {ok:false,why:'other',closed:false};
@@ -342,7 +349,8 @@
       }
     }
     if(p.release)return {ok:false,why:'released'};                         /* 넘겨 둔 기기 — 다시 가져오기 전까지는 받지 않는다 */
-    const next={device:dev,acct,since:mine&&cur.since?cur.since:now.toISOString(),until:new Date(t+LEASE_MS).toISOString(),nonce:nonce(),closed:false};
+    /* 권한은 달을 넘기지 않는다 — 이번 달 끝 5분 전까지만(다음 달엔 저절로 풀리게) */
+    const next={device:dev,acct,since:mine&&cur.since?cur.since:now.toISOString(),until:new Date(Math.min(t+LEASE_MS,kstNextMonthStart(t)-SKEW_MS)).toISOString(),nonce:nonce(),closed:false};
     if(await io.claim(K,cur?{nonce:cur.nonce==null?null:cur.nonce}:null,next))return {ok:true,until:next.until};
     /* 못 썼다 — 같은 기기의 다른 동기화가 방금 이어 간 것이면 그대로 내 권한 */
     const back=await read();

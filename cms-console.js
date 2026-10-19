@@ -1475,6 +1475,8 @@
       var act=t.getAttribute('data-act');
       if(act==='release' && !confirm('이 컴퓨터의 이번 달 작업 권한(승인·제품 등록)을 넘깁니다.\n넘긴 뒤에는 이 컴퓨터에서 승인·등록을 하지 않고, 다른 컴퓨터에서 검수 콘솔을 열어 동기화하면 넘어갑니다.\n진행할까요?')) return;
       try{ if(act==='release') localStorage.setItem('unpa-lease-release','1'); else localStorage.removeItem('unpa-lease-release'); }catch(e){}
+      /* 넘기기는 누르는 순간 이 컴퓨터에서 멈춘다 — 동기화 응답이 늦거나 안 와도 */
+      if(act==='release'){ var g0=goalLoad(); if(g0){ g0.lease={ ok:false, why:'released' }; goalSave(g0); } }
       syncNow(); }
     if(t && t.id==='csSyncX'){ ev.preventDefault(); clearTimeout(CLOSE_TIMER); box.remove(); }
     if(t && t.id==='csKeepTab'){ ev.preventDefault(); clearTimeout(CLOSE_TIMER); t.parentNode.textContent='이 탭은 그대로 둡니다.'; }
@@ -2536,7 +2538,9 @@
       var pl=prevGoal && prevGoal.lease;
       var prevGood=!!(prevGoal && pc && pc<=nowT+5*60e3 && nowT-pc<=60*60e3 && !prevGoal.partial && prevGoal.ids && Array.isArray(prevGoal.ids.r)
                       && (pl===null || (pl && pl.ok && Date.parse(pl.until)>nowT)));   /* 작업 권한이 없는 스냅샷은 지키지 않는다 */
-      var newer=!!(prevGood && payload && pc>pcT && prevGoal.month===(ev.data.goal||{}).month && prevGoal.target===(ev.data.goal||{}).target);
+      /* 새 결과의 작업 권한이 없거나(넘김·다른 기기) 이번이 넘기기 동기화면 예전 스냅샷을 지키지 않는다 — 권한 변화가 바로 반영되게 */
+      var incL=ev.data.goal ? ev.data.goal.lease : undefined;
+      var newer=!!(prevGood && payload && !payload.release && (incL===null || (incL && incL.ok)) && pc>pcT && prevGoal.month===(ev.data.goal||{}).month && prevGoal.target===(ev.data.goal||{}).target);
       if(ev.data.goal && ev.data.goal.target>0 && !newer){
         /* countedAt = 이 합계의 바탕이 된 CMS 집계를 시작한 시각, partial = 이번 달 집계가 일부 실패.
            Claude 용 가드(cms-claude.js)는 countedAt 뒤의 승인·등록을 따로 더하고, partial 이면 아무것도 하지 않는다 */
