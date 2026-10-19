@@ -8,7 +8,7 @@ const code=fs.readFileSync(path.join(__dirname,'..','cms-claude.js'),'utf8');
 
 const COUNTED='2026-10-18T11:50:00Z';                 /* CMS 집계를 시작한 시각 */
 const NOW='2026-10-18T12:30:00Z';                     /* 40분 뒤 (KST 21:30) */
-const goal=(over)=>Object.assign({at:'2026-10-18T11:54:29Z',countedAt:COUNTED,partial:false,month:'2026-10',target:1430000,r:1646,p:120,won:895000,ids:{r:['482561','100'],p:[]}},over||{});
+const goal=(over)=>Object.assign({at:'2026-10-18T11:54:29Z',countedAt:COUNTED,partial:false,month:'2026-10',target:1430000,r:1646,p:120,won:895000,ids:{r:['482561','100'],p:[]},lease:null},over||{});
 const plain=x=>JSON.parse(JSON.stringify(x));
 
 /* 가드만 (DOM 없음) */
@@ -347,4 +347,30 @@ test('prune keeps a reservation that was used again (joined) after the count sta
 test('the old snapshot key is not read any more (a stale tab with an older guard cannot use it)',()=>{
   const {G}=guard(null,NOW,{'unpa-console-goal-v1':JSON.stringify(goal())});
   assert.equal(G.status().ok,false); assert.match(G.status().why,/목표 정보가 없습니다/);
+});
+
+test('with the worklog cloud on, only the device holding this month\'s work right (lease) may approve or register, and only until it expires',()=>{
+  const later=new Date(Date.parse(NOW)+30*60e3).toISOString(), past=new Date(Date.parse(NOW)-60e3).toISOString();
+  let r=guard(goal({lease:{ok:false,why:'other',until:later}}),NOW).G.reserve('r','1');
+  assert.equal(r.ok,false); assert.match(r.why,/다른 컴퓨터\(또는 브라우저\)가 이번 달 작업 권한/);
+  r=guard(goal({lease:{ok:true,until:past}}),NOW).G.reserve('r','1'); assert.equal(r.ok,false); assert.match(r.why,/작업 권한 시간이 지났습니다/);
+  r=guard(goal({lease:{ok:false,why:'version'}}),NOW).G.reserve('r','1'); assert.match(r.why,/예전 버전/);
+  assert.equal(guard(goal({lease:{ok:true,until:later}}),NOW).G.reserve('r','1').ok,true);
+  assert.equal(guard(goal({lease:undefined}),NOW).G.reserve('r','1').ok,false,'권한 정보가 아예 없으면 막는다');
+  assert.equal(guard(goal({lease:null}),NOW).G.reserve('r','1').ok,true,'서버 로그인 안 함(한 기기)');
+});
+
+test('a stop written by an older counting rule (no version) is re-evaluated once; a current one holds',()=>{
+  const old={'unpa-claude-ledger-v1|!halt':JSON.stringify({month:'2026-10',target:1430000,t:Date.parse(NOW)-60e3,won:1430000})};
+  assert.equal(guard(goal(),NOW,old).G.status().ok,true);
+  const cur={'unpa-claude-ledger-v1|!halt':JSON.stringify({v:7,month:'2026-10',target:1430000,t:Date.parse(NOW)-60e3,won:1430000})};
+  assert.equal(guard(goal(),NOW,cur).G.status().halted,true);
+});
+
+test('products count after the later of this device\'s count and the merged count of the same account (a future one is ignored)',()=>{
+  const c=Date.parse(COUNTED), items={'p:a':{k:'p',t:c+10*60e3},'p:b':{k:'p',t:c+30*60e3}};
+  let G=guard(goal({prodBase:new Date(c+20*60e3).toISOString()}),NOW,{'unpa-claude-ledger-v1':JSON.stringify({v:1,items})}).G;
+  assert.equal(G.status().spent,600,'a 는 더 나중 집계(20분 뒤)에 이미 들어 있다');
+  G=guard(goal({prodBase:new Date(Date.parse(NOW)+3*3600e3).toISOString()}),NOW,{'unpa-claude-ledger-v1':JSON.stringify({v:1,items})}).G;
+  assert.equal(G.status().spent,1200,'미래 시각은 버린다');
 });

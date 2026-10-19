@@ -291,6 +291,24 @@
       reason:String(v.reason||'').slice(0,90),d:v.d,applied:!!v.applied,manual_done:v.manual_done||null};});
     return out;
   }
+  const LEASE_MS=60*60e3,SKEW_MS=5*60e3;
+  async function claimLease(io,p,now){
+    const dev=typeof p.device==='string'&&/^[0-9a-z]{6,32}$/.test(p.device)?p.device:null,acct=typeof p.acct==='string'&&/^[0-9a-z]{1,16}$/.test(p.acct)?p.acct:null;
+    const cAt=Date.parse(p.countedAt)||0,t=now.getTime();
+    if(!dev||!acct)return {ok:false,why:'device'};
+    if(p.monthPartial||(p.work&&p.work.partial)||!cAt)return {ok:false,why:'partial'};
+    const K='~lease:'+acct;
+    const read=async()=>{const rows=await io.pull([K]);const r=(rows||[]).find(x=>x&&x.month===K);return r&&r.data||null;};
+    const cur=await read();
+    const curUntil=cur?Date.parse(cur.until)||0:0;
+    const mine=!!(cur&&cur.device===dev);
+    if(!mine&&cur&&cur.device!==dev&&curUntil+SKEW_MS>cAt)return {ok:false,why:'other',until:cur.until};
+    const next={device:dev,since:mine&&cur.since?cur.since:now.toISOString(),until:new Date(t+LEASE_MS).toISOString()};
+    await io.push([{month:K,data:next,updated_at:now.toISOString()}]);
+    const back=await read();                                          /* 같은 순간 다른 기기도 썼으면 나중 쓴 쪽만 갖는다 */
+    if(!back||back.device!==dev)return {ok:false,why:'other',until:back&&back.until};
+    return {ok:true,until:next.until};
+  }
   async function syncWindow(store,p,io,opts){
     opts=opts||{};
     if(!p||p.v!==1||!p.work)throw Error('받은 자료 형식 오류');
@@ -323,7 +341,7 @@
     let auditDays=0;
     Object.keys(p.audit||{}).forEach(d=>{const day=p.audit[d];if(!date(d)||!day||!Array.isArray(day.items))return;audit.days[d]=mergeAudit(audit.days[d],Object.assign({},day,{date:d}));auditDays++;});
     if(Array.isArray(p.pending))store.setItem(PENDING_KEY,JSON.stringify({at:iso,items:p.pending,backlog:Array.isArray(p.backlog)?p.backlog:null}));
-    let cloud='off',consoleOut=null;
+    let cloud='off',consoleOut=null,lease=null;
     if(io&&uid){
       try{
         const snap=JSON.parse(store.getItem(key));
@@ -343,6 +361,10 @@
         Object.keys(out.audit).forEach(d=>{audit.days[d]=out.audit[d];});
         consoleOut=out.console;cloud='on';
       }catch(e){cloud='error: '+String(e&&e.message||e).slice(0,100);}
+      /* 이번 달 작업 권한(승인·제품 등록) — CMS 계정마다 한 기기만. 다른 기기가 최근 한 승인은 그 기기가 동기화하기 전엔 안 보이므로,
+         권한을 넘겨받으려면 앞 기기의 권한이 끝난 뒤(시계 차 5분 여유) 시작한 CMS 집계가 있어야 한다 */
+      if(cloud==='on')try{lease=await claimLease(io,p,now);}catch(e){lease={ok:false,why:'cloud'};}
+      else lease={ok:false,why:'cloud'};
     }
     /* 작업 증빙은 이 브라우저에 최근 4개월만 (서버에는 전부) */
     const evKeys=Object.keys(ev.months).sort();evKeys.slice(0,Math.max(0,evKeys.length-4)).forEach(k=>{delete ev.months[k];});
@@ -361,7 +383,7 @@
         /* 이번 달 수입에 이미 들어간 리뷰·제품 번호 — 목표 가드가 "아직 안 센 승인"만 더하도록 번호로 대조한다 */
         const ids=k=>{const a=(md._auto&&md._auto[k])||{},out=new Set();Object.values(a).forEach(l=>(l||[]).forEach(x=>out.add(String(x))));return [...out];};
         const ca=(md._countedAt&&typeof md._countedAt==='object'&&typeof p.acct==='string')?md._countedAt[p.acct]:null;
-        goal={month:mk,target:md.target,r,p:pp,won:r*500+pp*600,ids:{r:ids('r'),p:ids('p')},countedAt:ca||null};}}catch(e){}
+        goal={month:mk,target:md.target,r,p:pp,won:r*500+pp*600,ids:{r:ids('r'),p:ids('p')},countedAt:ca||null,lease};}}catch(e){}
     return {ok:true,today:res.today,changes:res.changes.slice(0,20),nChanges:res.changes.length,auditDays,auditError,cloud,console:consoleOut,remain,
             verdicts:verdictsFor(audit,p.backlog),goal};
   }

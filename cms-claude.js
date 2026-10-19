@@ -13,7 +13,7 @@
    애매하면 센다: 확인을 누른 뒤 결과가 안 보여도 원장에서 지우지 않는다 (늦게 멈추는 것보다 일찍 멈추는 쪽).
    수정요청·미노출·브랜드 등록·기존 제품 편집은 수입에 들어가지 않으므로 막지 않는다. */
 (function(root){
-  var RATE={ r:500, p:600 };
+  var RATE={ r:500, p:600 }, VERSION=7;
   /* 목표 스냅샷은 v2 키에서 읽는다 — v1 키에는 새 콘솔이 '일부 실패'로 막아 둔 값만 남아, 예전 버전 가드(시각 기준)가 열린 탭은 아무것도 하지 않는다 */
   var GOAL_KEY='unpa-console-goal-v2', LEDGER_KEY='unpa-claude-ledger-v1', SENT_KEY='unpa-console-sent-v1';
   var MAX_AGE=60*60e3, MARGIN=5*60e3, KEEP=45*86400e3;
@@ -52,7 +52,17 @@
     if(counted>now+MARGIN) return { ok:false, why:'목표 정보의 집계 시각이 미래입니다 — 컴퓨터 시계를 확인하고 동기화를 다시 하세요' };
     if(now-counted>MAX_AGE) return { ok:false, why:'CMS 집계가 '+Math.round((now-counted)/60e3)+'분 전 것입니다 — 동기화를 다시 하세요(1시간 이내)' };
     if(!g.ids || !Array.isArray(g.ids.r)) return { ok:false, why:'목표 정보에 이번 달 리뷰 번호 목록이 없습니다 — 새 버전으로 동기화를 다시 하세요' };
-    return { ok:true, g:g, month:month, base:counted-MARGIN, have:new Set(g.ids.r.map(String)) };
+    /* 작업 권한: 업무일지 서버에 로그인한 상태면 이 기기가 이번 달 작업 권한을 가져야 한다(lease). 로그인 안 했으면 null(한 기기) */
+    if(g.lease!==null){
+      if(!g.lease || !g.lease.ok) return { ok:false, why: g.lease && g.lease.why==='other'
+        ? '다른 컴퓨터(또는 브라우저)가 이번 달 작업 권한을 갖고 있습니다'+(g.lease.until?' ('+hm(Date.parse(g.lease.until))+'까지)':'')+' — 그 뒤 CMS 집계를 새로 해서 동기화하세요'
+        : g.lease && g.lease.why==='version' ? '업무일지 동기화 창이 예전 버전입니다 — 업무일지를 새로고침한 뒤 동기화하세요'
+        : '이번 달 작업 권한을 확인하지 못했습니다 — 업무일지 동기화를 다시 하세요' };
+      if(!(Date.parse(g.lease.until)>now)) return { ok:false, why:'작업 권한 시간이 지났습니다 — 동기화를 다시 하세요' };
+    }
+    /* 제품 기준 시각: 이 기기 집계와 업무일지에 합쳐진 같은 계정의 더 나중 집계 중 나중 것(미래 시각은 버림) — 수입 합계가 그때까지를 담고 있다 */
+    var pb=Date.parse(g.prodBase)||0; if(!(pb<=now+MARGIN)) pb=0;
+    return { ok:true, g:g, month:month, base:Math.max(counted, pb)-MARGIN, have:new Set(g.ids.r.map(String)) };
   }
   /* 리뷰 승인: 이번 달에 했고, 업무일지 합계(번호 목록)에 아직 없으면 센다 — 시각으로 추측하지 않는다.
      제품 등록과 재승인(업무일지가 이미 한 번 센 리뷰가 다시 대기로 돌아와 또 승인 — 업무일지는 새 날짜로 한 번 더 센다)은
@@ -77,7 +87,8 @@
       spent+=RATE.r; n.c++; seenR[id]=1;
     });
     var w=g.won+spent, left=g.target-w;
-    var halt=l.halt && l.halt.month===gi.month && l.halt.target===g.target ? l.halt : null;
+    /* 정지는 지금 셈법(v7)으로 쓴 것만 — 예전 셈법(재승인 500원 등)으로 걸린 정지는 한 번 다시 따진다 */
+    var halt=l.halt && l.halt.v>=VERSION && l.halt.month===gi.month && l.halt.target===g.target ? l.halt : null;
     if(halt) return { ok:false, halted:true, month:gi.month, target:g.target, won:w, left:left,
       why:'이번 달은 목표 직전에서 멈춘 상태입니다 (멈춘 시각 '+hm(halt.t)+' · 이번 달 '+won(w)+' · 목표까지 '+won(Math.max(0,left))+' 남음). 목표를 올리면 다시 진행합니다' };
     return { ok:true, month:gi.month, target:g.target, base:g.won, spent:spent, n:n, won:w, left:left,
@@ -92,7 +103,7 @@
   /* 한 건 하기 직전에 부른다(리뷰는 지금 검수 대기인 것만). ok 면 원장에 적고, 아니면 절대 실행하지 않는다.
      같은 리뷰를 다시 부르면: 지금 세고 있는 예약이 있으면 그대로 ok(again — 그 예약에 '함께 씀' 표시를 남겨 주인이 지우지 못하게),
      셈에서 빠진 옛 기록이면 새 건처럼 예산부터 본다. 업무일지가 이미 센 리뷰가 다시 대기면 재승인 — 500원을 또 센다. */
-  function haltAt(s, now){ save(IK+'!halt', { month:s.month, target:s.target, t:now, won:s.won }); }
+  function haltAt(s, now){ save(IK+'!halt', { v:VERSION, month:s.month, target:s.target, t:now, won:s.won }); }
   function reserve(kind, id, opt){
     var c=RATE[kind]; if(!c) return { ok:false, why:'알 수 없는 종류 '+kind };
     var key=kind+':'+String(id), now=nowMs(), s=status();
@@ -155,7 +166,7 @@
     Object.keys(items).forEach(function(k){ var x=items[k]; if(x && x.k==='r' && Math.max(x.t||0, x.j||0)<before && notMine[k.slice(2)]){ delItem(k); n++; } });
     return n;
   }
-  root.UnpaGuard={ RATE:RATE, status:status, line:line, reserve:reserve, reserveSafe:reserveSafe, release:release, mark:mark, forget:forget, settled:settled, prune:prune,
+  root.UnpaGuard={ VERSION:VERSION, RATE:RATE, status:status, line:line, reserve:reserve, reserveSafe:reserveSafe, release:release, mark:mark, forget:forget, settled:settled, prune:prune,
                    ledger:ledger, kstMonth:kstMonth,
                    keys:{ goal:GOAL_KEY, ledger:LEDGER_KEY, sent:SENT_KEY } };
 

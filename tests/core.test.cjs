@@ -455,7 +455,7 @@ test('the sync window hands the console this month\'s target and income',async()
   const s=fakeStore();
   s.setItem('unpa-worklog-v1',JSON.stringify({v:1,months:{'2026-09':Object.assign(monthOf('2026-09'),{target:1430000})},dirty:[]}));
   const r=await W.syncWindow(s,{v:1,seq:1,work:{v:1,from:'2026-09-01',to:'2026-09-30',reviews:[['1','2026-09-30'],['2','2026-09-29']],products:[['9','2026-09-29']]}},null,{now:new Date('2026-09-30T12:00:00Z')});
-  assert.deepEqual({...r.goal,ids:undefined},{month:'2026-09',target:1430000,r:2,p:1,won:1600,ids:undefined,countedAt:null});
+  assert.deepEqual({...r.goal,ids:undefined},{month:'2026-09',target:1430000,r:2,p:1,won:1600,ids:undefined,countedAt:null,lease:null});
   /* 이번 달 수입에 이미 들어간 번호 — 목표 가드가 같은 승인을 두 번 세지 않게 */
   assert.deepEqual([...r.goal.ids.r].sort(),['1','2']); assert.deepEqual(r.goal.ids.p,['9']);
 });
@@ -557,4 +557,23 @@ test('the worklog remembers the latest complete CMS count time per account (merg
   assert.equal(r.goal.countedAt,'2026-10-19T12:20:00.000Z','집 컴퓨터가 더 나중에 센 시각'); assert.equal(r.goal.won,600);
   const p=await W.syncWindow(office,{v:1,seq:2,acct:'zzz',countedAt:'2026-10-19T12:30:00.000Z',monthPartial:true,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},io,{uid,now:new Date('2026-10-19T12:31:00Z')});
   assert.equal(p.goal.countedAt,null,'다른 계정·일부 실패 집계 시각은 쓰지 않는다');
+});
+
+test('this month\'s work right (lease) goes to one device per CMS account; another device gets it only with a CMS count that started after the holder\'s right ended',async()=>{
+  const io=fakeCloud(), uid='u1', mk=(dev,c,partial)=>({v:1,seq:1,acct:'abc',device:dev,countedAt:c,monthPartial:!!partial,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}});
+  const office=fakeStore(), home=fakeStore();
+  let r=await W.syncWindow(office,mk('office01','2026-10-19T10:00:00.000Z'),io,{uid,now:new Date('2026-10-19T10:02:00Z')});
+  assert.equal(r.goal.lease.ok,true); assert.equal(r.goal.lease.until,'2026-10-19T11:02:00.000Z');
+  r=await W.syncWindow(home,mk('home0001','2026-10-19T10:30:00.000Z'),io,{uid,now:new Date('2026-10-19T10:31:00Z')});
+  assert.equal(r.goal.lease.ok,false); assert.equal(r.goal.lease.why,'other');
+  r=await W.syncWindow(office,mk('office01','2026-10-19T10:40:00.000Z'),io,{uid,now:new Date('2026-10-19T10:41:00Z')});
+  assert.equal(r.goal.lease.ok,true,'같은 기기는 이어서'); assert.equal(r.goal.lease.until,'2026-10-19T11:41:00.000Z');
+  r=await W.syncWindow(home,mk('home0001','2026-10-19T11:42:00.000Z'),io,{uid,now:new Date('2026-10-19T11:43:00Z')});
+  assert.equal(r.goal.lease.ok,false,'권한이 끝나고 5분 안에 시작한 집계로는 못 넘겨받는다');
+  r=await W.syncWindow(home,mk('home0001','2026-10-19T11:47:00.000Z',true),io,{uid,now:new Date('2026-10-19T11:48:00Z')});
+  assert.equal(r.goal.lease.ok,false,'일부 실패한 집계로도 못 넘겨받는다');
+  r=await W.syncWindow(home,mk('home0001','2026-10-19T11:47:00.000Z'),io,{uid,now:new Date('2026-10-19T11:48:00Z')});
+  assert.equal(r.goal.lease.ok,true,'끝난 뒤 시작한 완전한 집계면 넘겨받는다');
+  const off=await W.syncWindow(fakeStore(),mk('solo0001','2026-10-19T12:00:00.000Z'),null,{now:new Date('2026-10-19T12:01:00Z')});
+  assert.equal(off.goal.lease,null,'서버 로그인 안 함 = 한 기기');
 });
