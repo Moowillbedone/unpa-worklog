@@ -2092,7 +2092,8 @@
         if(!req){ log('&nbsp;&nbsp;<span style="color:#ff8f6b">✗ #'+r.id+' 요청 생성 실패 — 건너뜀</span>'); continue; }
         if(r.action==='approve'){
           /* 보내기 직전에 공용 원장에 예약 — 다른 탭·Claude 도구가 같은 금액을 동시에 쓰지 못하게. 걸리면 남은 승인은 전부 남겨 둔다 */
-          var gr=window.UnpaGuard ? window.UnpaGuard.reserve('r', r.id, { src:'c' }) : { ok:false, why:'목표 가드 없음' };
+          var gr=!window.UnpaGuard ? { ok:false, why:'목표 가드 없음' }
+                 : window.UnpaGuard.reserveSafe ? await window.UnpaGuard.reserveSafe('r', r.id, { src:'c' }) : window.UnpaGuard.reserve('r', r.id, { src:'c' });
           if(!gr.ok){
             log('&nbsp;&nbsp;<span style="color:#f5c451">⛔ 🎯 '+esc(gr.why)+' — 남은 승인은 하지 않음</span>');
             jobs.slice(i).forEach(function(x){ if(x.action==='approve') x.deferred=true; });
@@ -2114,7 +2115,8 @@
         if(!ok && r.action==='approve' && window.UnpaGuard){
           /* 4xx = 서버가 거절(확실히 안 됨) → 예약을 되돌린다. 0·5xx = 됐을 수도 있음 → 수입에 센 채로 둔다 */
           if(res.status>=400 && res.status<500 && gr && gr.created) window.UnpaGuard.release('r', r.id, gr.token);   /* 이번에 만든 그 예약만 — 예전 승인 기록·다른 쪽이 함께 쓴 예약은 지우지 않는다 */
-          else log('&nbsp;&nbsp;<span style="color:#f5c451">결과 불확실 — 이번 달 수입에는 센 채로 둡니다</span>');
+          else { if(gr && gr.created && window.UnpaGuard.mark) window.UnpaGuard.mark('r', r.id, gr.token);   /* 애매한 예약 표시 — 나중에 수정요청이 나가면 지운다 */
+                 log('&nbsp;&nbsp;<span style="color:#f5c451">결과 불확실 — 이번 달 수입에는 센 채로 둡니다</span>'); }
         }
         /* 나중에 "무엇을 보고 무엇을 안내했는지" 검증할 수 있게 판단 근거를 함께 남긴다 */
         logs.push({id:r.id,action:r.action,status:res.status,ok:ok,at:new Date().toISOString(),

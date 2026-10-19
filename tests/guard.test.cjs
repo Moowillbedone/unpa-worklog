@@ -12,15 +12,21 @@ const goal=(over)=>Object.assign({at:'2026-10-18T11:54:29Z',countedAt:COUNTED,pa
 const plain=x=>JSON.parse(JSON.stringify(x));
 
 /* 가드만 (DOM 없음) */
-function guard(g, nowIso, extra, onGet){
+/* localStorage 흉내 — 키 목록(length·key)까지: 원장은 한 건 = 한 키라 키를 훑어 읽는다 */
+function lsOf(store, onGet, onSet){
+  return { getItem:k=>{ if(onGet) onGet(k,store); return store[k]===undefined?null:store[k]; },
+           setItem:(k,v)=>{ if(onSet) onSet(k,store); store[k]=String(v); }, removeItem:k=>{ delete store[k]; },
+           get length(){ return Object.keys(store).length; }, key:i=>Object.keys(store)[i]===undefined?null:Object.keys(store)[i] };
+}
+function guard(g, nowIso, extra, onGet, onSet){
   const store={};
   if(g) store['unpa-console-goal-v1']=JSON.stringify(g);
   Object.assign(store, extra||{});
   const clock={now:Date.parse(nowIso)};
-  const ctx={localStorage:{getItem:k=>{ if(onGet) onGet(k,store); return store[k]===undefined?null:store[k]; },setItem:(k,v)=>{store[k]=String(v);}},Date,JSON,Math,Object,String,isFinite,Set};
+  const ctx={localStorage:lsOf(store,onGet,onSet),Date,JSON,Math,Object,String,isFinite,Set,Promise,setTimeout};
   ctx.__unpaNow=()=>clock.now;
   vm.createContext(ctx); vm.runInContext(code,ctx);
-  return {G:ctx.UnpaGuard,store,clock,ledger:()=>JSON.parse(store['unpa-claude-ledger-v1']||'{"items":{}}')};
+  return {G:ctx.UnpaGuard,ctx,store,clock,ledger:()=>plain(ctx.UnpaGuard.ledger())};
 }
 
 test('fresh goal: remaining budget and how many approvals / products still fit',()=>{
@@ -155,25 +161,42 @@ test('reserve says whether it made a new entry; only that very reservation may b
   assert.deepEqual(Object.keys(ledger().items),['r:11']);
 });
 
-test('a revise request that went out clears a leftover approval reservation of that review (it was pending, so it was never approved)',()=>{
+test('a revise request that went out clears a leftover UNCLEAR approval reservation of that review — a confirmed one stays (it may have been re-opened by an author edit)',()=>{
   const c=Date.parse(COUNTED);
-  const {G,ledger}=guard(goal({won:1429000}),NOW,{'unpa-claude-ledger-v1':JSON.stringify({v:1,items:{'r:555':{k:'r',t:c+60e3,src:'c'}}})});
+  const {G,ledger}=guard(goal({won:1428500}),NOW,{'unpa-claude-ledger-v1':JSON.stringify({v:1,items:{'r:555':{k:'r',t:c+60e3,src:'c',u:1},'r:556':{k:'r',t:c+60e3}}})});
   assert.equal(G.status().left,500);
   assert.equal(G.forget('555'),true); assert.equal(G.status().left,1000);
-  assert.equal(G.forget('555'),false); assert.deepEqual(Object.keys(ledger().items),[]);
+  assert.equal(G.forget('555'),false);
+  assert.equal(G.forget('556'),false,'확실히 된 승인은 지우지 않는다'); assert.deepEqual(Object.keys(ledger().items),['r:556']);
+  const r=G.reserve('r','700'); assert.equal(G.mark('r','700',r.token+1),false); assert.equal(G.mark('r','700',r.token),true);
+  assert.equal(G.forget('700'),true,'애매 표시를 한 그 예약은 지울 수 있다');
 });
 
 test('two tabs reserving at the same moment cannot both pass: the write is re-checked and the later one backs out and stops',()=>{
-  const LK='unpa-claude-ledger-v1'; let reads=0, armed=false;
-  /* 원장 읽기 순서: status(1) → 지금 항목(2) → 쓰기 직전 다시 읽기(3). 3번째 읽기 직전에 다른 탭이 마지막 500원을 예약해 둔다 */
-  const {G,ledger}=guard(goal({won:1429500}),NOW,null,(k,store)=>{
-    if(!armed || k!==LK) return; if(++reads===3){ const l=JSON.parse(store[LK]||'{"v":1,"items":{}}'); l.items['r:other']={k:'r',t:Date.parse(NOW)}; store[LK]=JSON.stringify(l); }
+  /* 이 탭이 '확인'을 마치고 제 기록을 쓰는 순간, 다른 탭이 마지막 500원을 먼저 써 둔 상황 */
+  const {G,ledger}=guard(goal({won:1429500}),NOW,null,null,(k,store)=>{
+    if(k==='unpa-claude-ledger-v1|r:mine' && !store['unpa-claude-ledger-v1|r:other']) store['unpa-claude-ledger-v1|r:other']=JSON.stringify({k:'r',t:Date.parse(NOW)});
   });
-  armed=true;
   const r=G.reserve('r','mine');
   assert.equal(r.ok,false); assert.equal(r.stop,true); assert.match(r.why,/동시에 예약/);
   assert.deepEqual(Object.keys(ledger().items),['r:other'],'내 예약은 거두고 다른 탭 예약은 남긴다');
   assert.ok(ledger().halt); assert.equal(G.status().won,1430000,'목표 그대로 — 넘지 않는다');
+});
+
+test('each reservation is its own storage key, so two tabs writing at once never erase each other',()=>{
+  const {G,store}=guard(goal(),NOW);
+  G.reserve('r','1'); G.reserve('p','x|y|1');
+  assert.ok(store['unpa-claude-ledger-v1|r:1']); assert.ok(store['unpa-claude-ledger-v1|p:x|y|1']);
+  assert.equal(store['unpa-claude-ledger-v1'],undefined,'한 키에 전부 쓰지 않는다');
+});
+
+test('near the target, reservations queue behind a cross-tab lock and wait for other tabs\' writes to arrive; far from it they go straight through',async()=>{
+  const near=guard(goal({won:1429000}),NOW), far=guard(goal(),NOW);
+  const calls=[]; near.ctx.navigator={locks:{request:(name,fn)=>{ calls.push(name); return fn(); }}}; far.ctx.navigator={locks:{request:(name,fn)=>{ calls.push('far'); return fn(); }}};
+  const a=await near.G.reserveSafe('r','1'); assert.equal(a.ok,true); assert.deepEqual(calls,['unpa-guard-reserve']);
+  const b=await far.G.reserveSafe('r','2'); assert.equal(b.ok,true); assert.deepEqual(calls,['unpa-guard-reserve'],'멀면 잠금 없이');
+  const c=await near.G.reserveSafe('r','3'); assert.equal(c.ok,true);
+  const d=await near.G.reserveSafe('r','4'); assert.equal(d.ok,false,'잠금 안에서도 목표는 그대로 지킨다');
 });
 
 /* ── 실제 흐름: 가짜 CMS 리뷰 상세 화면에서 UnpaOps.approve 를 돌린다 ── */
@@ -198,14 +221,14 @@ function cms(g, reviews, nowIso){
     querySelector(){ return null; },
   };
   const clock={now:Date.parse(nowIso||NOW)};
-  const ctx={document,localStorage:{getItem:k=>store[k]===undefined?null:store[k],setItem:(k,v)=>{store[k]=String(v);}},
+  const ctx={document,localStorage:lsOf(store),
     sessionStorage:{getItem:k=>sess[k]===undefined?null:sess[k],setItem:(k,v)=>{sess[k]=String(v);},removeItem:k=>{delete sess[k];}},
     location:{get pathname(){ return '/review/detail/'+st.cur; },search:''},
     next:{router:{push(p){ st.cur=p.split('/').pop(); }}},
-    MessageChannel,Promise,Date,JSON,Math,Object,String,Array,isFinite};
+    MessageChannel,Promise,Date,JSON,Math,Object,String,Array,isFinite,Set,setTimeout};
   ctx.__unpaNow=()=>clock.now;
   vm.createContext(ctx); vm.runInContext(code,ctx);
-  return {ctx,st,store,ledger:()=>JSON.parse(store['unpa-claude-ledger-v1']||'{"items":{}}')};
+  return {ctx,st,store,ledger:()=>plain(ctx.UnpaGuard.ledger())};
 }
 const rv=(o)=>Object.assign({upd:'2026-10-16 10:00:00'},o||{});
 
@@ -265,10 +288,10 @@ function form(g, search){
   return {F:ctx.UnpaForm,d,clicks,ledger};
 }
 
-test('UnpaForm.submit registers a new product only through the guard; each submit counts separately',()=>{
+test('UnpaForm.submit registers a new product only through the guard; each submit counts separately',async()=>{
   const {F,d,clicks,ledger}=form(goal());
-  const r1=F.submit(d); assert.match(r1,/^SUBMIT 무드 · key /);
-  const r2=F.submit(d); assert.match(r2,/^SUBMIT/);
+  const r1=await F.submit(d); assert.match(r1,/^SUBMIT 무드 · key /);
+  const r2=await F.submit(d); assert.match(r2,/^SUBMIT/);
   assert.equal(clicks.length,2);
   assert.equal(Object.values(ledger().items).filter(x=>x.k==='p').length,2,'다시 눌러도 따로 센다 (늦게 멈추지 않게)');
   const k1=/key (\S+)/.exec(r1)[1], k2=/key (\S+)/.exec(r2)[1];
@@ -279,16 +302,16 @@ test('UnpaForm.submit registers a new product only through the guard; each submi
   assert.equal(F.undo(k2),false,'두 번 되돌리지 않는다');
 });
 
-test('UnpaForm.submit refuses (no click) when 600 does not fit, and when form values differ',()=>{
+test('UnpaForm.submit refuses (no click) when 600 does not fit, and when form values differ',async()=>{
   let f=form(goal({won:1429500}));
-  assert.match(f.F.submit(f.d),/^⛔ 목표 초과/); assert.equal(f.clicks.length,0);
+  assert.match(await f.F.submit(f.d),/^⛔ 목표 초과/); assert.equal(f.clicks.length,0);
   f=form(goal());
-  assert.match(f.F.submit(Object.assign({},f.d,{price:25000})),/^HOLD 폼 값이 다름/); assert.equal(f.clicks.length,0);
+  assert.match(await f.F.submit(Object.assign({},f.d,{price:25000})),/^HOLD 폼 값이 다름/); assert.equal(f.clicks.length,0);
 });
 
-test('editing an existing product (/product/edit?id=…) is not income and is not blocked',()=>{
+test('editing an existing product (/product/edit?id=…) is not income and is not blocked',async()=>{
   const {F,d,clicks,ledger}=form(goal({won:1430000}),'?id=150336');
-  assert.match(F.submit(d),/^SUBMIT 무드$/); assert.equal(clicks.length,1);
+  assert.match(await F.submit(d),/^SUBMIT 무드$/); assert.equal(clicks.length,1);
   assert.equal(Object.keys(ledger().items).length,0);
 });
 

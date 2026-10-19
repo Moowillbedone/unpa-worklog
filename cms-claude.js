@@ -23,7 +23,20 @@
   function load(k){ try{ return JSON.parse(store().getItem(k)||'null'); }catch(e){ return null; } }
   function save(k,v){ store().setItem(k, JSON.stringify(v)); }
   function won(n){ return '₩'+Math.round(n||0).toLocaleString('ko-KR'); }
-  function ledger(){ var l=load(LEDGER_KEY); return (l && l.items && typeof l.items==='object') ? l : { v:1, items:{} }; }
+  /* 원장은 한 건 = 한 키('unpa-claude-ledger-v1|r:123') — 여러 탭이 같은 순간에 써도 서로의 기록을 덮지 않게.
+     예전 형식(한 키에 전부)도 그대로 읽는다. 정지 표시는 '…|!halt' */
+  var IK=LEDGER_KEY+'|';
+  function keysWith(prefix){ var st=store(), out=[]; for(var i=0;i<st.length;i++){ var k=st.key(i); if(k && k.indexOf(prefix)===0) out.push(k); } return out; }
+  function ledger(){
+    var l=load(LEDGER_KEY), items={}, halt=(l && l.halt) || null;
+    if(l && l.items && typeof l.items==='object') Object.keys(l.items).forEach(function(k){ items[k]=l.items[k]; });
+    keysWith(IK).forEach(function(sk){ var x=load(sk), k=sk.slice(IK.length); if(!x) return;
+      if(k==='!halt'){ if(!halt || (x.t||0)>(halt.t||0)) halt=x; } else items[k]=x; });
+    return { v:2, items:items, halt:halt };
+  }
+  function putItem(k, x){ save(IK+k, x); }
+  function delItem(k){ try{ store().removeItem(IK+k); }catch(e){}
+    var l=load(LEDGER_KEY); if(l && l.items && l.items[k]){ delete l.items[k]; save(LEDGER_KEY, l); } }
   function hm(ms){ return new Date(ms+9*3600e3).toISOString().slice(5,16).replace('T',' '); }
 
   /* 기준 시각(base) 뒤에 한 일인가 — base 는 집계 시작 시각에서 MARGIN 만큼 앞당긴다 */
@@ -78,50 +91,67 @@
   /* 한 건 하기 직전에 부른다(리뷰는 지금 검수 대기인 것만). ok 면 원장에 적고, 아니면 절대 실행하지 않는다.
      같은 리뷰를 다시 부르면: 지금 세고 있는 예약이 있으면 그대로 ok(again — 그 예약에 '함께 씀' 표시를 남겨 주인이 지우지 못하게),
      셈에서 빠진 옛 기록이면 새 건처럼 예산부터 본다. 업무일지가 이미 센 리뷰가 다시 대기면 재승인 — 500원을 또 센다. */
-  function haltAt(s, now){ var l=ledger(); l.halt={ month:s.month, target:s.target, t:now, won:s.won }; save(LEDGER_KEY, l); }
+  function haltAt(s, now){ save(IK+'!halt', { month:s.month, target:s.target, t:now, won:s.won }); }
   function reserve(kind, id, opt){
     var c=RATE[kind]; if(!c) return { ok:false, why:'알 수 없는 종류 '+kind };
     var key=kind+':'+String(id), now=nowMs(), s=status();
     if(!s.ok) return { ok:false, stop:true, why:s.why };
-    var gi=goalInfo(now), l=ledger(), cur=l.items[key];
-    if(cur && counted(key, cur, gi)){ cur.j=now; save(LEDGER_KEY, l); return { ok:true, again:true, left:s.left }; }
+    var gi=goalInfo(now), all=ledger().items, cur=all[key];
+    if(cur && counted(key, cur, gi)){ cur.j=now; putItem(key, cur); return { ok:true, again:true, left:s.left }; }
     if(s.won+c>s.target){
       haltAt(s, now);                                                     /* 이 금액이 이번 달 최종 — 이후 모든 승인·등록 정지 */
       return { ok:false, stop:true, why:'목표 초과 — 이번 달 '+won(s.won)+' + '+NAME[kind]+' '+won(c)+' > 목표 '+won(s.target)+'. 여기서 멈추고 이번 달은 '+won(s.won)+'로 끝냅니다' };
     }
-    l=ledger();                                                           /* 다른 탭이 그사이 쓴 것과 합쳐 쓴다 */
-    l.items[key]={ k:kind, t:now }; if(kind==='r' && gi.have.has(String(id))) l.items[key].re=1;
-    if(opt && opt.src) l.items[key].src=String(opt.src);
-    Object.keys(l.items).forEach(function(k){ if(!(l.items[k] && now-l.items[k].t<KEEP)) delete l.items[k]; });
-    save(LEDGER_KEY, l);
+    var x={ k:kind, t:now }; if(kind==='r' && gi.have.has(String(id))) x.re=1;
+    if(opt && opt.src) x.src=String(opt.src);
+    putItem(key, x);
+    Object.keys(all).forEach(function(k){ if(k!==key && !(all[k] && now-all[k].t<KEEP)) delItem(k); });
     /* 쓴 뒤 다시 센다 — 다른 탭이 같은 순간 예약해 합계가 넘었으면 내 예약을 거두고 멈춘다 */
     var s2=status();
     if(typeof s2.left==='number' && s2.left<0){
-      l=ledger(); if(l.items[key] && l.items[key].t===now) delete l.items[key]; save(LEDGER_KEY, l);
+      var y=ledger().items[key]; if(y && y.t===now) delItem(key);
       haltAt(s2.ok ? s2 : s, now);
       return { ok:false, stop:true, why:'목표 초과 — 다른 탭과 동시에 예약돼 합계가 목표를 넘어 이 건은 하지 않고 멈춥니다' };
     }
     return { ok:true, created:true, token:now, left:s.left-c };
   }
+  /* 목표 가까이(남은 금액이 이번 건 + 3만원 미만)에서는 탭끼리 줄을 세운다 — 브라우저 잠금(navigator.locks)을 잡고,
+     다른 탭(다른 프로세스)이 막 쓴 원장이 이 탭에 전해질 시간을 잠깐 준 뒤 예약한다. 멀면 바로 예약 */
+  var NEAR=30000, SETTLE=400;
+  function settle(ms){ return new Promise(function(r){ (root.setTimeout||setTimeout)(r, ms); }); }
+  function reserveSafe(kind, id, opt){
+    var s=status(), c=RATE[kind];
+    if(!s.ok || !c || s.left-c>=NEAR) return Promise.resolve(reserve(kind, id, opt));
+    var run=function(){ return settle(SETTLE).then(function(){ return reserve(kind, id, opt); }); };
+    var L=root.navigator && root.navigator.locks;
+    return (L && L.request) ? L.request('unpa-guard-reserve', run) : run();
+  }
   /* 원장에서 지우기 — 이번 시도가 새로 만든 그 예약(token)이고, 일이 실제로 일어나지 않은 게 확실할 때만 (예: 확인 창이 아예 안 떴음).
      다른 쪽이 그 예약을 함께 썼으면(j) 지우지 않는다 — 그쪽이 실제로 했을 수 있다 */
   function release(kind, id, token){
-    var l=ledger(), key=kind+':'+String(id), x=l.items[key];
+    var key=kind+':'+String(id), x=ledger().items[key];
     if(!x || x.j || (token!=null && x.t!==token)) return false;
-    delete l.items[key]; save(LEDGER_KEY, l); return true;
+    delItem(key); return true;
   }
-  /* 수정요청이 실제로 나갔다 = 그 리뷰는 대기였고 승인되지 않았다 → 남아 있던 그 리뷰 승인 예약(5xx·애매해서 남긴 것)을 지운다 */
-  function forget(id){ var l=ledger(), key='r:'+String(id); if(l.items[key]){ delete l.items[key]; save(LEDGER_KEY, l); return true; } return false; }
+  /* 결과가 애매한 예약(5xx·확인 뒤 결과 미확인)에 표시 — 이것만 나중에 forget 으로 지울 수 있다 */
+  function mark(kind, id, token){
+    var key=kind+':'+String(id), x=ledger().items[key];
+    if(!x || (token!=null && x.t!==token)) return false;
+    x.u=1; putItem(key, x); return true;
+  }
+  /* 수정요청이 실제로 나갔다 = 그 리뷰는 지금 대기였다 → 결과가 애매해 남겨 둔 승인 예약(u)은 실제로 승인되지 않은 것 — 지운다.
+     확실히 된 승인(u 아님)은 지우지 않는다 — 승인 뒤 작성자가 고쳐 다시 대기가 된 경우일 수 있다 */
+  function forget(id){ var key='r:'+String(id), x=ledger().items[key]; if(x && x.u){ delItem(key); return true; } return false; }
 
   /* CMS 집계가 '내 승인 아님'으로 본 리뷰(notMine)의 승인 예약 중 집계 시작 전(before) 것은 실제로 승인되지 않았다 — 지운다.
      집계 범위(최근 60일 작성) 밖 리뷰는 notMine 에 없으니 지우지 않는다(센 채로 둠) */
   function prune(notMine, before){
-    var l=ledger(), n=0;
-    Object.keys(l.items).forEach(function(k){ var x=l.items[k]; if(x && x.k==='r' && x.t<before && notMine[k.slice(2)]){ delete l.items[k]; n++; } });
-    if(n) save(LEDGER_KEY, l);
+    var items=ledger().items, n=0;
+    Object.keys(items).forEach(function(k){ var x=items[k]; if(x && x.k==='r' && x.t<before && notMine[k.slice(2)]){ delItem(k); n++; } });
     return n;
   }
-  root.UnpaGuard={ RATE:RATE, status:status, line:line, reserve:reserve, release:release, forget:forget, prune:prune, kstMonth:kstMonth,
+  root.UnpaGuard={ RATE:RATE, status:status, line:line, reserve:reserve, reserveSafe:reserveSafe, release:release, mark:mark, forget:forget, prune:prune,
+                   ledger:ledger, kstMonth:kstMonth,
                    keys:{ goal:GOAL_KEY, ledger:LEDGER_KEY, sent:SENT_KEY } };
 
   /* ── 리뷰 상세에서 하는 일 (승인 · 수정요청) ──
@@ -160,7 +190,7 @@
       var th=[].slice.call(document.querySelectorAll('img')).find(function(x){ return /images\.unpa\.me/.test(x.src) && x.alt; });
       if(!th || /\/null$/.test(th.src)){ out.push(id+' STOP xbox(제품 미연결)'); continue; }
       var a=btn('검수 완료'); if(!a || a.disabled){ out.push(id+' already/notpending'); continue; }
-      var g=reserve('r', id);
+      var g=await reserveSafe('r', id);
       if(!g.ok){ out.push(id+' ⛔ '+g.why); out.push('NOT DONE '+ids.slice(k).join(',')); break; }
       a.click();
       var m=await waitFor(function(){ return [].slice.call(document.querySelectorAll('.ant-modal, .ant-modal-confirm')).find(function(x){ return /리뷰 검수를 완료하시겠습니까/.test(x.innerText); }); }, 4000);
@@ -170,6 +200,7 @@
       ok.click();
       var fin=await waitFor(function(){ var b=btn('검수 완료'); return b && b.disabled ? 'y' : null; }, 7000);
       /* 확인을 누른 뒤에는 결과가 안 보여도 원장에 남긴다 — 실제로 됐을 수 있으니 센 채로 둔다 */
+      if(!fin && g.created) mark('r', id, g.token);
       out.push(id+(fin?' OK':' UNSURE(확인 누름 · 결과 미확인 — 수입에는 센 채로 둠)'));
     }
     return out.join(' ; ')+' || '+line();
@@ -234,7 +265,7 @@
       return { name:v(PH.name), amount:v(PH.amount), unit:g('unit'), price:v(PH.price), brand:g('brand'), cat:g('categoryId'), sub:g('subcategoryId'),
                img:document.querySelectorAll('.ant-upload-list-item').length, options:[].slice.call(document.querySelectorAll('input[placeholder="추가"]')).map(function(i){ return i.value; }) }; },
     /* 새 제품 등록만 600원 — 이미 있는 제품 편집(id 가 붙은 화면)은 수입이 아니라 가드 없이 저장 */
-    submit:function(d){
+    submit:async function(d){
       var s=this.state(), num=function(x){ return String(x).replace(/,/g,''); };
       var same=s.name===d.name && s.brand===d.brand && s.cat===d.cat && s.sub===d.sub && s.img===1 && s.unit===d.unit
         && num(s.amount)===String(d.amount) && num(s.price)===String(d.price) && JSON.stringify(s.options)===JSON.stringify(d.options||[]);
@@ -243,7 +274,7 @@
       var isNew=!/[?&]id=/.test(location.search), key=d.name+'|'+d.brand+'|'+nowMs()+'|'+(++SUBMIT_SEQ)+Math.random().toString(36).slice(2,6);   /* 누를 때마다 새 키 — 다시 눌러도 따로 센다 */
       var b=[].slice.call(document.querySelectorAll('button[type=submit]')).find(function(b){ return b.innerText.trim()==='등록'; });
       if(!b) return 'STOP 등록 버튼 없음';
-      if(isNew){ var g=reserve('p', key); if(!g.ok) return '⛔ '+g.why; try{ sessionStorage.setItem('__unpaLastP', key); }catch(e){} }
+      if(isNew){ var g=await reserveSafe('p', key); if(!g.ok) return '⛔ '+g.why; try{ sessionStorage.setItem('__unpaLastP', key); }catch(e){} }
       b.click(); return 'SUBMIT '+d.name+(isNew?' · key '+key+' · '+line():'');
     },
     /* 방금 등록이 실제로 안 된 것을 제품 목록에서 확인한 뒤에만 부른다 — 결과가 애매하면 부르지 않는다(센 채로 둔다) */

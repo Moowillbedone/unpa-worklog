@@ -525,3 +525,14 @@ test('a review id is counted on one day only: the console outbox day and the CMS
   r=await W.syncWindow(s,{v:1,seq:2,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[['2','2026-10-19']],products:[]}},null,{now:new Date('2026-10-19T13:00:00Z')});
   assert.equal(r.goal.won,1000); assert.equal(r.goal.r,2);
 });
+
+test('merging with another computer keeps one day per review id (an old copy elsewhere does not come back), and old duplicates are cleaned on the next sync',()=>{
+  const mk=(auto)=>{const m=monthOf('2026-10');m.target=1000;m._auto={r:auto,p:{}};for(const dd of Object.keys(auto)){m.days[dd].r=auto[dd].length;m.days[dd].auto={r:auto[dd].length,p:0};}return m;};
+  const merged=W.mergeMonth(mk({'19':['2']}),mk({'05':['2'],'06':['3']}));
+  assert.deepEqual(merged._auto.r['05'],[]); assert.deepEqual(merged._auto.r['19'],['2']); assert.deepEqual(merged._auto.r['06'],['3']);
+  assert.equal(merged.days['05'].r,0); assert.equal(merged.days['19'].r,1);
+  /* 예전 버전이 18일·19일 두 곳에 남긴 1번 — CMS 가 19일이라고 하면 18일 사본을 지운다 */
+  const out=W.applyWork({'2026-10':mk({'18':['1'],'19':['1']})},{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[['1','2026-10-19']],products:[]});
+  assert.deepEqual(out.months['2026-10']._auto.r['18'],[]); assert.deepEqual(out.months['2026-10']._auto.r['19'],['1']);
+  assert.equal(out.months['2026-10'].days['18'].r,0); assert.equal(out.months['2026-10'].days['19'].r,1);
+});

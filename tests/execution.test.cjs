@@ -25,7 +25,8 @@ function harness(opts){
     location:{hostname:'cms.unpa.me',origin:'https://cms.unpa.me',search:''},
     document:{getElementById:()=>el(),createElement:el,body:{appendChild(){}},
               querySelectorAll:()=>[],querySelector:()=>null},
-    localStorage:{getItem:k=>store[k]||null,setItem:(k,v)=>{store[k]=v;},removeItem:k=>{delete store[k];}},
+    localStorage:{getItem:k=>store[k]||null,setItem:(k,v)=>{store[k]=v;},removeItem:k=>{delete store[k];},
+                  get length(){ return Object.keys(store).length; },key:i=>Object.keys(store)[i]===undefined?null:Object.keys(store)[i]},
     URLSearchParams:class{constructor(){}get(){return null;}},
     Blob:class{constructor(p){this.parts=p;ctx.__blobs=(ctx.__blobs||0)+1;}},Image:class{},
     URL:Object.assign(function(u,b){return new URL(u,b);},
@@ -766,7 +767,7 @@ test('no snapshot, last month, partial or stale snapshot → the console does no
     assert.equal(api.budget().known,false);
     await api.runJobs([{id:31,action:'approve',reasons:[]}]);
     assert.equal(sent.length,0); assert.match(ctx.__alert,/승인은 하지 않습니다/);
-    assert.equal(store['unpa-claude-ledger-v1'],undefined,'아무것도 예약하지 않는다');
+    assert.equal(Object.keys(store).filter(k=>k.indexOf('unpa-claude-ledger-v1')===0).length,0,'아무것도 예약하지 않는다');
   }
 });
 
@@ -905,6 +906,6 @@ test('after the CMS count, a leftover approval reservation for a review the coun
     return {status:200,body:{results:[],totalCount:0}};
   };
   await api.startWorkSync();
-  const items=JSON.parse(ctx.localStorage.getItem('unpa-claude-ledger-v1')).items;
+  const items=ctx.UnpaGuard.ledger().items;
   assert.deepEqual(Object.keys(items),['r:556'],'집계가 대기로 본 555 는 지우고, 집계가 못 본 556 은 남긴다');
 });

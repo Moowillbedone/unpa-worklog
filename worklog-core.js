@@ -56,21 +56,21 @@
     for(const k of ['r','p']){
       const where={},placed=new Set();
       for(const m of Object.keys(out)){const a=out[m]&&out[m]._auto&&out[m]._auto[k];if(!a)continue;
-        for(const dd of Object.keys(a))for(const x of (a[dd]||[]))where[String(x)]=m+'-'+dd;}
+        for(const dd of Object.keys(a))for(const x of (a[dd]||[]))(where[String(x)]=where[String(x)]||[]).push(m+'-'+dd);}
+      const drop=(loc,id)=>{const pa=out[loc.slice(0,7)]._auto[k];pa[loc.slice(8)]=(pa[loc.slice(8)]||[]).filter(x=>String(x)!==id);};
       for(const [id0,d] of lists[k]){
         if(d<p.from||d>p.to)continue;
         const id=String(id0);
         if(placed.has(id))continue;
-        const prev=where[id];
-        if(prev&&prev!==d){
-          if(prev<p.from||prev>p.to){placed.add(id);continue;}
-          const pa=out[prev.slice(0,7)]._auto[k],pl=pa[prev.slice(8)]||[];
-          pa[prev.slice(8)]=pl.filter(x=>String(x)!==id);
-        }
+        placed.add(id);
+        const locs=[...new Set(where[id]||[])];
+        /* 이번 범위 밖 날에 이미 있으면 그 날(다시 세지 않는 날)을 두고, 범위 안 사본은 모두 지운다 */
+        if(locs.some(x=>x<p.from||x>p.to)){locs.filter(x=>x>=p.from&&x<=p.to).forEach(x=>drop(x,id));continue;}
+        locs.filter(x=>x!==d).forEach(x=>drop(x,id));
         const t=mon(d.slice(0,7));t._auto=t._auto||{r:{},p:{}};t._auto[k]=t._auto[k]||{};
         const day=t._auto[k][d.slice(8)]||(t._auto[k][d.slice(8)]=[]);
         if(day.indexOf(id)<0)day.push(id);
-        where[id]=d;placed.add(id);
+        where[id]=[d];
       }
     }
     const changes=[],touched=new Set();
@@ -165,7 +165,10 @@
     if(!local)return JSON.parse(JSON.stringify(remote));
     const out=JSON.parse(JSON.stringify(local));
     const la=local._auto||{},ra=remote._auto||{},led={r:{},p:{}};
-    for(const k of ['r','p']){const A=la[k]||{},B=ra[k]||{};for(const dd of new Set([...Object.keys(A),...Object.keys(B)]))led[k][dd]=unionIds(A[dd],B[dd]);}
+    for(const k of ['r','p']){const A=la[k]||{},B=ra[k]||{};for(const dd of new Set([...Object.keys(A),...Object.keys(B)]))led[k][dd]=unionIds(A[dd],B[dd]);
+      /* 합친 뒤에도 한 번호는 한 날에만 — 다른 기기에 옛 날짜로 남은 사본이 되살아나 두 번 세지 않게(나중 날짜를 남긴다) */
+      const last={};for(const dd of Object.keys(led[k]).sort())for(const x of led[k][dd])last[String(x)]=dd;
+      for(const dd of Object.keys(led[k]))led[k][dd]=led[k][dd].filter(x=>last[String(x)]===dd);}
     if(Object.keys(led.r).length||Object.keys(led.p).length)out._auto=led;
     if(remote.target!=null&&(remote._t||0)>(local._t||0)){out.target=remote.target;out._t=remote._t;}
     out.days=out.days||{};
