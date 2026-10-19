@@ -1471,6 +1471,11 @@
   box.addEventListener('click', function(ev){
     var t=ev.target;
     if(t && t.id==='csSyncBtn'){ ev.preventDefault(); ev.stopPropagation(); syncNow(); }
+    if(t && t.id==='csLeaseBtn'){ ev.preventDefault(); ev.stopPropagation();
+      var act=t.getAttribute('data-act');
+      if(act==='release' && !confirm('이 컴퓨터의 이번 달 작업 권한(승인·제품 등록)을 넘깁니다.\n넘긴 뒤에는 이 컴퓨터에서 승인·등록을 하지 않고, 다른 컴퓨터에서 검수 콘솔을 열어 동기화하면 넘어갑니다.\n진행할까요?')) return;
+      try{ if(act==='release') localStorage.setItem('unpa-lease-release','1'); else localStorage.removeItem('unpa-lease-release'); }catch(e){}
+      syncNow(); }
     if(t && t.id==='csSyncX'){ ev.preventDefault(); clearTimeout(CLOSE_TIMER); box.remove(); }
     if(t && t.id==='csKeepTab'){ ev.preventDefault(); clearTimeout(CLOSE_TIMER); t.parentNode.textContent='이 탭은 그대로 둡니다.'; }
   });
@@ -2106,6 +2111,7 @@
           }
         }
         log('▶ #'+r.id+' '+ACT[r.action].t+' <span style="color:#6b7f77">('+(i+1)+'/'+jobs.length+')</span>');
+        var at0=new Date().toISOString();     /* 보내기 직전 시각 — 업무일지 날짜는 이것으로(CMS 승인 시각보다 늦지 않게) */
         var res=await send(req.method,req.url,req.body);
         var ok=(res.status>=200&&res.status<300);
         /* 이미 미노출인 리뷰에 미노출을 보내면 400 "노출 상태가 같습니다" 가 온다.
@@ -2123,7 +2129,7 @@
                  log('&nbsp;&nbsp;<span style="color:#f5c451">결과 불확실 — 이번 달 수입에는 센 채로 둡니다</span>'); }
         }
         /* 나중에 "무엇을 보고 무엇을 안내했는지" 검증할 수 있게 판단 근거를 함께 남긴다 */
-        logs.push({id:r.id,action:r.action,status:res.status,ok:ok,at:new Date().toISOString(),
+        logs.push({id:r.id,action:r.action,status:res.status,ok:ok,at:new Date().toISOString(),at0:at0,
                    error:ok?null:String(res.text||'').slice(0,200),
                    brand:r.brand||null, user_product:r.product||null,
                    told:r.action==='revise_product'?(r.product_exact||null):null,
@@ -2230,7 +2236,7 @@
   var RATE_R=500, RATE_P=600;
   /* 목표 스냅샷은 v3 키(가드 v7 이상만 읽음)에 둔다. 예전 키(v1·v2)에는 남은 금액 0·'일부 실패'로 막은 값을 써서
      업데이트 전 버전 가드가 열린 탭은 승인·등록을 하지 않게 한다 */
-  var GOAL_KEY='unpa-console-goal-v3', GOAL_OLD=['unpa-console-goal-v1','unpa-console-goal-v2'], SESSION_APPROVED={};
+  var GOAL_KEY='unpa-console-goal-v4', GOAL_OLD=['unpa-console-goal-v1','unpa-console-goal-v2','unpa-console-goal-v3'], SESSION_APPROVED={};
   function goalLoad(){ try{ var g=JSON.parse(localStorage.getItem(GOAL_KEY)||'null'); return (g && typeof g==='object') ? g : null; }catch(e){ return null; } }
   function goalSave(g){ try{ localStorage.setItem(GOAL_KEY, JSON.stringify(g));
     var block=JSON.stringify({ month:g.month, target:g.target, won:g.target, at:g.at, countedAt:null, partial:true, note:'새 버전 콘솔·도구로 다시 여세요' });
@@ -2440,7 +2446,7 @@
         day.executions=(day.executions||[]).concat([{ id:x.id, action:x.action, at:x.at, ok:x.ok, status:x.status,
           told:x.told||null, conf:x.conf||null, sample:!!x.sample }]);
         /* 방금 승인한 것은 CMS 재조회 없이 바로 반영 — 날짜는 처리한 시각 기준 (자정 무렵 어긋남 방지) */
-        if(x.ok && x.action==='approve') o.reviews.push([String(x.id), localDay(x.at)||today, (r&&r.brand)||'', (r&&(r.product_exact||r.product))||'', (r&&r.date)||'', 'c']);
+        if(x.ok && x.action==='approve') o.reviews.push([String(x.id), localDay(x.at0||x.at)||today, (r&&r.brand)||'', (r&&(r.product_exact||r.product))||'', (r&&r.date)||'', 'c']);
       });
     });
   }
@@ -2458,7 +2464,7 @@
     /* 남은 검수 목록을 못 불러왔으면(BACKLOG 없음) 남은 일·미등록 칸은 비우지 않고 그대로 둔다 */
     /* acct = CMS 계정의 해시(계정 이름은 넘기지 않는다) — 업무일지가 계정마다 마지막 집계 시각을 기억한다 */
     var acct=null; if(ME){ var h=5381; for(var i=0;i<ME.length;i++) h=(Math.imul(h,33)^ME.charCodeAt(i))>>>0; acct=h.toString(36); }
-    return { v:1, gk:3, seq:ob.seq||0, acct:acct, device:deviceId(), view:SYNC_ONLY ? 1 : 0, countedAt:(WORK && WORK.startedAt) || null, builtAt:new Date().toISOString(), monthPartial:!WORK || monthFailed(WORK),
+    return { v:1, gk:4, seq:ob.seq||0, acct:acct, device:deviceId(), view:SYNC_ONLY ? 1 : 0, release:leaseReleased() ? 1 : 0, countedAt:(WORK && WORK.startedAt) || null, builtAt:new Date().toISOString(), monthPartial:!WORK || monthFailed(WORK),
              work:{ v:1, from:AUTO_FROM, to:ymd(new Date()), reviews:rv, products:pv, partial:!!(WORK && WORK.failed.length) },
              audit:ob.audit||{}, pending:(SYNC_ONLY && !BACKLOG) ? null : pendingList(), backlog:backlogList(), remain:remainList(), console:consoleState() };
   }
@@ -2483,7 +2489,7 @@
   function preOpen(){
     if(!PRE_WIN || PRE_WIN.closed) return;
     var nonce=syncNonce();
-    try{ PRE_WIN.location.href=SYNC_URL+'#n='+nonce; }catch(e){ return; }
+    try{ PRE_WIN.location.href=SYNC_URL+'?s='+nonce+'#n='+nonce; }catch(e){ return; }
     PRE={ win:PRE_WIN, nonce:nonce, ready:false };
     window.addEventListener('message', function(ev){
       if(!PRE || ev.origin!==WL_ORIGIN || ev.source!==PRE.win || !ev.data || ev.data.nonce!==PRE.nonce) return;
@@ -2501,7 +2507,7 @@
     var pre=(PRE && !PRE.win.closed) ? PRE : null; PRE=null;
     var nonce=pre ? pre.nonce : syncNonce(), sx=(window.screenX||0)+Math.max(0,(window.outerWidth||1200)-460);
     var w=pre ? pre.win : null;
-    if(!w) try{ w=window.open(SYNC_URL+'#n='+nonce, 'unpa-worklog-sync', 'popup,width=420,height=300,left='+sx+',top='+((window.screenY||0)+80)); }catch(e){ w=null; }
+    if(!w) try{ w=window.open(SYNC_URL+'?s='+nonce+'#n='+nonce, 'unpa-worklog-sync',   /* 주소가 매번 달라야 열린 창도 새로 읽는다(# 만 바뀌면 다시 안 읽음) */ 'popup,width=420,height=300,left='+sx+',top='+((window.screenY||0)+80)); }catch(e){ w=null; }
     if(!w){
       syncButton('📒 업무일지 반영 대기 <span style="color:#6b7f77">(팝업 차단 — 주소창 아이콘에서 항상 허용하면 자동)</span>');
       return false;
@@ -2553,7 +2559,8 @@
           : ev.data.cloud==='off' ? ' · <span style="color:#6b7f77">☁ 업무일지 로그인 전 — 이 컴퓨터에만</span>'
           : ev.data.cloud ? ' · <span style="color:#f5c451">☁ 서버 합치기 실패 — 다음에 다시</span>' : '')
         +(LEARN_NOTE?' · '+LEARN_NOTE:'')
-        +(function(){ var b=budget(); return b.known ? '<br><span style="color:#f5c451">'+esc(budgetLine(b))+'</span>' : ''; })());
+        +(function(){ var b=budget(); return b.known ? '<br><span style="color:#f5c451">'+esc(budgetLine(b))+'</span>' : (b.why ? '<br><span style="color:#f5c451">🎯 '+esc(b.why)+'</span>' : ''); })()
+        +leaseButton());
       if(SYNC_ONLY) syncOnlyDone();
       if(RESYNC){ RESYNC=false; setTimeout(function(){ syncNow(); }, 300); }
     };
@@ -2712,7 +2719,15 @@
   }
   /* 월 목표 가드(cms-claude.js)를 업무일지 사이트에서 불러온다 — Claude 도구와 같은 원장·같은 정지 표시를 쓴다 */
   /* 이 콘솔과 맞는 가드(v7 이상)인가 — 예전 버전이 탭에 남아 있으면 새로 불러와 바꾼다 */
-  function guardOk(){ var G=window.UnpaGuard; return !!(G && G.VERSION>=8 && G.reserveSafe && G.keys && G.keys.goal===GOAL_KEY); }
+  function guardOk(){ var G=window.UnpaGuard; return !!(G && G.VERSION>=9 && G.reserveSafe && G.keys && G.keys.goal===GOAL_KEY); }
+  /* '작업 권한 넘기기'를 누른 기기 — 다시 가져오기 전까지는 동기화 때 권한을 닫아 두고 받지 않는다 */
+  function leaseReleased(){ try{ return localStorage.getItem('unpa-lease-release')==='1'; }catch(e){ return false; } }
+  function leaseButton(){
+    var g=goalLoad(), L=g && g.lease;
+    if(leaseReleased()) return ' <button id="csLeaseBtn" data-act="reclaim" style="margin-left:4px;background:#132019;color:#9fe3c4;border:1px solid #2c4a3c;border-radius:6px;padding:1px 7px;font:inherit;font-size:10.5px;cursor:pointer">🔑 이 컴퓨터로 작업 권한 다시 가져오기</button>';
+    if(L && L.ok) return ' <button id="csLeaseBtn" data-act="release" title="다른 컴퓨터에서 승인·등록하려면 이 컴퓨터에서 먼저 누르세요" style="margin-left:4px;background:#132019;color:#f5c451;border:1px solid #4a3c2c;border-radius:6px;padding:1px 7px;font:inherit;font-size:10.5px;cursor:pointer">🔑 작업 권한 넘기기</button>';
+    return '';
+  }
   function loadGuard(){
     return new Promise(function(res){
       if(guardOk()) return res(true);      /* 예전 버전 가드가 남아 있으면 새로 불러온다 */

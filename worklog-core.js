@@ -187,6 +187,8 @@
       for(const dd of Object.keys(led[k]))led[k][dd]=led[k][dd].filter(x=>last[String(x)]===dd);}
     if(Object.keys(led.r).length||Object.keys(led.p).length)out._auto=led;
     if(remote.target!=null&&(remote._t||0)>(local._t||0)){out.target=remote.target;out._t=remote._t;}
+    /* 어느 쪽도 사람이 정한 시각(_t)이 없으면(넘겨받은 목표) 낮은 쪽 — 오래 동기화 안 한 기기의 옛 목표가 이기지 않게 */
+    else if(!local._t&&!remote._t&&integer(remote.target)&&integer(local.target)&&remote.target<local.target)out.target=remote.target;
     {const a=(local._countedAt&&typeof local._countedAt==='object')?local._countedAt:{},b=(remote._countedAt&&typeof remote._countedAt==='object')?remote._countedAt:{},c=Object.assign({},a);
       for(const k of Object.keys(b))if(String(b[k]||'')>String(c[k]||''))c[k]=b[k];if(Object.keys(c).length)out._countedAt=c;}
     out.days=out.days||{};
@@ -293,13 +295,18 @@
       reason:String(v.reason||'').slice(0,90),d:v.d,applied:!!v.applied,manual_done:v.manual_done||null};});
     return out;
   }
-  const LEASE_MS=60*60e3,SKEW_MS=5*60e3,CLOCK_MS=60e3,GOAL_PROTOCOL=3;   /* 콘솔이 v3 스냅샷 키를 쓰는 판(gk 3)일 때만 쓸 수 있는 목표를 준다 */
+  const LEASE_MS=60*60e3,SKEW_MS=5*60e3,CLOCK_MS=60e3,GOAL_PROTOCOL=4;   /* 콘솔이 v3 스냅샷 키를 쓰는 판(gk 3)일 때만 쓸 수 있는 목표를 준다 */
   const validDevice=d=>typeof d==='string'&&/^[0-9a-z]{6,32}$/.test(d);
   /* 이번 달 작업 권한 — 서버 행 하나를 '바뀌지 않았으면 쓰기'(nonce 비교)로만 바꿔 두 기기가 동시에 가질 수 없게.
      모든 기기 시계가 서버 시각과 1분 안이어야 한다(넘겨받기 기준 5분 여유를 믿을 수 있게) */
-  const ACCT_SWITCH_MS=24*3600e3;
-  /* 업무일지 사용자마다 권한 행 하나('~lease') — 목표는 업무일지 달 합계(모든 CMS 계정)라서 계정마다 따로 주면 안 된다 */
-  async function claimLease(io,p,now,sk){
+  /* 이번 달 작업 권한 — 업무일지 사용자마다 한 행('~lease'). 자동으로는 넘어가지 않는다:
+     · 권한을 가진 기기가 '작업 권한 넘기기'(release)로 동기화해 닫아 둔 뒤, 같은 CMS 계정의 다른 기기가 그 뒤(5분 여유) 시작한
+       완전한 집계로 동기화할 때만 넘어간다 — 닫는 동기화가 그 기기의 승인을 모두 업무일지에 넣은 뒤라서 안전하다.
+       닫을 때 업무일지 이번 달 금액을 적어 두고, 넘겨받는 쪽 합계가 그보다 적으면(서버 기록이 덮여 빠짐) 넘기지 않는다.
+     · 다른 CMS 계정에는 이번 달 안에는 넘기지 않는다(그 계정 집계로는 앞 기기 승인을 확인할 수 없다).
+     · 앞 권한이 지난달에 끝났으면(이번 달 시작 5분 전까지) 누구든 새로 받는다. */
+  const kstMonthStart=t=>{const d=new Date(t+9*3600e3);return Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),1)-9*3600e3;};
+  async function claimLease(io,p,now,sk,curWon){
     const dev=validDevice(p.device)?p.device:null,acct=typeof p.acct==='string'&&/^[0-9a-z]{1,16}$/.test(p.acct)?p.acct:null;
     const cAt=Date.parse(p.countedAt)||0,t=now.getTime();
     if(!dev||!acct)return {ok:false,why:'device'};
@@ -309,24 +316,38 @@
     const K='~lease';
     const read=async()=>{const rows=await io.pull([K]);const row=(rows||[]).find(x=>x&&x.month===K);return row&&row.data||null;};
     const cur=await read();
-    /* 이전 판의 계정별 권한 행('~lease:<acct>')이 아직 살아 있으면 그것도 앞 권한으로 본다 — 판이 바뀌는 사이 두 기기가 동시에 갖지 않게 */
-    if(!cur){const OK='~lease:'+acct,rows=await io.pull([OK]),row=(rows||[]).find(x=>x&&x.month===OK),old=row&&row.data;
-      if(old&&old.device!==dev&&(Date.parse(old.until)||0)+SKEW_MS>cAt)return {ok:false,why:'other',until:old.until,after:new Date((Date.parse(old.until)||0)+SKEW_MS).toISOString()};}
-    const curUntil=cur?Date.parse(cur.until)||0:0,mine=!!(cur&&cur.device===dev&&cur.acct===acct);
-    const after=cur?new Date(curUntil+SKEW_MS).toISOString():null;
-    if(cur&&!mine){
-      if(p.view)return {ok:false,why:'other',until:cur.until,after};              /* 조회만 하는 동기화([업데이트])는 남의 권한을 넘겨받지 않는다 */
-      /* 다른 CMS 계정의 집계로는 앞 기기 승인을 확인할 수 없다 — 그 권한이 끝나고 하루 뒤에야 넘겨받는다 */
-      if(cur.acct&&cur.acct!==acct&&curUntil+ACCT_SWITCH_MS>t)return {ok:false,why:'account',after:new Date(curUntil+ACCT_SWITCH_MS).toISOString()};
-      if(curUntil+SKEW_MS>cAt)return {ok:false,why:'other',until:cur.until,after};
+    const nonce=()=>Math.random().toString(36).slice(2,12)+t.toString(36);
+    if(!cur){
+      /* 이전 판의 계정별 권한 행이 다른 기기에 아직 살아 있으면 새 권한을 내주지 않는다 */
+      let olds=[];
+      if(typeof io.list==='function')olds=await io.list('~lease:');
+      else{const rows=await io.pull(['~lease:'+acct]);olds=rows||[];}
+      for(const r of olds){const o=r&&r.data;if(o&&o.device!==dev&&(Date.parse(o.until)||0)+SKEW_MS>t)return {ok:false,why:'other',closed:false};}
     }
-    const next={device:dev,acct,since:mine&&cur.since?cur.since:now.toISOString(),until:new Date(t+LEASE_MS).toISOString(),
-                nonce:Math.random().toString(36).slice(2,12)+t.toString(36)};
+    const mine=!!(cur&&cur.device===dev&&cur.acct===acct);
+    if(mine&&p.release){                                                  /* 이 기기가 권한을 넘긴다 — 닫고, 이 기기는 더 하지 않는다 */
+      const next=Object.assign({},cur,{closed:true,closedAt:now.toISOString(),closedWon:typeof curWon==='number'?curWon:null,until:now.toISOString(),nonce:nonce()});
+      const ok=await io.claim(K,{nonce:cur.nonce==null?null:cur.nonce},next);
+      return {ok:false,why:ok?'released':'other'};
+    }
+    if(cur&&!mine){
+      const prevMonth=(Date.parse(cur.until)||0)+SKEW_MS<=kstMonthStart(t);
+      if(!prevMonth){
+        if(p.view)return {ok:false,why:'other',closed:!!cur.closed};          /* 조회만 하는 동기화([업데이트])는 넘겨받지 않는다 */
+        if(!cur.closed)return {ok:false,why:'other',closed:false};
+        if(cur.acct!==acct)return {ok:false,why:'account'};
+        const ca=Date.parse(cur.closedAt)||0;
+        if(ca+SKEW_MS>cAt)return {ok:false,why:'other',closed:true,after:new Date(ca+SKEW_MS).toISOString()};
+        if(typeof cur.closedWon==='number'&&!(typeof curWon==='number'&&curWon>=cur.closedWon))return {ok:false,why:'behind'};
+      }
+    }
+    if(p.release)return {ok:false,why:'released'};                         /* 넘겨 둔 기기 — 다시 가져오기 전까지는 받지 않는다 */
+    const next={device:dev,acct,since:mine&&cur.since?cur.since:now.toISOString(),until:new Date(t+LEASE_MS).toISOString(),nonce:nonce(),closed:false};
     if(await io.claim(K,cur?{nonce:cur.nonce==null?null:cur.nonce}:null,next))return {ok:true,until:next.until};
     /* 못 썼다 — 같은 기기의 다른 동기화가 방금 이어 간 것이면 그대로 내 권한 */
     const back=await read();
-    if(back&&back.device===dev&&back.acct===acct&&(Date.parse(back.until)||0)>t)return {ok:true,until:back.until};
-    return {ok:false,why:'other',until:back&&back.until,after:back?new Date((Date.parse(back.until)||0)+SKEW_MS).toISOString():after};
+    if(back&&back.device===dev&&back.acct===acct&&!back.closed&&(Date.parse(back.until)||0)>t)return {ok:true,until:back.until};
+    return {ok:false,why:'other',closed:!!(back&&back.closed)};
   }
   async function syncWindow(store,p,io,opts){
     opts=opts||{};
@@ -385,7 +406,11 @@
       }catch(e){cloud='error: '+String(e&&e.message||e).slice(0,100);}
       /* 이번 달 작업 권한(승인·제품 등록) — CMS 계정마다 한 기기만. 다른 기기가 최근 한 승인은 그 기기가 동기화하기 전엔 안 보이므로,
          권한을 넘겨받으려면 앞 기기의 권한이 끝난 뒤(시계 차 5분 여유) 시작한 CMS 집계가 있어야 한다 */
-      if(cloud==='on')try{lease=await claimLease(io,p,now,sk);}catch(e){lease={ok:false,why:'cloud'};}
+      if(cloud==='on')try{
+        const mk0=p.work.to.slice(0,7),mm=(JSON.parse(store.getItem(key))||{}).months||{},md0=mm[mk0];
+        let won0=null;if(md0){let r=0,q=0;Object.values(md0.days||{}).forEach(d=>{r+=d.r||0;q+=d.p||0;});won0=r*500+q*600;}
+        lease=await claimLease(io,p,now,sk,won0);
+      }catch(e){lease={ok:false,why:'cloud'};}
       else lease={ok:false,why:'cloud'};
     }else if(String(store.getItem('unpa-worklog-active')||'').indexOf('unpa-worklog-v2:')===0){
       lease={ok:false,why:'cloud'};                                            /* 로그인한 브라우저인데 서버에 못 닿음 — 한 기기로 보지 않는다 */

@@ -87,7 +87,7 @@ function syncOnlyHarness(hash,opts){
 
 test('update-only mode reuses the pre-opened window and fills the remaining-review column',async()=>{
   const {ctx,win,posted,send,ED}=syncOnlyHarness('#unpa-wl-update');
-  await until(()=>/sync\.html#n=/.test(win.location.href));
+  await until(()=>/sync\.html\?s=[a-f0-9]+#n=/.test(win.location.href));
   const nonce=win.location.href.split('#n=')[1];
   send({type:'unpa-sync-ready',nonce});                         /* 동기화 창이 먼저 준비된 경우 */
   await until(()=>posted.some(p=>p.m.type==='unpa-sync-data'));
@@ -109,7 +109,7 @@ test('update-only mode reuses the pre-opened window and fills the remaining-revi
 
 test('if the remaining-review list cannot be read, the column is left as it was',async()=>{
   const {win,posted,send}=syncOnlyHarness('',{backlogFail:true});
-  await until(()=>/sync\.html#n=/.test(win.location.href));
+  await until(()=>/sync\.html\?s=[a-f0-9]+#n=/.test(win.location.href));
   const nonce=win.location.href.split('#n=')[1];
   send({type:'unpa-sync-ready',nonce});
   await until(()=>posted.some(p=>p.m.type==='unpa-sync-data'),30000);
@@ -134,7 +134,7 @@ test('the sync result keeps a remaining-review summary for the worklog screen',a
 
 test('update-only mode posts as soon as the window is ready even if it was slower than the CMS',async()=>{
   const {win,posted,send}=syncOnlyHarness('');
-  await until(()=>/sync\.html#n=/.test(win.location.href));
+  await until(()=>/sync\.html\?s=[a-f0-9]+#n=/.test(win.location.href));
   await sleep(300);                                              /* 집계가 먼저 끝나고 창이 늦게 준비된 경우 */
   const nonce=win.location.href.split('#n=')[1];
   send({type:'unpa-sync-ready',nonce:'wrong'});                  /* 다른 번호는 무시 */

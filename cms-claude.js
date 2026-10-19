@@ -13,9 +13,9 @@
    애매하면 센다: 확인을 누른 뒤 결과가 안 보여도 원장에서 지우지 않는다 (늦게 멈추는 것보다 일찍 멈추는 쪽).
    수정요청·미노출·브랜드 등록·기존 제품 편집은 수입에 들어가지 않으므로 막지 않는다. */
 (function(root){
-  var RATE={ r:500, p:600 }, VERSION=8, HALT_V=7, OLD_DAYS=70;
+  var RATE={ r:500, p:600 }, VERSION=9, HALT_V=7, OLD_DAYS=70;
   /* 목표 스냅샷은 v2 키에서 읽는다 — v1 키에는 새 콘솔이 '일부 실패'로 막아 둔 값만 남아, 예전 버전 가드(시각 기준)가 열린 탭은 아무것도 하지 않는다 */
-  var GOAL_KEY='unpa-console-goal-v3', LEDGER_KEY='unpa-claude-ledger-v1', SENT_KEY='unpa-console-sent-v1', OUTBOX_KEY='unpa-console-outbox-v1';
+  var GOAL_KEY='unpa-console-goal-v4', LEDGER_KEY='unpa-claude-ledger-v1', SENT_KEY='unpa-console-sent-v1', OUTBOX_KEY='unpa-console-outbox-v1';
   var MAX_AGE=60*60e3, MARGIN=5*60e3, KEEP=45*86400e3;
   var NAME={ r:'리뷰 승인', p:'제품 등록' };
   var store=function(){ return root.localStorage; };
@@ -46,6 +46,8 @@
     if(!g || !(g.target>0) || typeof g.won!=='number' || !isFinite(g.won) || g.won<0)
       return { ok:false, why:'업무일지 목표 정보가 없습니다 — 업무일지 동기화를 먼저 하세요' };
     var month=kstMonth(now), counted=Date.parse(g.countedAt)||0;
+    /* 달이 바뀌는 앞뒤 2분(한국 시간)은 하지 않는다 — 기기 시계가 1분 안에서 어긋나도 승인이 어느 달로 들어갈지 확실하지 않다 */
+    if(kstMonth(now-2*60e3)!==kstMonth(now+2*60e3)) return { ok:false, why:'달이 바뀌는 앞뒤 2분입니다 — 잠시 뒤 다시 동기화하세요' };
     if(g.month!==month) return { ok:false, why:'목표 정보가 이번 달('+month+') 것이 아닙니다('+g.month+') — 동기화를 먼저 하세요' };
     if(g.partial) return { ok:false, why:'마지막 동기화 때 이번 달 CMS 집계가 일부 실패했습니다 — 동기화를 다시 하세요' };
     if(!counted) return { ok:false, why:'목표 정보에 CMS 집계 시각이 없습니다 — 새 콘솔로 동기화를 다시 하세요' };
@@ -55,12 +57,16 @@
     /* 작업 권한: 업무일지 서버에 로그인한 상태면 이 기기가 이번 달 작업 권한을 가져야 한다(lease). 로그인 안 했으면 null(한 기기) */
     if(g.lease!==null){
       var L=g.lease||{}, W={
-        other:'다른 컴퓨터(또는 브라우저)가 이번 달 작업 권한을 갖고 있습니다'+(L.after?' — '+hm(Date.parse(L.after))+' 이후에 시작한 CMS 집계로 검수 콘솔을 열어 동기화하세요':''),
+        other: L.closed
+          ? '다른 컴퓨터가 작업 권한을 넘겨 두었습니다'+(L.after?' — '+hm(Date.parse(L.after))+' 이후에 시작한 CMS 집계로':'')+' 검수 콘솔을 열어 동기화하면 이 컴퓨터로 넘어옵니다'
+          : '다른 컴퓨터(또는 브라우저)가 이번 달 작업 권한을 갖고 있습니다 — 그 컴퓨터 검수 콘솔의 [🔑 작업 권한 넘기기]를 누른 뒤 여기서 검수 콘솔을 열어 동기화하세요 (다음 달엔 저절로 풀림)',
+        released:'이 컴퓨터는 작업 권한을 넘겨 두었습니다 — 다시 하려면 검수 콘솔의 [🔑 이 컴퓨터로 작업 권한 다시 가져오기]를 누르세요',
+        behind:'업무일지 서버 기록이 권한을 넘긴 컴퓨터의 기록보다 적습니다 — 잠시 뒤 다시 동기화하세요',
         version:'업무일지 동기화 창이 예전 버전입니다 — 업무일지를 새로고침한 뒤 동기화하세요',
         clock:'이 컴퓨터 시계가 서버 시각과 '+(L.skew!=null?Math.abs(L.skew)+'초':'1분 넘게')+' 차이 납니다 — 시계를 맞춘 뒤 동기화하세요',
         device:'검수 콘솔이 예전 버전입니다 — CMS 탭을 새로고침하고 콘솔을 다시 여세요',
         partial:'CMS 집계가 일부 실패했습니다 — 동기화를 다시 하세요',
-        account:'다른 CMS 계정이 이 업무일지의 이번 달 작업 권한을 갖고 있습니다'+(L.after?' ('+hm(Date.parse(L.after))+' 이후 넘겨받기 가능)':'') };
+        account:'다른 CMS 계정이 이 업무일지의 이번 달 작업 권한을 갖고 있습니다 — 다음 달에 풀립니다' };
       if(!g.lease || !g.lease.ok) return { ok:false, why:W[L.why] || '이번 달 작업 권한을 확인하지 못했습니다(서버 연결) — 업무일지 동기화를 다시 하세요' };
       if(!(Date.parse(g.lease.until)>now)) return { ok:false, why:'작업 권한 시간이 지났습니다 — 동기화를 다시 하세요' };
     }
@@ -123,6 +129,11 @@
     if(cur && counted(key, cur, gi)){ cur.j=now; putItem(key, cur); return { ok:true, again:true, left:s.left }; }
     if(kind==='r' && gi.have.has(String(id))) return { ok:true, again:true, free:true, left:s.left };   /* 이미 이번 달 수입에 든 리뷰의 재승인 — 업무일지가 더 세지 않으니 0원 */
     if(s.won+c>s.target){
+      /* 집계 직전 5분 안에 한 제품 등록은 집계(won)와 원장에 두 번 들어 있을 수 있다 — 그것만 빼면 들어가는 경우엔
+         최종 정지를 걸지 않고 새 집계를 요청한다(정확한 금액으로 다시 따지게) */
+      var cb=Math.max(Date.parse(gi.g.countedAt)||0, Date.parse(gi.g.prodBase)||0), amb=0;
+      Object.keys(all).forEach(function(k2){ var y=all[k2]; if(y && y.k==='p' && counted(k2, y, gi) && y.t<cb+MARGIN) amb+=RATE.p; });
+      if(amb && s.won-amb+c<=s.target) return { ok:false, stop:true, why:'집계 직전에 등록한 제품이 두 번 셈해졌을 수 있습니다 — 업무일지 동기화(CMS 집계)를 새로 한 뒤 다시 하세요' };
       haltAt(s, now);                                                     /* 이 금액이 이번 달 최종 — 이후 모든 승인·등록 정지 */
       return { ok:false, stop:true, why:'목표 초과 — 이번 달 '+won(s.won)+' + '+NAME[kind]+' '+won(c)+' > 목표 '+won(s.target)+'. 여기서 멈추고 이번 달은 '+won(s.won)+'로 끝냅니다' };
     }
@@ -231,7 +242,7 @@
       /* 확인을 누른 뒤에는 결과가 안 보여도 원장에 남긴다 — 실제로 됐을 수 있으니 센 채로 둔다 */
       if(!fin && g.created) mark('r', id, g.token);
       if(fin && g.again) settled('r', id);
-      if(fin) outbox(id);                                                 /* 확인된 승인만 — 애매한 건 업무일지 기록에 넣지 않는다(원장에는 센 채로) */
+      if(fin) outbox(id, g.token || nowMs());                                                 /* 확인된 승인만 — 애매한 건 업무일지 기록에 넣지 않는다(원장에는 센 채로) */
       out.push(id+(fin?' OK':' UNSURE(확인 누름 · 결과 미확인 — 수입에는 센 채로 둠)'));
     }
     return out.join(' ; ')+' || '+line();
@@ -269,9 +280,9 @@
     return out.join(' ; ');
   }
   /* 승인(또는 결과 미확인)을 콘솔 보관함에도 남긴다 — 다음 동기화가 CMS 집계 범위(최근 60일 작성)와 관계없이 업무일지에 넣게 */
-  function outbox(id){
+  function outbox(id, at){       /* at = 예약한(누르기 직전) 시각 — CMS 승인 시각보다 늦지 않아 자정 무렵 날짜가 앞서 가지 않는다 */
     try{ var o=load(OUTBOX_KEY); if(!o || typeof o!=='object') o={}; o.reviews=Array.isArray(o.reviews) ? o.reviews : []; o.audit=o.audit||{};
-      var d=new Date(nowMs()), p2=function(n){ return (n<10?'0':'')+n; }, day=d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate());
+      var d=new Date(at || nowMs()), p2=function(n){ return (n<10?'0':'')+n; }, day=d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate());
       if(!o.reviews.some(function(x){ return x && String(x[0])===String(id); })) o.reviews.push([String(id), day, '', '', '', 'm']);
       if(o.reviews.length>5000) o.reviews=o.reviews.slice(-5000);
       o.seq=(o.seq||0)+1; save(OUTBOX_KEY, o); }catch(e){}
