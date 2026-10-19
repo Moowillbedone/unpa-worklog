@@ -185,6 +185,8 @@
       for(const dd of Object.keys(led[k]))led[k][dd]=led[k][dd].filter(x=>last[String(x)]===dd);}
     if(Object.keys(led.r).length||Object.keys(led.p).length)out._auto=led;
     if(remote.target!=null&&(remote._t||0)>(local._t||0)){out.target=remote.target;out._t=remote._t;}
+    {const a=(local._countedAt&&typeof local._countedAt==='object')?local._countedAt:{},b=(remote._countedAt&&typeof remote._countedAt==='object')?remote._countedAt:{},c=Object.assign({},a);
+      for(const k of Object.keys(b))if(String(b[k]||'')>String(c[k]||''))c[k]=b[k];if(Object.keys(c).length)out._countedAt=c;}
     out.days=out.days||{};
     for(const dd of new Set([...Object.keys(local.days||{}),...Object.keys(remote.days||{})])){
       const L=(local.days||{})[dd],R=(remote.days||{})[dd];
@@ -303,6 +305,16 @@
     }
     const res=syncStore(store.getItem(key),p.work,base,now,p.remain);
     store.setItem(key,res.value);
+    /* 이 기록이 담고 있는 가장 최근 CMS 집계 시각(달마다·CMS 계정마다 — 계정은 해시로만) — 다른 기기 집계까지 합친 수입과
+       가드의 '집계 뒤' 기준을 맞춘다. 일부 실패한 집계는 안 쓴다 */
+    const acct=typeof p.acct==='string'&&/^[0-9a-z]{1,16}$/.test(p.acct)?p.acct:null;
+    if(acct&&p.countedAt&&!p.monthPartial&&!p.work.partial&&!isNaN(Date.parse(p.countedAt))){
+      const v=JSON.parse(store.getItem(key));
+      for(let m=p.work.from.slice(0,7);m<=p.work.to.slice(0,7);){const t=v.months[m];
+        if(t){const c=(t._countedAt&&typeof t._countedAt==='object')?t._countedAt:{};if(String(c[acct]||'')<p.countedAt)c[acct]=p.countedAt;t._countedAt=c;}
+        const y=+m.slice(0,4),mo=+m.slice(5,7);m=(mo===12?(y+1)+'-01':y+'-'+pad2(mo+1));}
+      store.setItem(key,JSON.stringify(v));
+    }
     if(uid)store.setItem('unpa-worklog-active',key);
     const ev=readJSON(store,EV_KEY,null)||{v:1,months:{}};ev.months=ev.months||{};
     const fresh=evidenceFrom(p.work);
@@ -348,7 +360,8 @@
       if(md&&integer(md.target)){let r=0,pp=0;Object.values(md.days||{}).forEach(d=>{r+=d.r||0;pp+=d.p||0;});
         /* 이번 달 수입에 이미 들어간 리뷰·제품 번호 — 목표 가드가 "아직 안 센 승인"만 더하도록 번호로 대조한다 */
         const ids=k=>{const a=(md._auto&&md._auto[k])||{},out=new Set();Object.values(a).forEach(l=>(l||[]).forEach(x=>out.add(String(x))));return [...out];};
-        goal={month:mk,target:md.target,r,p:pp,won:r*500+pp*600,ids:{r:ids('r'),p:ids('p')}};}}catch(e){}
+        const ca=(md._countedAt&&typeof md._countedAt==='object'&&typeof p.acct==='string')?md._countedAt[p.acct]:null;
+        goal={month:mk,target:md.target,r,p:pp,won:r*500+pp*600,ids:{r:ids('r'),p:ids('p')},countedAt:ca||null};}}catch(e){}
     return {ok:true,today:res.today,changes:res.changes.slice(0,20),nChanges:res.changes.length,auditDays,auditError,cloud,console:consoleOut,remain,
             verdicts:verdictsFor(audit,p.backlog),goal};
   }

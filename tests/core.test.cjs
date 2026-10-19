@@ -455,7 +455,7 @@ test('the sync window hands the console this month\'s target and income',async()
   const s=fakeStore();
   s.setItem('unpa-worklog-v1',JSON.stringify({v:1,months:{'2026-09':Object.assign(monthOf('2026-09'),{target:1430000})},dirty:[]}));
   const r=await W.syncWindow(s,{v:1,seq:1,work:{v:1,from:'2026-09-01',to:'2026-09-30',reviews:[['1','2026-09-30'],['2','2026-09-29']],products:[['9','2026-09-29']]}},null,{now:new Date('2026-09-30T12:00:00Z')});
-  assert.deepEqual({...r.goal,ids:undefined},{month:'2026-09',target:1430000,r:2,p:1,won:1600,ids:undefined});
+  assert.deepEqual({...r.goal,ids:undefined},{month:'2026-09',target:1430000,r:2,p:1,won:1600,ids:undefined,countedAt:null});
   /* 이번 달 수입에 이미 들어간 번호 — 목표 가드가 같은 승인을 두 번 세지 않게 */
   assert.deepEqual([...r.goal.ids.r].sort(),['1','2']); assert.deepEqual(r.goal.ids.p,['9']);
 });
@@ -547,4 +547,14 @@ test('with the cloud on, a review re-approved across a month boundary is counted
   assert.deepEqual(v['2026-09']._auto.r['30'],[],'9월 사본은 지운다'); assert.equal(v['2026-09'].days['30'].r,0);
   assert.deepEqual(v['2026-10']._auto.r['02'],['7']); assert.equal(r.goal.won,500);
   assert.deepEqual(io.rows['2026-09'].data._auto.r['30'],[],'서버에도 정리된 사본을 보낸다');
+});
+
+test('the worklog remembers the latest complete CMS count time per account (merged across computers) and hands it to the guard',async()=>{
+  const io=fakeCloud(), uid='u1';
+  const home=fakeStore(), office=fakeStore();
+  await W.syncWindow(home,{v:1,seq:1,acct:'abc',countedAt:'2026-10-19T12:20:00.000Z',work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[['9','2026-10-19']]}},io,{uid,now:new Date('2026-10-19T12:22:00Z')});
+  const r=await W.syncWindow(office,{v:1,seq:1,acct:'abc',countedAt:'2026-10-19T12:00:00.000Z',work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},io,{uid,now:new Date('2026-10-19T12:25:00Z')});
+  assert.equal(r.goal.countedAt,'2026-10-19T12:20:00.000Z','집 컴퓨터가 더 나중에 센 시각'); assert.equal(r.goal.won,600);
+  const p=await W.syncWindow(office,{v:1,seq:2,acct:'zzz',countedAt:'2026-10-19T12:30:00.000Z',monthPartial:true,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},io,{uid,now:new Date('2026-10-19T12:31:00Z')});
+  assert.equal(p.goal.countedAt,null,'다른 계정·일부 실패 집계 시각은 쓰지 않는다');
 });

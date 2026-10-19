@@ -3,7 +3,7 @@
 
    ── 월 목표 가드 ──
    업무일지 수입 = 리뷰 검수완료 500원 + 제품 등록 600원 (업무일지·검수 콘솔과 같은 단가). 이번 달 수입은 목표를 절대 넘지 않는다.
-   기준값: 업무일지 동기화 뒤 검수 콘솔이 이 CMS 브라우저 localStorage 'unpa-console-goal-v1' 에 남긴
+   기준값: 업무일지 동기화 뒤 검수 콘솔이 이 CMS 브라우저 localStorage 'unpa-console-goal-v2' 에 남긴
            {month, target, won, at, countedAt, partial}. won 은 countedAt(CMS 집계를 시작한 시각)까지의 수입이다.
    countedAt 뒤에 한 일은 따로 더한다: Claude 원장 'unpa-claude-ledger-v1'(이 도구) + 검수 콘솔 전송 기록 'unpa-console-sent-v1'의 승인.
    다음 한 건이 목표를 넘기게 되면(이번 달 + 이번 건 > 목표) 실행하지 않고 그 자리에서 멈춘다. 목표에 딱 맞게 닿는 건 허용.
@@ -14,7 +14,8 @@
    수정요청·미노출·브랜드 등록·기존 제품 편집은 수입에 들어가지 않으므로 막지 않는다. */
 (function(root){
   var RATE={ r:500, p:600 };
-  var GOAL_KEY='unpa-console-goal-v1', LEDGER_KEY='unpa-claude-ledger-v1', SENT_KEY='unpa-console-sent-v1';
+  /* 목표 스냅샷은 v2 키에서 읽는다 — v1 키에는 새 콘솔이 '일부 실패'로 막아 둔 값만 남아, 예전 버전 가드(시각 기준)가 열린 탭은 아무것도 하지 않는다 */
+  var GOAL_KEY='unpa-console-goal-v2', LEDGER_KEY='unpa-claude-ledger-v1', SENT_KEY='unpa-console-sent-v1';
   var MAX_AGE=60*60e3, MARGIN=5*60e3, KEEP=45*86400e3;
   var NAME={ r:'리뷰 승인', p:'제품 등록' };
   var store=function(){ return root.localStorage; };
@@ -34,9 +35,7 @@
       if(k==='!halt'){ if(!halt || (x.t||0)>(halt.t||0)) halt=x; } else items[k]=x; });
     return { v:2, items:items, halt:halt };
   }
-  /* 예전 버전 가드가 열린 채 남은 탭(한 키만 읽음)도 볼 수 있게 예전 키에도 같이 적는다 — 새 가드는 둘을 합쳐 읽는다 */
-  function legacy(){ var l=load(LEDGER_KEY); if(!l || typeof l!=='object') l={ v:1, items:{} }; if(!l.items || typeof l.items!=='object') l.items={}; return l; }
-  function putItem(k, x){ save(IK+k, x); try{ var l=legacy(); l.items[k]=x; save(LEDGER_KEY, l); }catch(e){} }
+  function putItem(k, x){ save(IK+k, x); }
   function delItem(k){ try{ store().removeItem(IK+k); }catch(e){}
     var l=load(LEDGER_KEY); if(l && l.items && l.items[k]){ delete l.items[k]; save(LEDGER_KEY, l); } }
   function hm(ms){ return new Date(ms+9*3600e3).toISOString().slice(5,16).replace('T',' '); }
@@ -60,7 +59,7 @@
      번호로 가를 수 없어 시각으로 — CMS 집계를 시작한 뒤(5분 여유) 한 것만 (그 전 것은 집계에 들어 있다) */
   function counted(k, x, gi){
     if(!x || kstMonth(x.t)!==gi.month) return false;
-    if(x.k==='r' && !x.re) return !gi.have.has(k.slice(2));
+    if(x.k==='r') return !gi.have.has(k.slice(2));      /* 업무일지는 한 번호를 한 번만 센다 — 재승인도 더 늘지 않는다 */
     return x.t>=gi.base;
   }
   function status(){
@@ -93,18 +92,19 @@
   /* 한 건 하기 직전에 부른다(리뷰는 지금 검수 대기인 것만). ok 면 원장에 적고, 아니면 절대 실행하지 않는다.
      같은 리뷰를 다시 부르면: 지금 세고 있는 예약이 있으면 그대로 ok(again — 그 예약에 '함께 씀' 표시를 남겨 주인이 지우지 못하게),
      셈에서 빠진 옛 기록이면 새 건처럼 예산부터 본다. 업무일지가 이미 센 리뷰가 다시 대기면 재승인 — 500원을 또 센다. */
-  function haltAt(s, now){ var h={ month:s.month, target:s.target, t:now, won:s.won }; save(IK+'!halt', h); try{ var l=legacy(); l.halt=h; save(LEDGER_KEY, l); }catch(e){} }
+  function haltAt(s, now){ save(IK+'!halt', { month:s.month, target:s.target, t:now, won:s.won }); }
   function reserve(kind, id, opt){
     var c=RATE[kind]; if(!c) return { ok:false, why:'알 수 없는 종류 '+kind };
     var key=kind+':'+String(id), now=nowMs(), s=status();
     if(!s.ok) return { ok:false, stop:true, why:s.why };
     var gi=goalInfo(now), all=ledger().items, cur=all[key];
     if(cur && counted(key, cur, gi)){ cur.j=now; putItem(key, cur); return { ok:true, again:true, left:s.left }; }
+    if(kind==='r' && gi.have.has(String(id))) return { ok:true, again:true, free:true, left:s.left };   /* 이미 이번 달 수입에 든 리뷰의 재승인 — 업무일지가 더 세지 않으니 0원 */
     if(s.won+c>s.target){
       haltAt(s, now);                                                     /* 이 금액이 이번 달 최종 — 이후 모든 승인·등록 정지 */
       return { ok:false, stop:true, why:'목표 초과 — 이번 달 '+won(s.won)+' + '+NAME[kind]+' '+won(c)+' > 목표 '+won(s.target)+'. 여기서 멈추고 이번 달은 '+won(s.won)+'로 끝냅니다' };
     }
-    var x={ k:kind, t:now }; if(kind==='r' && gi.have.has(String(id))) x.re=1;
+    var x={ k:kind, t:now };
     if(opt && opt.src) x.src=String(opt.src);
     putItem(key, x);
     Object.keys(all).forEach(function(k){ if(k!==key && !(all[k] && now-all[k].t<KEEP)) delItem(k); });
@@ -144,15 +144,18 @@
   /* 수정요청이 실제로 나갔다 = 그 리뷰는 지금 대기였다 → 결과가 애매해 남겨 둔 승인 예약(u)은 실제로 승인되지 않은 것 — 지운다.
      확실히 된 승인(u 아님)은 지우지 않는다 — 승인 뒤 작성자가 고쳐 다시 대기가 된 경우일 수 있다 */
   function forget(id){ var key='r:'+String(id), x=ledger().items[key]; if(x && x.u){ delItem(key); return true; } return false; }
+  /* 함께 쓴(again) 예약으로 실제 승인이 확인됐다 — 애매 표시를 지워 나중에 forget 으로 지워지지 않게 */
+  function settled(kind, id){ var key=kind+':'+String(id), x=ledger().items[key]; if(x && x.u){ delete x.u; putItem(key, x); return true; } return false; }
 
   /* CMS 집계가 '내 승인 아님'으로 본 리뷰(notMine)의 승인 예약 중 집계 시작 전(before) 것은 실제로 승인되지 않았다 — 지운다.
      집계 범위(최근 60일 작성) 밖 리뷰는 notMine 에 없으니 지우지 않는다(센 채로 둠) */
   function prune(notMine, before){
     var items=ledger().items, n=0;
-    Object.keys(items).forEach(function(k){ var x=items[k]; if(x && x.k==='r' && x.t<before && notMine[k.slice(2)]){ delItem(k); n++; } });
+    /* 마지막으로 쓴 때(t·함께 쓴 j 중 나중)가 집계 시작 전이어야 한다 — 집계 중에 다시 써서 실제로 승인된 예약은 남긴다 */
+    Object.keys(items).forEach(function(k){ var x=items[k]; if(x && x.k==='r' && Math.max(x.t||0, x.j||0)<before && notMine[k.slice(2)]){ delItem(k); n++; } });
     return n;
   }
-  root.UnpaGuard={ RATE:RATE, status:status, line:line, reserve:reserve, reserveSafe:reserveSafe, release:release, mark:mark, forget:forget, prune:prune,
+  root.UnpaGuard={ RATE:RATE, status:status, line:line, reserve:reserve, reserveSafe:reserveSafe, release:release, mark:mark, forget:forget, settled:settled, prune:prune,
                    ledger:ledger, kstMonth:kstMonth,
                    keys:{ goal:GOAL_KEY, ledger:LEDGER_KEY, sent:SENT_KEY } };
 
@@ -203,6 +206,7 @@
       var fin=await waitFor(function(){ var b=btn('검수 완료'); return b && b.disabled ? 'y' : null; }, 7000);
       /* 확인을 누른 뒤에는 결과가 안 보여도 원장에 남긴다 — 실제로 됐을 수 있으니 센 채로 둔다 */
       if(!fin && g.created) mark('r', id, g.token);
+      if(fin && g.again) settled('r', id);
       out.push(id+(fin?' OK':' UNSURE(확인 누름 · 결과 미확인 — 수입에는 센 채로 둠)'));
     }
     return out.join(' ; ')+' || '+line();

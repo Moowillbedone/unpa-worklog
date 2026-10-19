@@ -20,7 +20,7 @@ function lsOf(store, onGet, onSet){
 }
 function guard(g, nowIso, extra, onGet, onSet){
   const store={};
-  if(g) store['unpa-console-goal-v1']=JSON.stringify(g);
+  if(g) store['unpa-console-goal-v2']=JSON.stringify(g);
   Object.assign(store, extra||{});
   const clock={now:Date.parse(nowIso)};
   const ctx={localStorage:lsOf(store,onGet,onSet),Date,JSON,Math,Object,String,isFinite,Set,Promise,setTimeout};
@@ -69,9 +69,9 @@ test('once anything is refused, that amount is the month\'s final income — a c
 test('the stop holds across re-syncs with the same target and lifts when the worklog target is raised',()=>{
   const {G,store,clock}=guard(goal({won:1429700}),NOW);
   assert.equal(G.reserve('r','1').ok,false);
-  store['unpa-console-goal-v1']=JSON.stringify(goal({won:1429700,countedAt:'2026-10-18T13:00:00Z'})); clock.now=Date.parse('2026-10-18T13:10:00Z');
+  store['unpa-console-goal-v2']=JSON.stringify(goal({won:1429700,countedAt:'2026-10-18T13:00:00Z'})); clock.now=Date.parse('2026-10-18T13:10:00Z');
   assert.equal(G.reserve('r','2').ok,false,'같은 목표로 다시 동기화해도 정지');
-  store['unpa-console-goal-v1']=JSON.stringify(goal({won:1429700,target:1500000,countedAt:'2026-10-18T13:20:00Z'})); clock.now=Date.parse('2026-10-18T13:25:00Z');
+  store['unpa-console-goal-v2']=JSON.stringify(goal({won:1429700,target:1500000,countedAt:'2026-10-18T13:20:00Z'})); clock.now=Date.parse('2026-10-18T13:25:00Z');
   assert.equal(G.status().ok,true); assert.equal(G.reserve('r','3').ok,true);
 });
 
@@ -113,21 +113,17 @@ test('a sync in the middle of a run neither drops nor double counts: approvals a
   ['a','b','c'].forEach(id=>assert.equal(G.reserve('r',id).ok,true));
   assert.equal(G.status().won,896500);
   /* 새 동기화: a·b 는 업무일지에 들어감(won +1000), c 는 아직 */
-  store['unpa-console-goal-v1']=JSON.stringify(goal({won:896000,countedAt:'2026-10-18T12:40:00Z',ids:{r:['482561','100','a','b'],p:[]}}));
+  store['unpa-console-goal-v2']=JSON.stringify(goal({won:896000,countedAt:'2026-10-18T12:40:00Z',ids:{r:['482561','100','a','b'],p:[]}}));
   clock.now=Date.parse('2026-10-18T12:45:00Z');
   assert.equal(G.status().won,896500,'같은 금액 — 빠지지도 두 번 세지도 않는다');
 });
 
-test('a review the worklog already counted that is pending again is a re-approval: budget-checked and counted again until the next count',()=>{
-  const {G,ledger,store,clock}=guard(goal({won:1429500}),NOW);          /* 500원 남음, 100 은 업무일지 합계에 있음 */
+test('a review the worklog already counted that is pending again costs nothing more (the worklog counts each id once), even at the target',()=>{
+  const {G,ledger}=guard(goal({won:1430000}),NOW);                       /* 목표에 딱 닿음, 100 은 업무일지 합계에 있음 */
   const r=G.reserve('r','100');
-  assert.equal(r.ok,true); assert.equal(r.created,true); assert.equal(ledger().items['r:100'].re,1);
-  assert.equal(G.status().won,1430000,'재승인도 500원');
-  assert.equal(G.reserve('r','482561').ok,false,'다음 재승인은 목표를 넘으므로 멈춘다');
-  /* 다음 집계에 재승인이 들어가면(업무일지가 새 날짜로 한 번 더 셈) 원장 쪽은 더 세지 않는다 */
-  store['unpa-console-goal-v1']=JSON.stringify(goal({won:1430000,countedAt:'2026-10-18T12:40:00Z'}));
-  clock.now=Date.parse('2026-10-18T12:50:00Z');
-  assert.equal(G.status().won,1430000);
+  assert.equal(r.ok,true); assert.equal(r.free,true); assert.equal(ledger().items['r:100'],undefined);
+  assert.equal(G.status().won,1430000); assert.equal(G.status().ok,true,'정지하지 않는다');
+  assert.equal(G.reserve('r','999').ok,false,'새 리뷰는 여전히 막는다');
 });
 
 test('approvals sent by the review console after the count are counted too (even if its sync never finished), without double counting',()=>{
@@ -192,14 +188,12 @@ test('each reservation is its own storage key, so two tabs writing at once never
   assert.equal(G.status().spent,1100);
 });
 
-test('an older guard still open in another tab (reads only the single legacy key) sees every new reservation and the stop',()=>{
-  const {G,store}=guard(goal({won:1429000}),NOW);
-  G.reserve('r','1'); G.reserve('r','2'); assert.equal(G.reserve('r','3').ok,false);
-  const legacy=JSON.parse(store['unpa-claude-ledger-v1']);
-  assert.deepEqual(Object.keys(legacy.items).sort(),['r:1','r:2'],'예전 가드가 읽는 키에도 같이 적는다');
-  assert.ok(legacy.halt,'정지 표시도');
-  G.release('r','2',JSON.parse(store['unpa-claude-ledger-v1|r:2']).t);
-  assert.deepEqual(Object.keys(JSON.parse(store['unpa-claude-ledger-v1']).items),['r:1'],'지울 때도 같이');
+test('the legacy single-key ledger is still read (entries an older tab wrote count), but new entries are not written there',()=>{
+  const c=Date.parse(COUNTED);
+  const {G,store}=guard(goal(),NOW,{'unpa-claude-ledger-v1':JSON.stringify({v:1,items:{'r:41':{k:'r',t:c+60e3}}})});
+  G.reserve('r','42');
+  assert.equal(G.status().spent,1000);
+  assert.deepEqual(Object.keys(JSON.parse(store['unpa-claude-ledger-v1']).items),['r:41']);
 });
 
 test('near the target, reservations queue behind a cross-tab lock and wait for other tabs\' writes to arrive; far from it they go straight through',async()=>{
@@ -213,7 +207,7 @@ test('near the target, reservations queue behind a cross-tab lock and wait for o
 
 /* ── 실제 흐름: 가짜 CMS 리뷰 상세 화면에서 UnpaOps.approve 를 돌린다 ── */
 function cms(g, reviews, nowIso){
-  const store={'unpa-console-goal-v1':JSON.stringify(g)}, sess={};
+  const store={'unpa-console-goal-v2':JSON.stringify(g)}, sess={};
   const st={cur:null, modal:false, clicks:{approve:[],confirm:[]}};
   const R=()=>reviews[st.cur];
   const el=(o)=>Object.assign({getAttribute:()=>null,querySelectorAll:()=>[],querySelector:()=>null},o);
@@ -340,3 +334,17 @@ test('after a CMS count, approval reservations made before it for reviews the co
   assert.deepEqual(Object.keys(ledger().items).sort(),['p:x|y|1','r:556','r:557']);
 });
 
+test('prune keeps a reservation that was used again (joined) after the count started — that later use may be the real approval',()=>{
+  const c=Date.parse(COUNTED);
+  const items={'r:500':{k:'r',t:c-3600e3,u:1,j:c+60e3},'r:501':{k:'r',t:c-3600e3,u:1}};
+  const {G,ledger}=guard(goal(),NOW,{'unpa-claude-ledger-v1':JSON.stringify({v:1,items})});
+  assert.equal(G.prune({'500':1,'501':1},c-5*60e3),1);
+  assert.deepEqual(Object.keys(ledger().items),['r:500']);
+  assert.equal(G.settled('r','500'),true,'함께 써서 실제 승인이 확인되면 애매 표시를 지운다');
+  assert.equal(G.forget('500'),false,'그 뒤에는 수정요청이 나가도 지우지 않는다');
+});
+
+test('the old snapshot key is not read any more (a stale tab with an older guard cannot use it)',()=>{
+  const {G}=guard(null,NOW,{'unpa-console-goal-v1':JSON.stringify(goal())});
+  assert.equal(G.status().ok,false); assert.match(G.status().why,/목표 정보가 없습니다/);
+});

@@ -2126,6 +2126,7 @@
                    conf:r.conf||null, sample:!!r.sample, why:(r.reasons||[]).slice(-2)});
         if(ok){
           if(r.action==='approve') SESSION_APPROVED[String(r.id)]=ymd(new Date());   /* 목표 계산에 바로 반영 */
+          if(r.action==='approve' && gr && gr.again && window.UnpaGuard && window.UnpaGuard.settled) window.UnpaGuard.settled('r', r.id);
           if(r.action==='hide') hidefpMark(r, 'confirmed', true);
           if(isRevise(r.action) && window.UnpaGuard) window.UnpaGuard.forget(r.id);   /* 수정요청이 나갔다 = 승인 안 된 리뷰 — 남은 승인 예약은 수입이 아니다 */
           if(pendingLoad()[String(r.id)]) pendingMark(r.id, r.action==='revise_product' ? 'learned' : isRevise(r.action) ? 'sent' : 'resolved',
@@ -2223,9 +2224,11 @@
      남은 금액으로 할 수 있는 승인만 고른다: 고신뢰 먼저, 모자라면 사람 확인 건을 오래된 작성일부터.
      수정요청·미노출은 수입(리뷰 수)에 들어가지 않으므로 막지 않는다. */
   var RATE_R=500, RATE_P=600;
-  var GOAL_KEY='unpa-console-goal-v1', SESSION_APPROVED={};
+  /* 목표 스냅샷은 v2 키에 둔다. v1 키에는 '일부 실패'로 막은 값을 써서 업데이트 전 버전 가드(시각 기준)가 열린 탭은 승인·등록을 하지 않게 한다 */
+  var GOAL_KEY='unpa-console-goal-v2', GOAL_V1='unpa-console-goal-v1', SESSION_APPROVED={};
   function goalLoad(){ try{ var g=JSON.parse(localStorage.getItem(GOAL_KEY)||'null'); return (g && typeof g==='object') ? g : null; }catch(e){ return null; } }
-  function goalSave(g){ try{ localStorage.setItem(GOAL_KEY, JSON.stringify(g)); }catch(e){} }
+  function goalSave(g){ try{ localStorage.setItem(GOAL_KEY, JSON.stringify(g));
+    localStorage.setItem(GOAL_V1, JSON.stringify({ month:g.month, target:g.target, won:g.won, at:g.at, countedAt:null, partial:true, note:'새 버전 콘솔·도구로 다시 여세요' })); }catch(e){} }
   function wonFmt(n){ return '₩'+Math.round(n||0).toLocaleString('ko-KR'); }
   function dayOf(v){ var d=Array.isArray(v) ? v[0] : v; return typeof d==='string' ? d : ''; }
   /* 조회가 하나라도 실패했으면 이번 달 수입을 믿을 수 없다 — 지난달에 작성된 리뷰도 이번 달에 승인됐을 수 있다 */
@@ -2446,7 +2449,9 @@
     }
     (ob.reviews||[]).forEach(function(x){ if(x && validDate(x[1]) && x[1]>=AUTO_FROM) rv.push([String(x[0])].concat(x.slice(1))); });
     /* 남은 검수 목록을 못 불러왔으면(BACKLOG 없음) 남은 일·미등록 칸은 비우지 않고 그대로 둔다 */
-    return { v:1, seq:ob.seq||0, countedAt:(WORK && WORK.startedAt) || null, builtAt:new Date().toISOString(), monthPartial:!WORK || monthFailed(WORK),
+    /* acct = CMS 계정의 해시(계정 이름은 넘기지 않는다) — 업무일지가 계정마다 마지막 집계 시각을 기억한다 */
+    var acct=null; if(ME){ var h=5381; for(var i=0;i<ME.length;i++) h=(Math.imul(h,33)^ME.charCodeAt(i))>>>0; acct=h.toString(36); }
+    return { v:1, seq:ob.seq||0, acct:acct, countedAt:(WORK && WORK.startedAt) || null, builtAt:new Date().toISOString(), monthPartial:!WORK || monthFailed(WORK),
              work:{ v:1, from:AUTO_FROM, to:ymd(new Date()), reviews:rv, products:pv, partial:!!(WORK && WORK.failed.length) },
              audit:ob.audit||{}, pending:(SYNC_ONLY && !BACKLOG) ? null : pendingList(), backlog:backlogList(), remain:remainList(), console:consoleState() };
   }
@@ -2505,14 +2510,17 @@
       if(!ev.data.ok){ syncButton('<span style="color:#ff8f6b">⚠ 업무일지 반영 실패 — '+esc(String(ev.data.error||'').slice(0,80))+'</span>'); return; }
       if(ev.data.console) applyConsoleState(ev.data.console);
       /* 다른 탭이 더 최근 집계로 남긴 스냅샷은 덮지 않는다 — 단 가드가 받아 주는 스냅샷일 때만(미래 시각·1시간 넘음·일부 실패·번호 목록 없음이면 새 것으로 바꾼다) */
+      /* 기준 시각 = 이 집계 시각과 업무일지에 합쳐진 다른 기기 집계 시각 중 나중 것 (수입 합계가 그때까지를 담고 있다) */
+      var pcT=payload ? Date.parse(payload.countedAt)||0 : 0, gcT=ev.data.goal ? Date.parse(ev.data.goal.countedAt)||0 : 0;
+      var effC=Math.max(pcT, gcT) ? new Date(Math.max(pcT, gcT)).toISOString() : null;
       var prevGoal=goalLoad(), pc=prevGoal ? Date.parse(prevGoal.countedAt)||0 : 0, nowT=Date.now();
       var prevGood=!!(prevGoal && pc && pc<=nowT+5*60e3 && nowT-pc<=60*60e3 && !prevGoal.partial && prevGoal.ids && Array.isArray(prevGoal.ids.r));
-      var newer=!!(prevGood && payload && pc>(Date.parse(payload.countedAt)||0) && prevGoal.month===(ev.data.goal||{}).month && prevGoal.target===(ev.data.goal||{}).target);
+      var newer=!!(prevGood && payload && pc>(Date.parse(effC)||0) && prevGoal.month===(ev.data.goal||{}).month && prevGoal.target===(ev.data.goal||{}).target);
       if(ev.data.goal && ev.data.goal.target>0 && !newer){
         /* countedAt = 이 합계의 바탕이 된 CMS 집계를 시작한 시각, partial = 이번 달 집계가 일부 실패.
            Claude 용 가드(cms-claude.js)는 countedAt 뒤의 승인·등록을 따로 더하고, partial 이면 아무것도 하지 않는다 */
-        goalSave(Object.assign({ at:new Date().toISOString(), countedAt:(payload && payload.countedAt) || null,
-                                 builtAt:(payload && payload.builtAt) || null, partial:!payload || !!payload.monthPartial }, ev.data.goal));
+        goalSave(Object.assign({}, ev.data.goal, { at:new Date().toISOString(), countedAt:(payload && payload.countedAt) ? effC : null,
+                                 builtAt:(payload && payload.builtAt) || null, partial:!payload || !!payload.monthPartial }));
         if(results.length) renderQueue(SCAN_DATE);
       }
       if(ev.data.verdicts && seedFromVerdicts(ev.data.verdicts)) matchPending();   /* 예전 판정으로 채운 건도 바로 짝지어 본다 */
