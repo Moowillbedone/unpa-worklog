@@ -34,7 +34,9 @@
       if(k==='!halt'){ if(!halt || (x.t||0)>(halt.t||0)) halt=x; } else items[k]=x; });
     return { v:2, items:items, halt:halt };
   }
-  function putItem(k, x){ save(IK+k, x); }
+  /* 예전 버전 가드가 열린 채 남은 탭(한 키만 읽음)도 볼 수 있게 예전 키에도 같이 적는다 — 새 가드는 둘을 합쳐 읽는다 */
+  function legacy(){ var l=load(LEDGER_KEY); if(!l || typeof l!=='object') l={ v:1, items:{} }; if(!l.items || typeof l.items!=='object') l.items={}; return l; }
+  function putItem(k, x){ save(IK+k, x); try{ var l=legacy(); l.items[k]=x; save(LEDGER_KEY, l); }catch(e){} }
   function delItem(k){ try{ store().removeItem(IK+k); }catch(e){}
     var l=load(LEDGER_KEY); if(l && l.items && l.items[k]){ delete l.items[k]; save(LEDGER_KEY, l); } }
   function hm(ms){ return new Date(ms+9*3600e3).toISOString().slice(5,16).replace('T',' '); }
@@ -91,7 +93,7 @@
   /* 한 건 하기 직전에 부른다(리뷰는 지금 검수 대기인 것만). ok 면 원장에 적고, 아니면 절대 실행하지 않는다.
      같은 리뷰를 다시 부르면: 지금 세고 있는 예약이 있으면 그대로 ok(again — 그 예약에 '함께 씀' 표시를 남겨 주인이 지우지 못하게),
      셈에서 빠진 옛 기록이면 새 건처럼 예산부터 본다. 업무일지가 이미 센 리뷰가 다시 대기면 재승인 — 500원을 또 센다. */
-  function haltAt(s, now){ save(IK+'!halt', { month:s.month, target:s.target, t:now, won:s.won }); }
+  function haltAt(s, now){ var h={ month:s.month, target:s.target, t:now, won:s.won }; save(IK+'!halt', h); try{ var l=legacy(); l.halt=h; save(LEDGER_KEY, l); }catch(e){} }
   function reserve(kind, id, opt){
     var c=RATE[kind]; if(!c) return { ok:false, why:'알 수 없는 종류 '+kind };
     var key=kind+':'+String(id), now=nowMs(), s=status();

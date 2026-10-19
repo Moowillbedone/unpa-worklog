@@ -909,3 +909,11 @@ test('after the CMS count, a leftover approval reservation for a review the coun
   const items=ctx.UnpaGuard.ledger().items;
   assert.deepEqual(Object.keys(items),['r:556'],'집계가 대기로 본 555 는 지우고, 집계가 못 본 556 은 남긴다');
 });
+
+test('a console still holding an older guard (no reserveSafe) approves nothing instead of reserving the old way',async()=>{
+  const {api,sent,ctx}=harness(); api.setTpl(TPL); api.setDate('2026-09-02');
+  api.goalSave(snap({target:100000,won:0}));
+  const G=ctx.UnpaGuard; ctx.UnpaGuard={status:G.status,line:G.line,reserve:G.reserve,release:G.release,RATE:G.RATE};   /* 예전 버전처럼 */
+  await api.runJobs([{id:91,action:'approve',reasons:[]}]);
+  assert.equal(sent.filter(x=>/\/approve$/.test(x.url)).length,0);
+});

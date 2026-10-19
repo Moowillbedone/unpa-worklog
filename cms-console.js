@@ -2051,7 +2051,7 @@
     /* 이번 달 목표를 넘는 승인은 실행 직전에 한 번 더 잘라 낸다. 보낼 때도 한 건마다 공용 가드에 먼저 예약한다 */
     var appr=jobs.filter(function(r){ return r.action==='approve'; }), goalNote='';
     if(appr.length){
-      if(!window.UnpaGuard) await loadGuard();
+      if(!window.UnpaGuard || !window.UnpaGuard.reserveSafe) await loadGuard();
       var B=budget();
       if(B.known){
         if(appr.length>B.approvals){
@@ -2092,8 +2092,8 @@
         if(!req){ log('&nbsp;&nbsp;<span style="color:#ff8f6b">✗ #'+r.id+' 요청 생성 실패 — 건너뜀</span>'); continue; }
         if(r.action==='approve'){
           /* 보내기 직전에 공용 원장에 예약 — 다른 탭·Claude 도구가 같은 금액을 동시에 쓰지 못하게. 걸리면 남은 승인은 전부 남겨 둔다 */
-          var gr=!window.UnpaGuard ? { ok:false, why:'목표 가드 없음' }
-                 : window.UnpaGuard.reserveSafe ? await window.UnpaGuard.reserveSafe('r', r.id, { src:'c' }) : window.UnpaGuard.reserve('r', r.id, { src:'c' });
+          var gr=(!window.UnpaGuard || !window.UnpaGuard.reserveSafe) ? { ok:false, why:'목표 가드가 예전 버전입니다 — 콘솔을 다시 여세요' }
+                 : await window.UnpaGuard.reserveSafe('r', r.id, { src:'c' });
           if(!gr.ok){
             log('&nbsp;&nbsp;<span style="color:#f5c451">⛔ 🎯 '+esc(gr.why)+' — 남은 승인은 하지 않음</span>');
             jobs.slice(i).forEach(function(x){ if(x.action==='approve') x.deferred=true; });
@@ -2688,11 +2688,12 @@
   /* 월 목표 가드(cms-claude.js)를 업무일지 사이트에서 불러온다 — Claude 도구와 같은 원장·같은 정지 표시를 쓴다 */
   function loadGuard(){
     return new Promise(function(res){
-      if(window.UnpaGuard) return res(true);
+      if(window.UnpaGuard && window.UnpaGuard.reserveSafe) return res(true);      /* 예전 버전 가드가 남아 있으면 새로 불러온다 */
       try{
         var sc=document.createElement('script');
         sc.src=WORKLOG_URL+'cms-claude.js?t='+Date.now();
-        sc.onload=function(){ res(!!window.UnpaGuard); }; sc.onerror=function(){ res(false); };
+        var to=setTimeout(function(){ res(!!(window.UnpaGuard && window.UnpaGuard.reserveSafe)); }, 6000);   /* 못 불러오면 6초 뒤 포기 — 승인은 막힌다 */
+        sc.onload=function(){ clearTimeout(to); res(!!window.UnpaGuard); }; sc.onerror=function(){ clearTimeout(to); res(false); };
         (document.head||document.body).appendChild(sc);
       }catch(e){ res(false); }
     });

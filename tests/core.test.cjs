@@ -536,3 +536,15 @@ test('merging with another computer keeps one day per review id (an old copy els
   assert.deepEqual(out.months['2026-10']._auto.r['18'],[]); assert.deepEqual(out.months['2026-10']._auto.r['19'],['1']);
   assert.equal(out.months['2026-10'].days['18'].r,0); assert.equal(out.months['2026-10'].days['19'].r,1);
 });
+
+test('with the cloud on, a review re-approved across a month boundary is counted once (latest date), in both the stored months and the server copy',async()=>{
+  const io=fakeCloud(), st=fakeStore(), uid='u1';
+  const sep=W.applyWork({},{v:1,from:'2026-09-01',to:'2026-09-30',reviews:[['7','2026-09-30'],['8','2026-09-29']],products:[]}).months['2026-09'];
+  sep.target=1000; io.rows['2026-09']={data:sep,updated_at:'2026-09-30T12:00:00Z'};      /* 다른 기기가 9/30 에 센 7번 */
+  st.setItem('unpa-worklog-v2:'+uid,JSON.stringify({v:1,months:{'2026-09':JSON.parse(JSON.stringify(sep))},dirty:[]}));
+  const r=await W.syncWindow(st,{v:1,seq:1,work:{v:1,from:'2026-09-01',to:'2026-10-02',reviews:[['7','2026-10-02']],products:[]}},io,{uid,now:new Date('2026-10-02T12:00:00Z')});
+  const v=JSON.parse(st.getItem('unpa-worklog-v2:'+uid)).months;
+  assert.deepEqual(v['2026-09']._auto.r['30'],[],'9월 사본은 지운다'); assert.equal(v['2026-09'].days['30'].r,0);
+  assert.deepEqual(v['2026-10']._auto.r['02'],['7']); assert.equal(r.goal.won,500);
+  assert.deepEqual(io.rows['2026-09'].data._auto.r['30'],[],'서버에도 정리된 사본을 보낸다');
+});

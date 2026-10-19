@@ -187,7 +187,19 @@ test('each reservation is its own storage key, so two tabs writing at once never
   const {G,store}=guard(goal(),NOW);
   G.reserve('r','1'); G.reserve('p','x|y|1');
   assert.ok(store['unpa-claude-ledger-v1|r:1']); assert.ok(store['unpa-claude-ledger-v1|p:x|y|1']);
-  assert.equal(store['unpa-claude-ledger-v1'],undefined,'한 키에 전부 쓰지 않는다');
+  /* 예전 키가 다른 탭의 쓰기로 덮여 사라져도 새 가드는 건마다 키로 그대로 센다 */
+  delete store['unpa-claude-ledger-v1'];
+  assert.equal(G.status().spent,1100);
+});
+
+test('an older guard still open in another tab (reads only the single legacy key) sees every new reservation and the stop',()=>{
+  const {G,store}=guard(goal({won:1429000}),NOW);
+  G.reserve('r','1'); G.reserve('r','2'); assert.equal(G.reserve('r','3').ok,false);
+  const legacy=JSON.parse(store['unpa-claude-ledger-v1']);
+  assert.deepEqual(Object.keys(legacy.items).sort(),['r:1','r:2'],'예전 가드가 읽는 키에도 같이 적는다');
+  assert.ok(legacy.halt,'정지 표시도');
+  G.release('r','2',JSON.parse(store['unpa-claude-ledger-v1|r:2']).t);
+  assert.deepEqual(Object.keys(JSON.parse(store['unpa-claude-ledger-v1']).items),['r:1'],'지울 때도 같이');
 });
 
 test('near the target, reservations queue behind a cross-tab lock and wait for other tabs\' writes to arrive; far from it they go straight through',async()=>{
@@ -327,3 +339,4 @@ test('after a CMS count, approval reservations made before it for reviews the co
   assert.equal(G.prune({'555':1,'557':1},c-5*60e3),1,'555 만 — 556 은 집계가 못 본 리뷰(60일 밖 등)라 남기고, 557 은 집계 뒤 예약이라 남긴다');
   assert.deepEqual(Object.keys(ledger().items).sort(),['p:x|y|1','r:556','r:557']);
 });
+

@@ -160,6 +160,20 @@
      회사·집 브라우저가 따로 쌓은 것을 서버에서 합친다. 어느 쪽 것도 지우지 않는다.
      - 업무일지: 자동 장부(_auto)는 합집합. 메모·직접 조정은 칸마다 나중에 고친 쪽(_t) */
   function unionIds(a,b){return [...new Set([...(a||[]),...(b||[])].map(String))];}
+  /* 여러 달을 함께 보며 한 번호는 가장 나중 날짜 한 곳에만 — 달을 넘는 재승인·자정 전후 날짜 차이로 두 달에 남은 사본을 정리하고
+     자동 집계 날의 건수를 다시 센다 */
+  function oneDayPerId(ms){
+    const keys=Object.keys(ms).filter(m=>ms[m]&&ms[m]._auto).sort();
+    for(const k of ['r','p']){
+      const last={};
+      for(const m of keys){const a=ms[m]._auto[k]||{};for(const dd of Object.keys(a).sort())for(const x of (a[dd]||[]))last[String(x)]=m+'-'+dd;}
+      for(const m of keys){const a=ms[m]._auto[k]||{};for(const dd of Object.keys(a))a[dd]=(a[dd]||[]).filter(x=>last[String(x)]===m+'-'+dd);}
+    }
+    for(const m of keys){const t=ms[m],a=t._auto;
+      for(const dd of Object.keys(t.days||{})){const d=t.days[dd];if(!d||!d.auto)continue;
+        const ar=((a.r||{})[dd]||[]).length,ap=((a.p||{})[dd]||[]).length;d.r=ar;d.p=ap;d.auto={r:ar,p:ap};}}
+    return ms;
+  }
   function mergeMonth(local,remote){
     if(!remote)return JSON.parse(JSON.stringify(local));
     if(!local)return JSON.parse(JSON.stringify(remote));
@@ -229,7 +243,9 @@
     for(const r of (keys.size?await io.pull([...keys]):[])||[])if(r&&r.month)remote[r.month]=r;
     const rd=k=>remote[k]&&remote[k].data;
     const out={months:{},evidence:{},audit:{},console:null},push=[];
-    for(const m of st.touchedMonths||[]){const merged=mergeMonth(st.months[m],rd(m));months({[m]:merged});out.months[m]=merged;push.push({month:m,data:merged});}
+    for(const m of st.touchedMonths||[]){const merged=mergeMonth(st.months[m],rd(m));months({[m]:merged});out.months[m]=merged;}
+    oneDayPerId(out.months);
+    for(const m of st.touchedMonths||[])push.push({month:m,data:out.months[m]});
     for(const m of st.touchedEv||[]){const merged=mergeEvidence(rd('~ev:'+m),st.evidence[m]);out.evidence[m]=merged;push.push({month:'~ev:'+m,data:merged});}
     for(const d of Object.keys(st.audit||{})){const r=rd('~audit:'+d);const merged=(r&&Array.isArray(r.items))?mergeAudit(r,Object.assign({},st.audit[d],{date:d})):st.audit[d];out.audit[d]=merged;push.push({month:'~audit:'+d,data:merged});}
     if(Array.isArray(st.pending))push.push({month:'~pending',data:{at:now,items:st.pending.slice(0,500),backlog:Array.isArray(st.backlog)?st.backlog.slice(0,3000):null}});
@@ -308,6 +324,7 @@
         /* 서버와 주고받는 사이에 업무일지 탭에서 고친 것이 있어도 잃지 않도록 한 번 더 합쳐서 쓴다 */
         const cur=JSON.parse(store.getItem(key));
         touchedMonths.forEach(m=>{cur.months[m]=Object.assign(mergeMonth(cur.months[m],out.months[m]),{_u:iso,_remote:iso});});
+        const sub={};touchedMonths.forEach(m=>{sub[m]=cur.months[m];});oneDayPerId(sub);
         cur.dirty=(cur.dirty||[]).filter(m=>touchedMonths.indexOf(m)<0);
         store.setItem(key,JSON.stringify(cur));
         Object.keys(out.evidence).forEach(m=>{ev.months[m]=out.evidence[m];});
