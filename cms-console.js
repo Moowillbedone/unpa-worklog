@@ -1810,7 +1810,7 @@
           +'<span style="color:#9fb4ab;'+strike+'">'+esc(r.brand||'')+' / '+esc(r.product||'')+'</span>'
           +(dn?' <span style="color:#3ddc97;font-size:10.5px;font-weight:800">✓ 완료 '+esc(doneStamp(dn.at))+'</span>':'')
           +(k==='approve' && !r.applied && r.skipOut ? ' <span style="font-size:10.5px;color:#9fb4ab;font-weight:800">⏭ 건너뜀 — 목표 계산에서 뺌</span>' : '')
-          +(k==='approve' && !r.applied && r.deferred && !r.skipOut ? ' <span style="font-size:10.5px;color:#f5c451;font-weight:800">⏸ 목표 도달 — 남겨 둠</span>' : '')
+          +(k==='approve' && !r.applied && r.deferred && !r.skipOut ? ' <span style="font-size:10.5px;color:#f5c451;font-weight:800">'+(r.goalUnknown?'⏸ 목표 확인 전 — 남겨 둠':'⏸ 목표 도달 — 남겨 둠')+'</span>' : '')
           +(k==='approve' && !r.applied && !r.deferred && r.conf
               ? (r.conf==='high'
                   ? ' <span style="font-size:10.5px;color:#9fe3c4;font-weight:800">⚡고신뢰'+(r.sample?' · 🎯표본':'')+'</span>'
@@ -2048,26 +2048,28 @@
       jobs=jobs.filter(function(r){ return !!buildReq(r); });
       if(!jobs.length) return;
     }
-    /* 이번 달 목표를 넘는 승인은 실행 직전에 한 번 더 잘라 낸다 (CMS 집계가 10분 넘게 지났으면 다시 센다) */
+    /* 이번 달 목표를 넘는 승인은 실행 직전에 한 번 더 잘라 낸다. 보낼 때도 한 건마다 공용 가드에 먼저 예약한다 */
     var appr=jobs.filter(function(r){ return r.action==='approve'; }), goalNote='';
     if(appr.length){
+      if(!window.UnpaGuard) await loadGuard();
       var B=budget();
-      if(B.known && WORK && ME && Date.now()-(Date.parse(WORK.at)||0)>10*60000){
-        log('🎯 목표 확인 — CMS 이번 달 승인 다시 집계 중…');
-        try{ WORK=await collectWork(ME); }catch(e){}
-        B=budget();
-      }
       if(B.known){
         if(appr.length>B.approvals){
           var keep={}; appr.slice().sort(approvalOrder).slice(0, B.approvals).forEach(function(r){ keep[String(r.id)]=1; });
           appr.forEach(function(r){ if(!keep[String(r.id)]) r.deferred=true; });
           jobs=jobs.filter(function(r){ return r.action!=='approve' || keep[String(r.id)]; });
           goalNote='\n\n🎯 목표 '+wonFmt(B.target)+'까지 남은 '+wonFmt(Math.max(0,B.left))+' — 승인은 '+B.approvals+'건만 하고 '+(appr.length-B.approvals)+'건은 남겨 둡니다.';
-          if(!jobs.length){ alert('이번 달 목표('+wonFmt(B.target)+')에 이미 닿았습니다 (이번 달 '+wonFmt(B.won)+').\n승인은 하지 않고 남겨 둡니다.'); if(results.length) renderQueue(SCAN_DATE); return; }
+          if(!jobs.length){ alert(B.halted ? '🎯 '+B.why : '이번 달 목표('+wonFmt(B.target)+')에 이미 닿았습니다 (이번 달 '+wonFmt(B.won)+').\n승인은 하지 않고 남겨 둡니다.'); if(results.length) renderQueue(SCAN_DATE); return; }
         } else {
           goalNote='\n\n🎯 승인 '+appr.length+'건 뒤 이번 달 '+wonFmt(B.won+appr.length*RATE_R)+' / 목표 '+wonFmt(B.target);
         }
-      } else goalNote='\n\n⚠ '+B.why+' — 목표 금액 제한 없이 승인합니다.';
+      } else {
+        /* 목표를 모르면 넘지 않는다는 보장이 없으니 승인은 하지 않는다 (수정요청·미노출은 그대로) */
+        appr.forEach(function(r){ r.deferred=true; });
+        jobs=jobs.filter(function(r){ return r.action!=='approve'; });
+        goalNote='\n\n⛔ '+B.why+' — 목표를 넘지 않게 승인 '+appr.length+'건은 하지 않고 남겨 둡니다 (업무일지 동기화 뒤 다시).';
+        if(!jobs.length){ alert('🎯 '+B.why+'\n목표 금액을 확인할 수 없어 승인은 하지 않습니다. 업무일지 동기화 뒤 다시 실행해 주세요.'); if(results.length) renderQueue(SCAN_DATE); return; }
+      }
     }
     var byAct={}; jobs.forEach(function(r){ byAct[r.action]=(byAct[r.action]||0)+1; });
     var over=Object.keys(byAct).filter(function(k){ return byAct[k] > capOf(k); });
@@ -2086,6 +2088,16 @@
       for(var i=0;i<jobs.length;i++){
         var r=jobs[i], req=buildReq(r);
         if(!req){ log('&nbsp;&nbsp;<span style="color:#ff8f6b">✗ #'+r.id+' 요청 생성 실패 — 건너뜀</span>'); continue; }
+        if(r.action==='approve'){
+          /* 보내기 직전에 공용 원장에 예약 — 다른 탭·Claude 도구가 같은 금액을 동시에 쓰지 못하게. 걸리면 남은 승인은 전부 남겨 둔다 */
+          var gr=window.UnpaGuard ? window.UnpaGuard.reserve('r', r.id, { src:'c' }) : { ok:false, why:'목표 가드 없음' };
+          if(!gr.ok){
+            log('&nbsp;&nbsp;<span style="color:#f5c451">⛔ 🎯 '+esc(gr.why)+' — 남은 승인은 하지 않음</span>');
+            jobs.slice(i).forEach(function(x){ if(x.action==='approve') x.deferred=true; });
+            jobs=jobs.slice(0,i).concat(jobs.slice(i).filter(function(x){ return x.action!=='approve'; }));
+            i--; continue;
+          }
+        }
         log('▶ #'+r.id+' '+ACT[r.action].t+' <span style="color:#6b7f77">('+(i+1)+'/'+jobs.length+')</span>');
         var res=await send(req.method,req.url,req.body);
         var ok=(res.status>=200&&res.status<300);
@@ -2097,6 +2109,11 @@
           log('&nbsp;&nbsp;<span style="color:#9fb4ab">이미 미노출 상태 — 완료로 처리</span>');
         }
         r.applied=ok;
+        if(!ok && r.action==='approve' && window.UnpaGuard){
+          /* 4xx = 서버가 거절(확실히 안 됨) → 예약을 되돌린다. 0·5xx = 됐을 수도 있음 → 수입에 센 채로 둔다 */
+          if(res.status>=400 && res.status<500) window.UnpaGuard.release('r', r.id);
+          else log('&nbsp;&nbsp;<span style="color:#f5c451">결과 불확실 — 이번 달 수입에는 센 채로 둡니다</span>');
+        }
         /* 나중에 "무엇을 보고 무엇을 안내했는지" 검증할 수 있게 판단 근거를 함께 남긴다 */
         logs.push({id:r.id,action:r.action,status:res.status,ok:ok,at:new Date().toISOString(),
                    error:ok?null:String(res.text||'').slice(0,200),
@@ -2206,18 +2223,20 @@
   function goalSave(g){ try{ localStorage.setItem(GOAL_KEY, JSON.stringify(g)); }catch(e){} }
   function wonFmt(n){ return '₩'+Math.round(n||0).toLocaleString('ko-KR'); }
   function dayOf(v){ var d=Array.isArray(v) ? v[0] : v; return typeof d==='string' ? d : ''; }
+  /* 조회가 하나라도 실패했으면 이번 달 수입을 믿을 수 없다 — 지난달에 작성된 리뷰도 이번 달에 승인됐을 수 있다 */
+  function monthFailed(W){ return !!(W && (W.failed||[]).length); }
+  /* 이번 달 수입·남은 금액은 Claude 도구와 같은 가드(cms-claude.js 의 UnpaGuard)로 센다 — 한 원장·한 정지 표시를 함께 쓴다.
+     기준: 업무일지 동기화가 남긴 목표 스냅샷(이번 달 · 집계 1시간 이내 · 일부 실패 아님) + 그 뒤 두 도구가 한 승인·등록. */
   function budget(){
-    var m=ymd(new Date()).slice(0,7), g=goalLoad();
-    if(!g || !(g.target>0)) return { known:false, why:'업무일지 목표 금액을 아직 모름 (동기화 뒤 적용)' };
-    if(!WORK) return { known:false, why:'이번 달 수입 계산 중 (CMS 집계 전)' };
-    var r=0, p=0, seen={};
-    Object.keys(WORK.reviews||{}).forEach(function(id){ if(dayOf(WORK.reviews[id]).slice(0,7)===m){ r++; seen[id]=1; } });
-    Object.keys(SESSION_APPROVED).forEach(function(id){ if(!seen[id] && SESSION_APPROVED[id].slice(0,7)===m) r++; });
-    Object.keys(WORK.products||{}).forEach(function(id){ if(dayOf(WORK.products[id]).slice(0,7)===m) p++; });
-    var won=r*RATE_R+p*RATE_P, src='CMS';
-    if(g.month===m && typeof g.won==='number' && g.won>won){ won=g.won; src='업무일지'; }
-    var left=g.target-won;      /* 달이 바뀌어도 목표는 이어진다 (업무일지와 같은 규칙) */
-    return { known:true, month:m, target:g.target, won:won, src:src, r:r, p:p, left:left, approvals:Math.max(0, Math.floor(left/RATE_R)) };
+    var G=window.UnpaGuard;
+    if(!G) return { known:false, why:'목표 가드(cms-claude.js)를 불러오지 못함 — 콘솔을 다시 여세요' };
+    var s=G.status();
+    if(!s.ok){
+      if(s.halted) return { known:true, halted:true, target:s.target, won:s.won, left:s.left, approvals:0, why:s.why };
+      return { known:false, why:s.why };
+    }
+    return { known:true, month:s.month, target:s.target, won:s.won, left:s.left, approvals:s.approvals, products:s.products,
+             r:s.n.r+s.n.c, p:s.n.p, src:'업무일지+원장' };
   }
   /* 사람 확인 건의 "걸리는 점" 점수 — 목표까지 몇 건만 더 해야 할 때 이슈가 적은 괜찮은 리뷰부터 고른다 */
   function issueScore(r){
@@ -2246,8 +2265,8 @@
   function planApprovals(){
     var b=budget();
     var c=results.filter(function(r){ return r.action==='approve' && r.approvable && !r.applied; });
-    c.forEach(function(r){ r.deferred=false; r.skipOut=false; });
-    if(!b.known) return b;
+    c.forEach(function(r){ r.deferred=false; r.skipOut=false; r.goalUnknown=false; });
+    if(!b.known){ c.forEach(function(r){ r.deferred=true; r.goalUnknown=true; }); b.cand=c.length; b.deferredN=c.length; return b; }   /* 목표를 모르면 승인은 전부 남겨 둔다 */
     var skipped=c.filter(function(r){ return r._gridSt==='skip'; });
     var rest=c.filter(function(r){ return r._gridSt!=='skip'; });
     skipped.forEach(function(r){ r.deferred=true; r.skipOut=true; });
@@ -2315,7 +2334,7 @@
   function localDay(iso){ var d=new Date(iso); return isFinite(d.getTime()) ? ymd(d) : null; }
 
   async function collectWork(me, onProgress){
-    var now=new Date(), dates=[];
+    var now=new Date(), dates=[], startedAt=now.toISOString();   /* 이 시각 뒤에 한 승인은 이번 집계에 없을 수 있다 — 목표 가드가 따로 센다 */
     for(var i=0;i<WORK_DAYS;i++) dates.push(ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate()-i)));
     var reviews={}, products={}, failed=[], next=0, doneN=0, watch={}, mine=[];
     var watchIds=Object.assign({}, pendingLoad(), hidefpLoad());
@@ -2363,7 +2382,7 @@
       if(prow.length<300 || (oldest && oldest<since)) break;
       pg++;
     }
-    return { reviews:reviews, products:products, failed:failed, watch:watch, mine:mine, at:new Date().toISOString() };
+    return { reviews:reviews, products:products, failed:failed, watch:watch, mine:mine, at:new Date().toISOString(), startedAt:startedAt };
   }
 
   /* ── 보관함: 아직 업무일지에 못 넘긴 검수기록·실행 결과 ── */
@@ -2422,7 +2441,7 @@
     }
     (ob.reviews||[]).forEach(function(x){ if(x && validDate(x[1]) && x[1]>=AUTO_FROM) rv.push([String(x[0])].concat(x.slice(1))); });
     /* 남은 검수 목록을 못 불러왔으면(BACKLOG 없음) 남은 일·미등록 칸은 비우지 않고 그대로 둔다 */
-    return { v:1, seq:ob.seq||0,
+    return { v:1, seq:ob.seq||0, countedAt:(WORK && WORK.startedAt) || null, builtAt:new Date().toISOString(), monthPartial:!WORK || monthFailed(WORK),
              work:{ v:1, from:AUTO_FROM, to:ymd(new Date()), reviews:rv, products:pv, partial:!!(WORK && WORK.failed.length) },
              audit:ob.audit||{}, pending:(SYNC_ONLY && !BACKLOG) ? null : pendingList(), backlog:backlogList(), remain:remainList(), console:consoleState() };
   }
@@ -2480,7 +2499,13 @@
       ignApply(ev.data.ignored);     /* 서버에서 받아 합친 무시 목록 (다른 컴퓨터에서 한 것까지) */
       if(!ev.data.ok){ syncButton('<span style="color:#ff8f6b">⚠ 업무일지 반영 실패 — '+esc(String(ev.data.error||'').slice(0,80))+'</span>'); return; }
       if(ev.data.console) applyConsoleState(ev.data.console);
-      if(ev.data.goal && ev.data.goal.target>0){ goalSave(Object.assign({ at:new Date().toISOString() }, ev.data.goal)); if(results.length) renderQueue(SCAN_DATE); }
+      if(ev.data.goal && ev.data.goal.target>0){
+        /* countedAt = 이 합계의 바탕이 된 CMS 집계를 시작한 시각, partial = 이번 달 집계가 일부 실패.
+           Claude 용 가드(cms-claude.js)는 countedAt 뒤의 승인·등록을 따로 더하고, partial 이면 아무것도 하지 않는다 */
+        goalSave(Object.assign({ at:new Date().toISOString(), countedAt:(payload && payload.countedAt) || null,
+                                 builtAt:(payload && payload.builtAt) || null, partial:!payload || !!payload.monthPartial }, ev.data.goal));
+        if(results.length) renderQueue(SCAN_DATE);
+      }
       if(ev.data.verdicts && seedFromVerdicts(ev.data.verdicts)) matchPending();   /* 예전 판정으로 채운 건도 바로 짝지어 본다 */
       /* 보낸 뒤로 보관함에 새로 쌓인 게 없으면 비운다 (새로 쌓였으면 다음에 함께 다시 보낸다 — 합칠 때 중복은 걸러진다) */
       if(payload && (outboxLoad().seq||0)===payload.seq){ try{ localStorage.removeItem(OUTBOX_KEY); }catch(e){} }
@@ -2529,6 +2554,7 @@
     syncStatus('📒 업무일지 집계 중… (CMS 최근 '+WORK_DAYS+'일, 조회만)');
     WORK=await collectWork(ME, function(d,n){ if(!SYNCING) syncStatus('📒 업무일지 집계 중… '+d+' / '+n+'일'); preProgress('CMS 집계 중… '+d+' / '+n+'일'); });
     try{ await learnAndMatch(); }catch(e){}
+    try{ if(results.length && document.getElementById('csRun') && !window.__CONSOLE_RUNNING) renderQueue(SCAN_DATE); }catch(e){}
     syncNow();
   }
   /* 대기 리뷰의 그 뒤 상태에서 배우고, 내가 새로 등록한 제품과 짝짓는다 */
@@ -2639,6 +2665,18 @@
       var jobs=ASSOC.map(assocJob);
       runJobs(jobs).then(function(){ ASSOC=ASSOC.filter(function(x){ return !jobs.some(function(j){ return String(j.id)===String(x.e.id) && j.applied; }); }); });
     };
+  }
+  /* 월 목표 가드(cms-claude.js)를 업무일지 사이트에서 불러온다 — Claude 도구와 같은 원장·같은 정지 표시를 쓴다 */
+  function loadGuard(){
+    return new Promise(function(res){
+      if(window.UnpaGuard) return res(true);
+      try{
+        var sc=document.createElement('script');
+        sc.src=WORKLOG_URL+'cms-claude.js?t='+Date.now();
+        sc.onload=function(){ res(!!window.UnpaGuard); }; sc.onerror=function(){ res(false); };
+        (document.head||document.body).appendChild(sc);
+      }catch(e){ res(false); }
+    });
   }
   /* 합치기 규칙(worklog-core.js)을 업무일지 사이트에서 불러온다 — 다른 컴퓨터 경험을 합칠 때 쓴다 */
   function loadCore(){
@@ -2822,7 +2860,7 @@
       +'<button id="csSyncX" title="닫기" style="float:right;background:none;border:0;color:#6b7f77;font-size:15px;cursor:pointer;line-height:1">✕</button>'
       +'<div id="csSync" style="margin-top:4px;font-size:11.5px;color:#9fb4ab">CMS 계정 확인 중…</div>';
     preOpen();
-    loadCore().then(async function(){
+    loadGuard(); loadCore().then(async function(){
       var b=await loadBacklog();
       if(b) BACKLOG=b;
       else syncStatus('<span style="color:#f5c451">⚠ 남은 검수 목록 조회 실패 — 미등록 칸은 그대로 두고 리뷰·제품 수만 반영합니다</span>');
@@ -2835,7 +2873,7 @@
   box.innerHTML=head('<div style="margin-top:9px;color:#9fb4ab">템플릿 불러오는 중…</div>');
   oF.call(window,TPL_URL+'?t='+Date.now()).then(function(r){return r.json();})
     .then(function(d){ (d.templates||[]).forEach(function(t){tplMap[t.key]=t;}); }, function(){})
-    .then(function(){ loadCore(); return renderStart(sd); })
+    .then(function(){ loadGuard(); loadCore(); return renderStart(sd); })
     /* 남은 일 목록을 먼저 띄우고, 업무일지 집계는 그 뒤에 뒤에서 돈다 */
     .then(function(){ return startWorkSync(); })
     .catch(function(e){ syncStatus('<span style="color:#ff8f6b">⚠ 업무일지 동기화 오류 — '+esc(e&&e.message||e)+'</span>'); });

@@ -6,9 +6,13 @@ const vm=require('node:vm');
 const path=require('node:path');
 const root=path.resolve(__dirname,'..');
 
+/* 업무일지 동기화가 남기는 목표 스냅샷 — 이번 달(한국 시간) · 방금 센 것 */
+function snap(o){ const now=Date.now(); return Object.assign({month:new Date(now+9*3600e3).toISOString().slice(0,7),target:1430000,won:0,
+  at:new Date(now).toISOString(),countedAt:new Date(now-60e3).toISOString(),builtAt:new Date(now-30e3).toISOString(),partial:false},o||{}); }
 /* cms-console.js 를 통째로 실행하고 내부를 꺼내 온다.
    네트워크는 전부 가짜이며 실제 CMS 로는 아무것도 나가지 않는다. */
-function harness(){
+function harness(opts){
+  opts=opts||{};
   const code=fs.readFileSync(path.join(root,'cms-console.js'),'utf8');
   const raw=[]; const store={};
   const sent={get length(){return raw.filter(x=>x.url.indexOf('/admin/')>=0).length;},
@@ -39,6 +43,7 @@ function harness(){
   };
   ctx.window=ctx; ctx.XMLHttpRequest=XHR;
   vm.createContext(ctx);
+  if(!opts.noGuard) vm.runInContext(fs.readFileSync(path.join(root,'cms-claude.js'),'utf8'), ctx);   /* 콘솔이 쓰는 공용 목표 가드 */
   vm.runInContext(code.replace('  /* ── 시작 ── */',
     `globalThis.api={buildReq,runJobs,sentLoad,doneLoad,doneToggle,auditPayload,CAP,
                      postScan,gridJobs,confidenceOf,histLoad,histSave,recheckRegistered,findProduct,aliasKey,
@@ -55,6 +60,12 @@ function harness(){
                      setResults:r=>{results=r;},
                      setDate:d=>{SCAN_DATE=d;},setTpl:t=>{tplMap=t;},getResults:()=>results};
      /* ── 시작 ── */`), ctx);
+  /* 목표를 모르면 승인하지 않으므로, 실행 경로 테스트는 넉넉한 목표·빈 이번 달 집계를 기본으로 둔다 (목표 테스트는 각자 덮어쓴다) */
+  if(!opts.noGoal){
+    const d=new Date();
+    ctx.api.setWork({reviews:{},products:{},failed:[],watch:{},mine:[],at:d.toISOString(),startedAt:d.toISOString()});
+    ctx.api.goalSave(snap({target:1e9,won:0}));
+  }
   return {api:ctx.api, sent, ctx, store};
 }
 const TPL={ product_match:{body:'제품 정보에서 [{제품명}] 검색 및 선택해주세요.'},
@@ -614,7 +625,7 @@ function goalCase(api){
   const reviews={}; for(let i=0;i<2554;i++) reviews[String(100000+i)]=[d,'b','p',d];
   const products={}; for(let i=0;i<137;i++) products[String(500000+i)]=[d,'b','n'];
   api.setWork({reviews,products,failed:[],watch:{},mine:[],at:new Date().toISOString()});     /* 2554×500 + 137×600 = 1,359,200 */
-  api.goalSave({month:m,target:1430000,won:1359200});
+  api.goalSave(snap({target:1430000,won:1359200}));
   const rows=[];
   for(let i=0;i<89;i++) rows.push({id:1000+i,action:'approve',approvable:true,conf:'high',date:'2026-09-2'+(i%9),reasons:[],user:'u'+i});
   for(let i=0;i<77;i++) rows.push({id:2000+i,action:'approve',approvable:true,conf:'check',date:(i<40?'2026-09-20':'2026-09-28'),reasons:[],user:'c'+i});
@@ -643,10 +654,10 @@ test('the run itself never crosses the target, and nothing is approved once it i
 });
 test('with the target already reached, approvals are refused and kept for next month',async()=>{
   const {api,sent,ctx}=harness(); api.setTpl(TPL); const rows=goalCase(api);
-  api.goalSave({month:localYmd(new Date()).slice(0,7),target:1359200,won:1359200});
+  api.goalSave(snap({target:1359200,won:1359200}));
   await api.runJobs(rows.filter(r=>r.action==='approve').slice(0,5));
   assert.equal(sent.length,0); assert.match(ctx.__alert,/목표/);
-  api.goalSave({month:localYmd(new Date()).slice(0,7),target:1430000,won:1400000});   /* 업무일지가 더 크게 알면 그 값 */
+  api.goalSave(snap({target:1430000,won:1400000}));
   assert.equal(api.budget().won,1400000); assert.equal(api.budget().approvals,60);
 });
 
@@ -654,7 +665,7 @@ test('skipped cards are not offered again; the remaining slots go to other clean
   const {api,ctx}=harness();
   const now=new Date(), m=localYmd(now).slice(0,7), d=localYmd(now);
   api.setWork({reviews:{},products:{},failed:[],watch:{},mine:[],at:new Date().toISOString()});
-  api.goalSave({month:m,target:2000,won:0});                    /* 남은 2,000원 → 승인 4건 */
+  api.goalSave(snap({target:2000,won:0}));                      /* 남은 2,000원 → 승인 4건 */
   const rows=[];
   for(let i=0;i<4;i++) rows.push({id:10+i,action:'approve',approvable:true,conf:'check',date:'2026-09-20',confWhy:['고해상도 직접촬영 사진 없음'],reasons:[],_gridSt:'skip'});   /* 사람이 건너뜀(따로 수정요청) */
   rows.push({id:20,action:'approve',approvable:true,conf:'check',date:'2026-09-22',confWhy:['다른 리뷰(#1)와 본문 거의 동일 — 복붙 의심','발색 제품 — 발색샷 확인'],reasons:[]});
@@ -721,4 +732,102 @@ test('an unchecked hide stays unchecked after re-rendering, and learned-unsure r
   const a2=Object.assign({},a,{_unchecked:undefined}); api.setUncheck(21,undefined);
   api.setResults([a2]); api.renderQueue('2026-10-08');
   assert.equal(a2._unchecked,true);
+});
+
+test('with no known monthly goal the console sends no approvals (revise/hide still go)',async()=>{
+  const {api,sent,ctx}=harness({noGoal:true}); api.setTpl(TPL); api.setDate('2026-09-02');
+  ctx.__route=(url,init)=> (init.method==='POST'||init.method==='PUT') ? {status:201,body:{ok:true}} : {status:404,body:{}};
+  const a={id:21,action:'approve',reasons:[]}, h={id:22,action:'hide',reasons:[]};
+  api.setResults([a,h]);
+  await api.runJobs([a]);
+  assert.equal(sent.length,0,'승인만 있으면 한 건도 보내지 않는다');
+  assert.match(ctx.__alert,/목표 금액을 확인할 수 없어 승인은 하지 않습니다/);
+  await api.runJobs([a,h]);
+  assert.equal(sent.filter(x=>/\/approve$/.test(x.url)).length,0,'승인은 빠지고');
+  assert.equal(sent.filter(x=>x.method==='PUT').length,1,'미노출은 나간다');
+  assert.equal(a.deferred,true);
+});
+
+/* ── Claude 도구(cms-claude.js)와 한 목표를 나눠 쓴다 (2026-10-18) ── */
+test('the console budget comes from the shared guard: snapshot + everything either tool did after the count',()=>{
+  const {api,store}=harness();
+  api.goalSave(snap({target:1430000,won:1359200}));
+  const now=Date.now();
+  store['unpa-claude-ledger-v1']=JSON.stringify({v:1,items:{'r:777':{k:'r',t:now-20e3},'p:무드|다비치|1':{k:'p',t:now-10e3},'r:old':{k:'r',t:now-3*3600e3}}});
+  const b=api.budget();
+  assert.equal(b.known,true); assert.equal(b.won,1359200+1100,'스냅샷 위에 Claude 승인 500 + 제품 600 (예전처럼 큰 쪽 하나로 덮지 않는다)');
+  assert.equal(b.left,70800-1100); assert.equal(b.approvals,Math.floor((70800-1100)/500));
+});
+
+test('no snapshot, last month, partial or stale snapshot → the console does not know the income and approves nothing',async()=>{
+  for(const g of [null, snap({month:'2000-01'}), snap({partial:true}), snap({countedAt:new Date(Date.now()-2*3600e3).toISOString()})]){
+    const {api,sent,ctx,store}=harness({noGoal:true}); api.setTpl(TPL); api.setDate('2026-09-02');
+    if(g) api.goalSave(g);
+    assert.equal(api.budget().known,false);
+    await api.runJobs([{id:31,action:'approve',reasons:[]}]);
+    assert.equal(sent.length,0); assert.match(ctx.__alert,/승인은 하지 않습니다/);
+    assert.equal(store['unpa-claude-ledger-v1'],undefined,'아무것도 예약하지 않는다');
+  }
+});
+
+test('the console reserves each approval in the shared ledger right before sending, so Claude working in another tab cannot overspend',async()=>{
+  const {api,sent,ctx}=harness(); api.setTpl(TPL); api.setDate('2026-09-02');
+  api.goalSave(snap({target:2000,won:0}));                       /* 4건 분량 */
+  const jobs=[1,2,3,4].map(i=>({id:40+i,action:'approve',reasons:[]}));
+  api.setResults(jobs);
+  let n=0;
+  ctx.__route=(url,init)=>{ if(/\/approve$/.test(url)){ n++; if(n===1){ assert.equal(ctx.UnpaGuard.reserve('r','claude-1').ok,true); assert.equal(ctx.UnpaGuard.reserve('r','claude-2').ok,true); } }
+                            return {status:201,body:{ok:true}}; };   /* 첫 전송 중에 Claude 가 2건을 써 버림 */
+  await api.runJobs(jobs);
+  const approves=sent.filter(x=>/\/approve$/.test(x.url)).length;
+  assert.equal(approves,2,'콘솔 2 + Claude 2 = 4건 — 목표 2,000원을 넘지 않는다');
+  assert.equal(ctx.UnpaGuard.status().ok,false); assert.equal(ctx.UnpaGuard.status().won,2000);
+  assert.equal(jobs.filter(r=>r.deferred).length,2,'남은 2건은 남겨 둔다');
+});
+
+test('a console approve the server refuses (4xx) is taken back; an unclear one (5xx) stays counted',async()=>{
+  const {api,ctx}=harness(); api.setTpl(TPL); api.setDate('2026-09-02');
+  api.goalSave(snap({target:100000,won:0}));
+  ctx.__route=(url)=> /\/51\/approve$/.test(url) ? {status:400,body:{message:'x'}} : /\/52\/approve$/.test(url) ? {status:502,body:{}} : {status:201,body:{}};
+  await api.runJobs([{id:51,action:'approve',reasons:[]}]);
+  assert.equal(ctx.UnpaGuard.status().spent,0,'거절된 건은 수입에서 뺀다');
+  await api.runJobs([{id:52,action:'approve',reasons:[]}]);
+  assert.equal(ctx.UnpaGuard.status().spent,500,'됐을 수도 있는 건은 센 채로 둔다');
+});
+
+test('once the guard has stopped the month, the console approves nothing either',async()=>{
+  const {api,sent,ctx}=harness(); api.setTpl(TPL); api.setDate('2026-09-02');
+  api.goalSave(snap({target:1000,won:900}));
+  assert.equal(ctx.UnpaGuard.reserve('p','x|y|1').ok,false);    /* 600 → 초과 → 정지 */
+  const b=api.budget(); assert.equal(b.known,true); assert.equal(b.approvals,0); assert.equal(b.halted,true);
+  await api.runJobs([{id:61,action:'approve',reasons:[]}]);
+  assert.equal(sent.length,0); assert.match(ctx.__alert,/목표 직전에서 멈춘 상태/);
+});
+
+test('any failed CMS date (or product list) makes this month partial in the payload',()=>{
+  const {api}=harness();
+  const st=new Date(Date.now()-5*60e3).toISOString();
+  api.setWork({reviews:{},products:{},failed:[],watch:{},mine:[],at:new Date().toISOString(),startedAt:st});
+  let p=api.workPayload();
+  assert.equal(p.countedAt,st); assert.equal(p.monthPartial,false); assert.ok(Date.parse(p.builtAt)>=Date.parse(st));
+  api.setWork({reviews:{},products:{},failed:['2026-08-30'],watch:{},mine:[],at:new Date().toISOString(),startedAt:st});
+  assert.equal(api.workPayload().monthPartial,true,'지난달에 작성된 리뷰도 이번 달에 승인됐을 수 있다');
+});
+
+test('after a sync the goal snapshot carries the count time, build time and partial flag, and the guard trusts it',()=>{
+  const {api,ctx}=harness({noGoal:true}); api.setDate('2026-09-24');
+  const st=new Date(Date.now()-90e3).toISOString();
+  api.setMe('me@example.com'); api.setWork({reviews:{},products:{},failed:[],watch:{},mine:[],at:new Date().toISOString(),startedAt:st});
+  const posted=[]; const win={postMessage:(m,o)=>posted.push([m,o])};
+  ctx.__open=()=>win;
+  assert.equal(api.syncNow(),true);
+  const nonce=/#n=([a-f0-9]+)/.exec(ctx.__opened[0])[1];
+  const fire=data=>ctx.__listeners.slice().forEach(f=>f({origin:'https://moowillbedone.github.io',source:win,data}));
+  fire({type:'unpa-sync-ready',nonce});
+  const pl=posted[0][0].payload;
+  const m=new Date(Date.now()+9*3600e3).toISOString().slice(0,7);
+  fire({type:'unpa-sync-done',nonce,ok:true,seq:pl.seq,today:{r:0,p:0},goal:{month:m,target:1430000,r:0,p:0,won:900000}});
+  const g=JSON.parse(ctx.localStorage.getItem('unpa-console-goal-v1'));
+  assert.equal(g.countedAt,st); assert.equal(g.builtAt,pl.builtAt); assert.equal(g.partial,false);
+  const s=ctx.UnpaGuard.status(); assert.equal(s.ok,true); assert.equal(s.won,900000); assert.equal(s.left,530000);
 });
