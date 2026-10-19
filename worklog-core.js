@@ -299,7 +299,7 @@
       reason:String(v.reason||'').slice(0,90),d:v.d,applied:!!v.applied,manual_done:v.manual_done||null};});
     return out;
   }
-  const LEASE_MS=60*60e3,SKEW_MS=5*60e3,CLOCK_MS=60e3,GOAL_PROTOCOL=4;   /* 콘솔이 v3 스냅샷 키를 쓰는 판(gk 3)일 때만 쓸 수 있는 목표를 준다 */
+  const LEASE_MS=60*60e3,SKEW_MS=5*60e3,CLOCK_MS=60e3,GOAL_PROTOCOL=5;   /* 콘솔이 지금 스냅샷 키(v5)를 쓰는 판일 때만 쓸 수 있는 목표를 준다 */
   const validDevice=d=>typeof d==='string'&&/^[0-9a-z]{6,32}$/.test(d);
   /* 이번 달 작업 권한 — 서버 행 하나를 '바뀌지 않았으면 쓰기'(nonce 비교)로만 바꿔 두 기기가 동시에 가질 수 없게.
      모든 기기 시계가 서버 시각과 1분 안이어야 한다(넘겨받기 기준 5분 여유를 믿을 수 있게) */
@@ -312,6 +312,7 @@
   const kstMonthStart=t=>{const d=new Date(t+9*3600e3);return Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),1)-9*3600e3;};
   const kstMonthOf=t=>new Date(t+9*3600e3).toISOString().slice(0,7);
   const kstNextMonthStart=t=>kstMonthStart(kstMonthStart(t)+32*864e5);
+  const idList=a=>Array.isArray(a)?[...new Set(a.map(String).filter(x=>/^\d{1,12}$/.test(x)))].slice(0,3000):[];
   async function claimLease(io,p,now,sk,curWon){
     const dev=validDevice(p.device)?p.device:null,acct=typeof p.acct==='string'&&/^[0-9a-z]{1,16}$/.test(p.acct)?p.acct:null;
     const cAt=Date.parse(p.countedAt)||0,t=now.getTime();
@@ -323,6 +324,9 @@
     const read=async()=>{const rows=await io.pull([K]);const row=(rows||[]).find(x=>x&&x.month===K);return row&&row.data||null;};
     const cur=await read();
     const nonce=()=>Math.random().toString(36).slice(2,12)+t.toString(36);
+    const mine=!!(cur&&cur.device===dev&&cur.acct===acct);
+    /* 조회만 하는 동기화([업데이트])는 이 기기가 이미 가진 권한을 이어 갈 뿐, 빈 권한도 남의 권한도 받지 않는다 */
+    if(p.view&&!mine)return {ok:false,why:'view',closed:!!(cur&&cur.closed)};
     if(!cur){
       /* 이전 판의 계정별 권한 행이 다른 기기에 아직 살아 있으면 새 권한을 내주지 않는다 */
       let olds=[];
@@ -330,31 +334,45 @@
       else{const rows=await io.pull(['~lease:'+acct]);olds=rows||[];}
       for(const r of olds){const o=r&&r.data;if(o&&o.device!==dev&&(Date.parse(o.until)||0)+SKEW_MS>t)return {ok:false,why:'other',closed:false};}
     }
-    const mine=!!(cur&&cur.device===dev&&cur.acct===acct);
-    if(mine&&p.release){                                                  /* 이 기기가 권한을 넘긴다 — 닫고, 이 기기는 더 하지 않는다 */
-      const next=Object.assign({},cur,{closed:true,closedAt:now.toISOString(),closedMonth:kstMonthOf(t),closedWon:typeof curWon==='number'?curWon:null,until:now.toISOString(),nonce:nonce()});
+    if(mine&&p.release){
+      if(cur.closed)return {ok:false,why:'released'};                       /* 이미 넘겨 둠 — 다시 쓰지 않는다(넘겨받는 쪽 기준 시각이 밀리지 않게) */
+      /* 넘긴다 — 닫고, 이 기기 원장에 남은(업무일지에 아직 없는·결과가 애매한) 승인 번호를 넘겨받는 쪽이 세도록 함께 적는다 */
+      const next=Object.assign({},cur,{closed:true,closedAt:now.toISOString(),closedMonth:kstMonthOf(t),closedWon:typeof curWon==='number'?curWon:null,
+                                       closedPendR:idList([...(cur.pendR||[]),...idList(p.pendR)]),until:now.toISOString(),nonce:nonce()});
       const ok=await io.claim(K,{nonce:cur.nonce==null?null:cur.nonce},next);
       return {ok:false,why:ok?'released':'other'};
     }
+    let pendR=mine?idList(cur.pendR):[];
     if(cur&&!mine){
       /* 지난달 권한: 이번 달 시작 5분 전까지 끝났거나, 지난달에 닫혔다(닫을 때 금액은 지난달 것이라 이번 달과 비교하지 않는다) */
       const prevMonth=(Date.parse(cur.until)||0)+SKEW_MS<=kstMonthStart(t)||!!(cur.closed&&cur.closedMonth&&cur.closedMonth<kstMonthOf(t));
       if(!prevMonth){
-        if(p.view)return {ok:false,why:'other',closed:!!cur.closed};          /* 조회만 하는 동기화([업데이트])는 넘겨받지 않는다 */
-        if(!cur.closed)return {ok:false,why:'other',closed:false};
         if(cur.acct!==acct)return {ok:false,why:'account'};
-        const ca=Date.parse(cur.closedAt)||0;
-        if(ca+SKEW_MS>cAt)return {ok:false,why:'other',closed:true,after:new Date(ca+SKEW_MS).toISOString()};
-        if(typeof cur.closedWon==='number'&&!(typeof curWon==='number'&&curWon>=cur.closedWon))return {ok:false,why:'behind'};
+        if(!cur.closed){
+          /* 기기 번호를 잃은 경우의 복구(사람이 확인하고 누름): 권한이 이미 끝났고, 그 뒤 5분 넘어 시작해 그 기기가 승인할 수 있었던
+             리뷰(작성 70일 안)를 다 덮는 집계이며, 업무일지 합계가 그 기기의 마지막 갱신 때보다 적지 않을 때만 */
+          const cu=Date.parse(cur.until)||0,from=String(p.countFrom||'');
+          const need=new Date(cu+9*3600e3-71*864e5).toISOString().slice(0,10);
+          const forceOk=p.force&&cu<t&&cu+SKEW_MS<=cAt&&/^\d{4}-\d\d-\d\d$/.test(from)&&from<=need
+                        &&!(typeof cur.renewWon==='number'&&!(typeof curWon==='number'&&curWon>=cur.renewWon));
+          if(!forceOk)return {ok:false,why:'other',closed:false,until:cur.until,need};
+        }else{
+          const ca=Date.parse(cur.closedAt)||0;
+          if(ca+SKEW_MS>cAt)return {ok:false,why:'other',closed:true,after:new Date(ca+SKEW_MS).toISOString()};
+          if(typeof cur.closedWon==='number'&&!(typeof curWon==='number'&&curWon>=cur.closedWon))return {ok:false,why:'behind'};
+          pendR=idList(cur.closedPendR);                                     /* 넘긴 기기에 남아 있던 승인 — 넘겨받은 쪽 가드가 센다 */
+        }
       }
     }
     if(p.release)return {ok:false,why:'released'};                         /* 넘겨 둔 기기 — 다시 가져오기 전까지는 받지 않는다 */
-    /* 권한은 달을 넘기지 않는다 — 이번 달 끝 5분 전까지만(다음 달엔 저절로 풀리게) */
-    const next={device:dev,acct,since:mine&&cur.since?cur.since:now.toISOString(),until:new Date(Math.min(t+LEASE_MS,kstNextMonthStart(t)-SKEW_MS)).toISOString(),nonce:nonce(),closed:false};
-    if(await io.claim(K,cur?{nonce:cur.nonce==null?null:cur.nonce}:null,next))return {ok:true,until:next.until};
+    /* 권한은 달을 넘기지 않는다 — 이번 달 끝 5분 전까지만(다음 달엔 저절로 풀리게). renewWon = 이번 갱신 때 업무일지 이번 달 금액 */
+    const next={device:dev,acct,since:mine&&cur.since?cur.since:now.toISOString(),until:new Date(Math.min(t+LEASE_MS,kstNextMonthStart(t)-SKEW_MS)).toISOString(),
+                nonce:nonce(),closed:false,renewWon:typeof curWon==='number'?curWon:null,pendR,month:kstMonthOf(t)};
+    if(cur&&mine&&cur.month&&cur.month!==next.month)next.pendR=[];
+    if(await io.claim(K,cur?{nonce:cur.nonce==null?null:cur.nonce}:null,next))return {ok:true,until:next.until,pendR:next.pendR};
     /* 못 썼다 — 같은 기기의 다른 동기화가 방금 이어 간 것이면 그대로 내 권한 */
     const back=await read();
-    if(back&&back.device===dev&&back.acct===acct&&!back.closed&&(Date.parse(back.until)||0)>t)return {ok:true,until:back.until};
+    if(back&&back.device===dev&&back.acct===acct&&!back.closed&&(Date.parse(back.until)||0)>t)return {ok:true,until:back.until,pendR:idList(back.pendR)};
     return {ok:false,why:'other',closed:!!(back&&back.closed)};
   }
   async function syncWindow(store,p,io,opts){
@@ -407,6 +425,11 @@
         touchedMonths.forEach(m=>{cur.months[m]=Object.assign(mergeMonth(cur.months[m],out.months[m]),{_u:iso,_remote:iso});});
         const sub={};touchedMonths.forEach(m=>{sub[m]=cur.months[m];});oneDayPerId(sub);
         cur.dirty=(cur.dirty||[]).filter(m=>touchedMonths.indexOf(m)<0);
+        /* 이어받은 목표를 합친 뒤에 다시 따진다 — 오래 동기화 안 한 기기가 합치기 전에 옛 목표로 새 달을 만들었을 수 있다.
+           스스로 정한 목표(_t)가 없는 달은 바로 앞 달이 더 나중에 정해졌으면 그 목표를 이어받고, 다음 동기화 때 서버에 보낸다 */
+        {const ms=Object.keys(cur.months).sort();
+          for(let i=1;i<ms.length;i++){const tm=cur.months[ms[i]],pv=cur.months[ms[i-1]];if(!tm||!pv||tm._t||!integer(pv.target))continue;
+            const pt=pv._t||pv._tc||0;if(pt>(tm._tc||0)&&pv.target!==tm.target||pt>(tm._tc||0)){tm.target=pv.target;tm._tc=pt;if(cur.dirty.indexOf(ms[i])<0)cur.dirty.push(ms[i]);}}}
         store.setItem(key,JSON.stringify(cur));
         Object.keys(out.evidence).forEach(m=>{ev.months[m]=out.evidence[m];});
         Object.keys(out.audit).forEach(d=>{audit.days[d]=out.audit[d];});

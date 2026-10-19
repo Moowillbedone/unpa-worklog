@@ -1474,9 +1474,17 @@
     if(t && t.id==='csLeaseBtn'){ ev.preventDefault(); ev.stopPropagation();
       var act=t.getAttribute('data-act');
       if(act==='release' && !confirm('이 컴퓨터의 이번 달 작업 권한(승인·제품 등록)을 넘깁니다.\n넘긴 뒤에는 이 컴퓨터에서 승인·등록을 하지 않고, 다른 컴퓨터에서 검수 콘솔을 열어 동기화하면 넘어갑니다.\n진행할까요?')) return;
-      try{ if(act==='release') localStorage.setItem('unpa-lease-release','1'); else localStorage.removeItem('unpa-lease-release'); }catch(e){}
-      /* 넘기기는 누르는 순간 이 컴퓨터에서 멈춘다 — 동기화 응답이 늦거나 안 와도 */
-      if(act==='release'){ var g0=goalLoad(); if(g0){ g0.lease={ ok:false, why:'released' }; goalSave(g0); } }
+      if(act==='force' && !confirm('작업 권한이 남은 기기를 더 쓸 수 없을 때만 누르세요(그 기기에서 사이트 데이터를 지웠거나 다른 브라우저였던 경우).\n그 기기가 마지막에 승인했을 수 있는 리뷰까지 덮도록 CMS를 더 넓게(오래) 집계한 뒤 넘겨받습니다.\n진행할까요?')) return;
+      try{ if(act==='release') localStorage.setItem('unpa-lease-release','1'); else if(act==='reclaim') localStorage.removeItem('unpa-lease-release'); }catch(e){}
+      bumpEpoch();
+      /* 넘기기·다시 가져오기는 누르는 순간 지금 스냅샷의 권한을 무효로 — 그 뒤에 만든 동기화의 응답만 권한으로 쓴다 */
+      var g0=goalLoad(); if(g0){ g0.lease={ ok:false, why: act==='release' ? 'released' : 'reclaim' }; goalSave(g0); }
+      if(act==='force'){
+        var until=Date.parse(t.getAttribute('data-until'))||Date.now();
+        WORK_DAYS_OVERRIDE=Math.min(400, Math.max(WORK_DAYS, Math.ceil((Date.now()-(until-71*864e5))/864e5)+1));
+        FORCE_LEASE=true; startWorkSync().catch(function(){}).then(function(){ FORCE_LEASE=false; WORK_DAYS_OVERRIDE=0; });
+        return;
+      }
       syncNow(); }
     if(t && t.id==='csSyncX'){ ev.preventDefault(); clearTimeout(CLOSE_TIMER); box.remove(); }
     if(t && t.id==='csKeepTab'){ ev.preventDefault(); clearTimeout(CLOSE_TIMER); t.parentNode.textContent='이 탭은 그대로 둡니다.'; }
@@ -2238,7 +2246,7 @@
   var RATE_R=500, RATE_P=600;
   /* 목표 스냅샷은 v3 키(가드 v7 이상만 읽음)에 둔다. 예전 키(v1·v2)에는 남은 금액 0·'일부 실패'로 막은 값을 써서
      업데이트 전 버전 가드가 열린 탭은 승인·등록을 하지 않게 한다 */
-  var GOAL_KEY='unpa-console-goal-v4', GOAL_OLD=['unpa-console-goal-v1','unpa-console-goal-v2','unpa-console-goal-v3'], SESSION_APPROVED={};
+  var GOAL_KEY='unpa-console-goal-v5', GOAL_OLD=['unpa-console-goal-v1','unpa-console-goal-v2','unpa-console-goal-v3','unpa-console-goal-v4'], SESSION_APPROVED={};
   function goalLoad(){ try{ var g=JSON.parse(localStorage.getItem(GOAL_KEY)||'null'); return (g && typeof g==='object') ? g : null; }catch(e){ return null; } }
   function goalSave(g){ try{ localStorage.setItem(GOAL_KEY, JSON.stringify(g));
     var block=JSON.stringify({ month:g.month, target:g.target, won:g.target, at:g.at, countedAt:null, partial:true, note:'새 버전 콘솔·도구로 다시 여세요' });
@@ -2357,7 +2365,7 @@
 
   async function collectWork(me, onProgress){
     var now=new Date(), dates=[], startedAt=now.toISOString();   /* 이 시각 뒤에 한 승인은 이번 집계에 없을 수 있다 — 목표 가드가 따로 센다 */
-    for(var i=0;i<WORK_DAYS;i++) dates.push(ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate()-i)));
+    for(var i=0;i<(WORK_DAYS_OVERRIDE||WORK_DAYS);i++) dates.push(ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate()-i)));
     var reviews={}, products={}, failed=[], next=0, doneN=0, watch={}, mine=[], notMine={};
     var watchIds=Object.assign({}, pendingLoad(), hidefpLoad());
     async function worker(){
@@ -2404,7 +2412,8 @@
       if(prow.length<300 || (oldest && oldest<since)) break;
       pg++;
     }
-    return { reviews:reviews, products:products, failed:failed, watch:watch, mine:mine, notMine:notMine, at:new Date().toISOString(), startedAt:startedAt };
+    return { reviews:reviews, products:products, failed:failed, watch:watch, mine:mine, notMine:notMine, at:new Date().toISOString(), startedAt:startedAt,
+             countFrom:dates[dates.length-1] };
   }
 
   /* ── 보관함: 아직 업무일지에 못 넘긴 검수기록·실행 결과 ── */
@@ -2466,7 +2475,11 @@
     /* 남은 검수 목록을 못 불러왔으면(BACKLOG 없음) 남은 일·미등록 칸은 비우지 않고 그대로 둔다 */
     /* acct = CMS 계정의 해시(계정 이름은 넘기지 않는다) — 업무일지가 계정마다 마지막 집계 시각을 기억한다 */
     var acct=null; if(ME){ var h=5381; for(var i=0;i<ME.length;i++) h=(Math.imul(h,33)^ME.charCodeAt(i))>>>0; acct=h.toString(36); }
-    return { v:1, gk:4, seq:ob.seq||0, acct:acct, device:deviceId(), view:SYNC_ONLY ? 1 : 0, release:leaseReleased() ? 1 : 0, countedAt:(WORK && WORK.startedAt) || null, builtAt:new Date().toISOString(), monthPartial:!WORK || monthFailed(WORK),
+    var rel=leaseReleased(), G=window.UnpaGuard;
+    return { v:1, gk:5, seq:ob.seq||0, acct:acct, device:deviceId(), view:SYNC_ONLY ? 1 : 0, release:rel ? 1 : 0, leaseEpoch:leaseEpoch(),
+             force:FORCE_LEASE ? 1 : 0, countFrom:(WORK && WORK.countFrom) || null,
+             /* 넘길 때: 이 기기 원장에 남은(업무일지에 아직 없는·결과가 애매한) 승인 번호 — 넘겨받는 쪽이 센다 */
+             pendR:(rel && G && G.pendingReviewIds) ? G.pendingReviewIds() : [], countedAt:(WORK && WORK.startedAt) || null, builtAt:new Date().toISOString(), monthPartial:!WORK || monthFailed(WORK),
              work:{ v:1, from:AUTO_FROM, to:ymd(new Date()), reviews:rv, products:pv, partial:!!(WORK && WORK.failed.length) },
              audit:ob.audit||{}, pending:(SYNC_ONLY && !BACKLOG) ? null : pendingList(), backlog:backlogList(), remain:remainList(), console:consoleState() };
   }
@@ -2540,6 +2553,9 @@
                       && (pl===null || (pl && pl.ok && Date.parse(pl.until)>nowT)));   /* 작업 권한이 없는 스냅샷은 지키지 않는다 */
       /* 새 결과의 작업 권한이 없거나(넘김·다른 기기) 이번이 넘기기 동기화면 예전 스냅샷을 지키지 않는다 — 권한 변화가 바로 반영되게 */
       var incL=ev.data.goal ? ev.data.goal.lease : undefined;
+      /* 응답을 받는 지금 이 기기가 넘겨 둔 상태이거나, 넘기기·다시 가져오기를 누르기 전에 만든 동기화의 응답이면 권한으로 쓰지 않는다 */
+      if(ev.data.goal && incL && incL.ok && (leaseReleased() || !payload || payload.leaseEpoch!==leaseEpoch()))
+        ev.data.goal.lease=incL={ ok:false, why: leaseReleased() ? 'released' : 'stale' };
       var newer=!!(prevGood && payload && !payload.release && (incL===null || (incL && incL.ok)) && pc>pcT && prevGoal.month===(ev.data.goal||{}).month && prevGoal.target===(ev.data.goal||{}).target);
       if(ev.data.goal && ev.data.goal.target>0 && !newer){
         /* countedAt = 이 합계의 바탕이 된 CMS 집계를 시작한 시각, partial = 이번 달 집계가 일부 실패.
@@ -2723,13 +2739,20 @@
   }
   /* 월 목표 가드(cms-claude.js)를 업무일지 사이트에서 불러온다 — Claude 도구와 같은 원장·같은 정지 표시를 쓴다 */
   /* 이 콘솔과 맞는 가드(v7 이상)인가 — 예전 버전이 탭에 남아 있으면 새로 불러와 바꾼다 */
-  function guardOk(){ var G=window.UnpaGuard; return !!(G && G.VERSION>=9 && G.reserveSafe && G.keys && G.keys.goal===GOAL_KEY); }
+  function guardOk(){ var G=window.UnpaGuard; return !!(G && G.VERSION>=10 && G.reserveSafe && G.keys && G.keys.goal===GOAL_KEY); }
+  /* 넘기기·다시 가져오기를 누를 때마다 오르는 번호 — 그 전에 만든 동기화의 응답은 작업 권한으로 쓰지 않는다 */
+  function leaseEpoch(){ try{ return parseInt(localStorage.getItem('unpa-lease-epoch')||'0',10)||0; }catch(e){ return 0; } }
+  function bumpEpoch(){ try{ localStorage.setItem('unpa-lease-epoch', String(leaseEpoch()+1)); }catch(e){} }
+  var FORCE_LEASE=false, WORK_DAYS_OVERRIDE=0;
   /* '작업 권한 넘기기'를 누른 기기 — 다시 가져오기 전까지는 동기화 때 권한을 닫아 두고 받지 않는다 */
   function leaseReleased(){ try{ return localStorage.getItem('unpa-lease-release')==='1'; }catch(e){ return false; } }
   function leaseButton(){
     var g=goalLoad(), L=g && g.lease;
     if(leaseReleased()) return ' <button id="csLeaseBtn" data-act="reclaim" style="margin-left:4px;background:#132019;color:#9fe3c4;border:1px solid #2c4a3c;border-radius:6px;padding:1px 7px;font:inherit;font-size:10.5px;cursor:pointer">🔑 이 컴퓨터로 작업 권한 다시 가져오기</button>';
     if(L && L.ok) return ' <button id="csLeaseBtn" data-act="release" title="다른 컴퓨터에서 승인·등록하려면 이 컴퓨터에서 먼저 누르세요" style="margin-left:4px;background:#132019;color:#f5c451;border:1px solid #4a3c2c;border-radius:6px;padding:1px 7px;font:inherit;font-size:10.5px;cursor:pointer">🔑 작업 권한 넘기기</button>';
+    /* 권한을 가진 기기의 번호를 잃은 경우(사이트 데이터 삭제 등) — 그 권한이 끝난 뒤에만, 사람이 확인하고 */
+    if(L && L.why==='other' && L.closed===false && L.until && Date.parse(L.until)<Date.now())
+      return ' <button id="csLeaseBtn" data-act="force" data-until="'+esc(L.until)+'" style="margin-left:4px;background:#132019;color:#ff8f6b;border:1px solid #4a2c2c;border-radius:6px;padding:1px 7px;font:inherit;font-size:10.5px;cursor:pointer">🔑 권한이 남은 기기를 못 쓸 때: 이 컴퓨터로 가져오기</button>';
     return '';
   }
   function loadGuard(){

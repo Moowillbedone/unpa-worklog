@@ -13,9 +13,9 @@
    애매하면 센다: 확인을 누른 뒤 결과가 안 보여도 원장에서 지우지 않는다 (늦게 멈추는 것보다 일찍 멈추는 쪽).
    수정요청·미노출·브랜드 등록·기존 제품 편집은 수입에 들어가지 않으므로 막지 않는다. */
 (function(root){
-  var RATE={ r:500, p:600 }, VERSION=9, HALT_V=7, OLD_DAYS=70;
+  var RATE={ r:500, p:600 }, VERSION=10, HALT_V=7, OLD_DAYS=70;
   /* 목표 스냅샷은 v2 키에서 읽는다 — v1 키에는 새 콘솔이 '일부 실패'로 막아 둔 값만 남아, 예전 버전 가드(시각 기준)가 열린 탭은 아무것도 하지 않는다 */
-  var GOAL_KEY='unpa-console-goal-v4', LEDGER_KEY='unpa-claude-ledger-v1', SENT_KEY='unpa-console-sent-v1', OUTBOX_KEY='unpa-console-outbox-v1';
+  var GOAL_KEY='unpa-console-goal-v5', LEDGER_KEY='unpa-claude-ledger-v1', SENT_KEY='unpa-console-sent-v1', OUTBOX_KEY='unpa-console-outbox-v1';
   var MAX_AGE=60*60e3, MARGIN=5*60e3, KEEP=45*86400e3;
   var NAME={ r:'리뷰 승인', p:'제품 등록' };
   var store=function(){ return root.localStorage; };
@@ -62,6 +62,9 @@
           : '다른 컴퓨터(또는 브라우저)가 이번 달 작업 권한을 갖고 있습니다 — 그 컴퓨터 검수 콘솔의 [🔑 작업 권한 넘기기]를 누른 뒤 여기서 검수 콘솔을 열어 동기화하세요 (다음 달엔 저절로 풀림)',
         released:'이 컴퓨터는 작업 권한을 넘겨 두었습니다 — 다시 하려면 검수 콘솔의 [🔑 이 컴퓨터로 작업 권한 다시 가져오기]를 누르세요',
         behind:'업무일지 서버 기록이 권한을 넘긴 컴퓨터의 기록보다 적습니다 — 잠시 뒤 다시 동기화하세요',
+        view:'조회 동기화([업데이트])로는 작업 권한을 받지 않습니다 — 검수 콘솔을 열어 동기화하세요',
+        stale:'작업 권한이 바뀌는 중이었습니다 — 검수 콘솔에서 다시 동기화하세요',
+        reclaim:'작업 권한을 다시 가져오는 중입니다 — 동기화가 끝나면 됩니다',
         version:'업무일지 동기화 창이 예전 버전입니다 — 업무일지를 새로고침한 뒤 동기화하세요',
         clock:'이 컴퓨터 시계가 서버 시각과 '+(L.skew!=null?Math.abs(L.skew)+'초':'1분 넘게')+' 차이 납니다 — 시계를 맞춘 뒤 동기화하세요',
         device:'검수 콘솔이 예전 버전입니다 — CMS 탭을 새로고침하고 콘솔을 다시 여세요',
@@ -91,6 +94,9 @@
       var x=l.items[k]; if(!RATE[x && x.k] || !counted(k, x, gi)) return;
       spent+=RATE[x.k]; n[x.k]++; if(x.k==='r') seenR[k.slice(2)]=1;
     });
+    /* 권한을 넘긴 기기에 남아 있던 승인(넘겨받을 때 함께 받은 번호) — 업무일지 번호 목록에 잡힐 때까지 센다 */
+    ((g.lease && Array.isArray(g.lease.pendR)) ? g.lease.pendR : []).forEach(function(id){
+      id=String(id); if(seenR[id] || gi.have.has(id)) return; spent+=RATE.r; n.c++; seenR[id]=1; });
     /* 검수 콘솔 전송 기록의 승인 (원장에 없던 예전 기록 대비 — 번호로 중복 없이) */
     var sent=load(SENT_KEY)||{};
     Object.keys(sent).forEach(function(id){
@@ -184,6 +190,16 @@
 
   /* CMS 집계가 '내 승인 아님'으로 본 리뷰(notMine)의 승인 예약 중 집계 시작 전(before) 것은 실제로 승인되지 않았다 — 지운다.
      집계 범위(최근 60일 작성) 밖 리뷰는 notMine 에 없으니 지우지 않는다(센 채로 둠) */
+  /* 지금 이번 달 수입으로 세고 있지만 업무일지 번호 목록엔 아직 없는 리뷰 번호(이 기기 원장·콘솔 전송 기록) — 넘길 때 함께 넘긴다 */
+  function pendingReviewIds(){
+    /* 스냅샷이 오래됐어도 넉넉하게: 이번 달(한국 시간) 원장·전송 기록의 리뷰 승인 중 스냅샷 번호 목록에 없는 것 전부 */
+    var now=nowMs(), month=kstMonth(now), g=load(GOAL_KEY)||{}, have=new Set((g.month===month && g.ids && Array.isArray(g.ids.r)) ? g.ids.r.map(String) : []);
+    var out={}, l=ledger();
+    Object.keys(l.items).forEach(function(k){ var x=l.items[k]; if(x && x.k==='r' && kstMonth(x.t)===month && !have.has(k.slice(2))) out[k.slice(2)]=1; });
+    var sent=load(SENT_KEY)||{};
+    Object.keys(sent).forEach(function(id){ var e=sent[id]; if(e && e.action==='approve' && kstMonth(Date.parse(e.at)||0)===month && !have.has(String(id))) out[String(id)]=1; });
+    return Object.keys(out);
+  }
   function prune(notMine, before){
     var items=ledger().items, n=0;
     /* 마지막으로 쓴 때(t·함께 쓴 j 중 나중)가 집계 시작 전이어야 한다 — 집계 중에 다시 써서 실제로 승인된 예약은 남긴다 */
@@ -192,7 +208,7 @@
     return n;
   }
   root.UnpaGuard={ VERSION:VERSION, RATE:RATE, status:status, line:line, reserve:reserve, reserveSafe:reserveSafe, release:release, mark:mark, forget:forget, settled:settled, prune:prune,
-                   ledger:ledger, kstMonth:kstMonth,
+                   ledger:ledger, pendingReviewIds:pendingReviewIds, kstMonth:kstMonth,
                    keys:{ goal:GOAL_KEY, ledger:LEDGER_KEY, sent:SENT_KEY } };
 
   /* ── 리뷰 상세에서 하는 일 (승인 · 수정요청) ──
