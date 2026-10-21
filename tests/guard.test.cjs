@@ -20,7 +20,7 @@ function lsOf(store, onGet, onSet){
 }
 function guard(g, nowIso, extra, onGet, onSet){
   const store={};
-  if(g) store['unpa-console-goal-v6']=JSON.stringify(g);
+  if(g) store['unpa-console-goal-v7']=JSON.stringify(g);
   Object.assign(store, extra||{});
   const clock={now:Date.parse(nowIso)};
   const ctx={localStorage:lsOf(store,onGet,onSet),Date,JSON,Math,Object,String,isFinite,Set,Promise,setTimeout};
@@ -69,9 +69,9 @@ test('once anything is refused, that amount is the month\'s final income — a c
 test('the stop holds across re-syncs with the same target and lifts when the worklog target is raised',()=>{
   const {G,store,clock}=guard(goal({won:1429700}),NOW);
   assert.equal(G.reserve('r','1').ok,false);
-  store['unpa-console-goal-v6']=JSON.stringify(goal({won:1429700,countedAt:'2026-10-18T13:00:00Z'})); clock.now=Date.parse('2026-10-18T13:10:00Z');
+  store['unpa-console-goal-v7']=JSON.stringify(goal({won:1429700,countedAt:'2026-10-18T13:00:00Z'})); clock.now=Date.parse('2026-10-18T13:10:00Z');
   assert.equal(G.reserve('r','2').ok,false,'같은 목표로 다시 동기화해도 정지');
-  store['unpa-console-goal-v6']=JSON.stringify(goal({won:1429700,target:1500000,countedAt:'2026-10-18T13:20:00Z'})); clock.now=Date.parse('2026-10-18T13:25:00Z');
+  store['unpa-console-goal-v7']=JSON.stringify(goal({won:1429700,target:1500000,countedAt:'2026-10-18T13:20:00Z'})); clock.now=Date.parse('2026-10-18T13:25:00Z');
   assert.equal(G.status().ok,true); assert.equal(G.reserve('r','3').ok,true);
 });
 
@@ -113,7 +113,7 @@ test('a sync in the middle of a run neither drops nor double counts: approvals a
   ['a','b','c'].forEach(id=>assert.equal(G.reserve('r',id).ok,true));
   assert.equal(G.status().won,896500);
   /* 새 동기화: a·b 는 업무일지에 들어감(won +1000), c 는 아직 */
-  store['unpa-console-goal-v6']=JSON.stringify(goal({won:896000,countedAt:'2026-10-18T12:40:00Z',ids:{r:['482561','100','a','b'],p:[]}}));
+  store['unpa-console-goal-v7']=JSON.stringify(goal({won:896000,countedAt:'2026-10-18T12:40:00Z',ids:{r:['482561','100','a','b'],p:[]}}));
   clock.now=Date.parse('2026-10-18T12:45:00Z');
   assert.equal(G.status().won,896500,'같은 금액 — 빠지지도 두 번 세지도 않는다');
 });
@@ -207,7 +207,7 @@ test('near the target, reservations queue behind a cross-tab lock and wait for o
 
 /* ── 실제 흐름: 가짜 CMS 리뷰 상세 화면에서 UnpaOps.approve 를 돌린다 ── */
 function cms(g, reviews, nowIso){
-  const store={'unpa-console-goal-v6':JSON.stringify(g)}, sess={};
+  const store={'unpa-console-goal-v7':JSON.stringify(g)}, sess={};
   const st={cur:null, modal:false, clicks:{approve:[],confirm:[]}};
   const R=()=>reviews[st.cur];
   const el=(o)=>Object.assign({getAttribute:()=>null,querySelectorAll:()=>[],querySelector:()=>null},o);
@@ -401,7 +401,7 @@ test('with a work right in use, UnpaOps.approve skips (does not stop at) a revie
   const {ctx,st}=cms(goal({lease:{ok:true,until:later}}),{'1':rv({created:'2026-07-20 10:00:00'}),'2':rv({created:'2026-10-17 10:00:00'})});
   const out=await ctx.UnpaOps.approve(['1','2']);
   assert.match(out,/1 SKIP 작성 70일이 넘은/); assert.match(out,/2 OK/); assert.deepEqual(plain(st.clicks.approve),['2']);
-  assert.equal(ctx.UnpaGuard.VERSION,11);
+  assert.equal(ctx.UnpaGuard.VERSION,12);
 });
 
 test('no approvals in the two minutes around a Korean-time month change',()=>{

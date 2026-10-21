@@ -13,9 +13,9 @@
    애매하면 센다: 확인을 누른 뒤 결과가 안 보여도 원장에서 지우지 않는다 (늦게 멈추는 것보다 일찍 멈추는 쪽).
    수정요청·미노출·브랜드 등록·기존 제품 편집은 수입에 들어가지 않으므로 막지 않는다. */
 (function(root){
-  var RATE={ r:500, p:600 }, VERSION=11, HALT_V=7, OLD_DAYS=70;
+  var RATE={ r:500, p:600 }, VERSION=12, HALT_V=7, OLD_DAYS=70;
   /* 목표 스냅샷은 v2 키에서 읽는다 — v1 키에는 새 콘솔이 '일부 실패'로 막아 둔 값만 남아, 예전 버전 가드(시각 기준)가 열린 탭은 아무것도 하지 않는다 */
-  var GOAL_KEY='unpa-console-goal-v6', LEDGER_KEY='unpa-claude-ledger-v1', SENT_KEY='unpa-console-sent-v1', OUTBOX_KEY='unpa-console-outbox-v1';
+  var GOAL_KEY='unpa-console-goal-v7', LEDGER_KEY='unpa-claude-ledger-v1', SENT_KEY='unpa-console-sent-v1', OUTBOX_KEY='unpa-console-outbox-v1';
   var MAX_AGE=60*60e3, MARGIN=5*60e3, KEEP=45*86400e3;
   var NAME={ r:'리뷰 승인', p:'제품 등록' };
   var store=function(){ return root.localStorage; };

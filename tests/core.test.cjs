@@ -401,12 +401,12 @@ test('sync window: office and home browsers end up with the same worklog through
 });
 test('sync window without login keeps everything on this browser and says so',async()=>{
   const s=fakeStore();
-  const r=await W.syncWindow(s,{v:1,gk:6,device:'dev00001',seq:1,work:{v:1,from:'2026-09-01',to:'2026-09-27',reviews:[['1','2026-09-27','A','a','2026-09-24','c']],products:[]},audit:{'2026-09-24':{items:[{id:1,action:'approve',applied:true}]}}},null,{now:new Date('2026-09-27T10:00:00Z')});
+  const r=await W.syncWindow(s,{v:1,gk:7,device:'dev00001',seq:1,work:{v:1,from:'2026-09-01',to:'2026-09-27',reviews:[['1','2026-09-27','A','a','2026-09-24','c']],products:[]},audit:{'2026-09-24':{items:[{id:1,action:'approve',applied:true}]}}},null,{now:new Date('2026-09-27T10:00:00Z')});
   assert.equal(r.cloud,'off'); assert.equal(r.console,null);
   assert.equal(JSON.parse(s.getItem('unpa-worklog-v1')).months['2026-09'].days['27'].r,1);
   assert.ok(JSON.parse(s.getItem('unpa-audit-v1')).days['2026-09-24']);
   const failing={pull:async()=>{throw Error('network down');},push:async()=>{}};
-  const r2=await W.syncWindow(s,{v:1,gk:6,device:'dev00001',seq:2,work:{v:1,from:'2026-09-01',to:'2026-09-27',reviews:[],products:[]}},failing,{uid:'u1',now:new Date('2026-09-27T11:00:00Z')});
+  const r2=await W.syncWindow(s,{v:1,gk:7,device:'dev00001',seq:2,work:{v:1,from:'2026-09-01',to:'2026-09-27',reviews:[],products:[]}},failing,{uid:'u1',now:new Date('2026-09-27T11:00:00Z')});
   assert.match(r2.cloud,/^error: network down/,'서버가 안 돼도 이 브라우저 반영은 된다'); assert.equal(r2.ok,true);
 });
 test('abbreviated words find the registered product; different types or two candidates do not',async()=>{
@@ -425,7 +425,7 @@ test('remaining CMS reviews get their old verdicts back, so registration work is
   assert.equal(v['475207'].action,'register_brand','가장 최근 판정'); assert.equal(v['475207'].manual_done,'t');
   assert.equal(v['475198'].action,'approve'); assert.equal(v['477410'],undefined,'판정 전');
   const s=fakeStore(); s.setItem('unpa-audit-v1',JSON.stringify({v:1,days:audit.days}));
-  const r=await W.syncWindow(s,{v:1,gk:6,device:'dev00001',seq:1,work:{v:1,from:'2026-09-01',to:'2026-09-29',reviews:[],products:[]},pending:[],backlog:[{id:'475207',d:'2026-09-20',brand:'b',product:'p',status:'PENDING',blocked:false}]},null,{now:new Date('2026-09-29T12:00:00Z')});
+  const r=await W.syncWindow(s,{v:1,gk:7,device:'dev00001',seq:1,work:{v:1,from:'2026-09-01',to:'2026-09-29',reviews:[],products:[]},pending:[],backlog:[{id:'475207',d:'2026-09-20',brand:'b',product:'p',status:'PENDING',blocked:false}]},null,{now:new Date('2026-09-29T12:00:00Z')});
   assert.equal(r.verdicts['475207'].action,'register_brand');
   assert.equal(JSON.parse(s.getItem('unpa-pending-v1')).backlog.length,1,'CMS 남은 목록을 업무일지에 둔다');
 });
@@ -461,7 +461,7 @@ test('a wrong number typed by hand is corrected to the CMS count on the next syn
 test('the sync window hands the console this month\'s target and income',async()=>{
   const s=fakeStore();
   s.setItem('unpa-worklog-v1',JSON.stringify({v:1,months:{'2026-09':Object.assign(monthOf('2026-09'),{target:1430000})},dirty:[]}));
-  const r=await W.syncWindow(s,{v:1,gk:6,device:'dev00001',seq:1,work:{v:1,from:'2026-09-01',to:'2026-09-30',reviews:[['1','2026-09-30'],['2','2026-09-29']],products:[['9','2026-09-29']]}},null,{now:new Date('2026-09-30T12:00:00Z')});
+  const r=await W.syncWindow(s,{v:1,gk:7,device:'dev00001',seq:1,work:{v:1,from:'2026-09-01',to:'2026-09-30',reviews:[['1','2026-09-30'],['2','2026-09-29']],products:[['9','2026-09-29']]}},null,{now:new Date('2026-09-30T12:00:00Z')});
   assert.deepEqual({...r.goal,ids:undefined},{month:'2026-09',target:1430000,r:2,p:1,won:1600,ids:undefined,countedAt:null,lease:null});
   /* 이번 달 수입에 이미 들어간 번호 — 목표 가드가 같은 승인을 두 번 세지 않게 */
   assert.deepEqual([...r.goal.ids.r].sort(),['1','2']); assert.deepEqual(r.goal.ids.p,['9']);
@@ -488,7 +488,7 @@ test('remaining reviews per even date fill the 미등록 제품수 column withou
 test('the sync window writes remaining counts into the worklog',async()=>{
   const s=fakeStore();
   s.setItem('unpa-worklog-v1',JSON.stringify({v:1,months:{'2026-10':monthOf('2026-10')},dirty:[]}));
-  await W.syncWindow(s,{v:1,gk:6,device:'dev00001',seq:1,work:{v:1,from:'2026-09-01',to:'2026-10-09',reviews:[],products:[]},remain:{at:'2026-10-09T13:00:00Z',days:{'2026-10-08':{n:13,reg:2,upd:0,blocked:0}}}},null,{now:new Date('2026-10-09T13:00:00Z')});
+  await W.syncWindow(s,{v:1,gk:7,device:'dev00001',seq:1,work:{v:1,from:'2026-09-01',to:'2026-10-09',reviews:[],products:[]},remain:{at:'2026-10-09T13:00:00Z',days:{'2026-10-08':{n:13,reg:2,upd:0,blocked:0}}}},null,{now:new Date('2026-10-09T13:00:00Z')});
   const o=JSON.parse(s.getItem('unpa-worklog-v1'));
   assert.equal(o.months['2026-10'].days['08'].unreg,'13'); assert.ok(o.dirty.includes('2026-10'));
 });
@@ -526,10 +526,10 @@ test('a review id is counted on one day only: the console outbox day and the CMS
   const s=fakeStore();
   s.setItem('unpa-worklog-v1',JSON.stringify({v:1,months:{'2026-10':Object.assign(monthOf('2026-10'),{target:1000})},dirty:[]}));
   /* CMS 집계는 18일, 콘솔 보관함(내 컴퓨터 시계)은 19일로 같은 리뷰를 넘김 */
-  let r=await W.syncWindow(s,{v:1,gk:6,device:'dev00001',seq:1,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[['1','2026-10-18'],['1','2026-10-19'],['2','2026-10-05']],products:[]}},null,{now:new Date('2026-10-19T12:00:00Z')});
+  let r=await W.syncWindow(s,{v:1,gk:7,device:'dev00001',seq:1,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[['1','2026-10-18'],['1','2026-10-19'],['2','2026-10-05']],products:[]}},null,{now:new Date('2026-10-19T12:00:00Z')});
   assert.equal(r.goal.won,1000,'두 건 — 1번을 두 번 세지 않는다'); assert.deepEqual([...r.goal.ids.r].sort(),['1','2']);
   /* 2번이 다시 대기로 돌아왔다가 19일에 또 승인됨 → 19일로 옮겨 한 번만 */
-  r=await W.syncWindow(s,{v:1,gk:6,device:'dev00001',seq:2,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[['2','2026-10-19']],products:[]}},null,{now:new Date('2026-10-19T13:00:00Z')});
+  r=await W.syncWindow(s,{v:1,gk:7,device:'dev00001',seq:2,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[['2','2026-10-19']],products:[]}},null,{now:new Date('2026-10-19T13:00:00Z')});
   assert.equal(r.goal.won,1000); assert.equal(r.goal.r,2);
 });
 
@@ -549,7 +549,7 @@ test('with the cloud on, a review re-approved across a month boundary is counted
   const sep=W.applyWork({},{v:1,from:'2026-09-01',to:'2026-09-30',reviews:[['7','2026-09-30'],['8','2026-09-29']],products:[]}).months['2026-09'];
   sep.target=1000; io.rows['2026-09']={data:sep,updated_at:'2026-09-30T12:00:00Z'};      /* 다른 기기가 9/30 에 센 7번 */
   st.setItem('unpa-worklog-v2:'+uid,JSON.stringify({v:1,months:{'2026-09':JSON.parse(JSON.stringify(sep))},dirty:[]}));
-  const r=await W.syncWindow(st,{v:1,gk:6,device:'dev00001',seq:1,work:{v:1,from:'2026-09-01',to:'2026-10-02',reviews:[['7','2026-10-02']],products:[]}},io,{uid,now:new Date('2026-10-02T12:00:00Z')});
+  const r=await W.syncWindow(st,{v:1,gk:7,device:'dev00001',seq:1,work:{v:1,from:'2026-09-01',to:'2026-10-02',reviews:[['7','2026-10-02']],products:[]}},io,{uid,now:new Date('2026-10-02T12:00:00Z')});
   const v=JSON.parse(st.getItem('unpa-worklog-v2:'+uid)).months;
   assert.deepEqual(v['2026-09']._auto.r['30'],[],'9월 사본은 지운다'); assert.equal(v['2026-09'].days['30'].r,0);
   assert.deepEqual(v['2026-10']._auto.r['02'],['7']); assert.equal(r.goal.won,500);
@@ -559,15 +559,15 @@ test('with the cloud on, a review re-approved across a month boundary is counted
 test('the worklog remembers the latest complete CMS count time per account (merged across computers) and hands it to the guard',async()=>{
   const io=fakeCloud(), uid='u1';
   const home=fakeStore(), office=fakeStore();
-  await W.syncWindow(home,{v:1,gk:6,device:'dev00001',seq:1,acct:'abc',countedAt:'2026-10-19T12:20:00.000Z',work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[['9','2026-10-19']]}},io,{uid,now:new Date('2026-10-19T12:22:00Z')});
-  const r=await W.syncWindow(office,{v:1,gk:6,device:'dev00001',seq:1,acct:'abc',countedAt:'2026-10-19T12:00:00.000Z',work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},io,{uid,now:new Date('2026-10-19T12:25:00Z')});
+  await W.syncWindow(home,{v:1,gk:7,device:'dev00001',seq:1,acct:'abc',countedAt:'2026-10-19T12:20:00.000Z',work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[['9','2026-10-19']]}},io,{uid,now:new Date('2026-10-19T12:22:00Z')});
+  const r=await W.syncWindow(office,{v:1,gk:7,device:'dev00001',seq:1,acct:'abc',countedAt:'2026-10-19T12:00:00.000Z',work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},io,{uid,now:new Date('2026-10-19T12:25:00Z')});
   assert.equal(r.goal.countedAt,'2026-10-19T12:20:00.000Z','집 컴퓨터가 더 나중에 센 시각'); assert.equal(r.goal.won,600);
-  const p=await W.syncWindow(office,{v:1,gk:6,device:'dev00001',seq:2,acct:'zzz',countedAt:'2026-10-19T12:30:00.000Z',monthPartial:true,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},io,{uid,now:new Date('2026-10-19T12:31:00Z')});
+  const p=await W.syncWindow(office,{v:1,gk:7,device:'dev00001',seq:2,acct:'zzz',countedAt:'2026-10-19T12:30:00.000Z',monthPartial:true,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},io,{uid,now:new Date('2026-10-19T12:31:00Z')});
   assert.equal(p.goal.countedAt,null,'다른 계정·일부 실패 집계 시각은 쓰지 않는다');
 });
 
 test('the work right (lease) stays with one device until it hands it over; another device of the same account takes it only with a count started after the handover',async()=>{
-  const io=fakeCloud(), uid='u1', mk=(dev,c,o)=>Object.assign({v:1,gk:6,seq:1,acct:'abc',device:dev,view:0,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
+  const io=fakeCloud(), uid='u1', mk=(dev,c,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,view:0,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
   const office=fakeStore(), home=fakeStore();
   let r=await W.syncWindow(office,mk('office01','2026-10-19T10:00:00.000Z'),io,{uid,now:new Date('2026-10-19T10:02:00Z')});
   assert.equal(r.goal.lease.ok,true); assert.equal(r.goal.lease.until,'2026-10-19T11:02:00.000Z');
@@ -595,7 +595,7 @@ test('the work right (lease) stays with one device until it hands it over; anoth
 });
 
 test('two devices claiming the same free right at the same moment: the compare-and-set lets only one have it',async()=>{
-  const io=fakeCloud(), uid='u1', mk=dev=>({v:1,gk:6,seq:1,acct:'abc',device:dev,countedAt:'2026-10-19T10:00:00.000Z',work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}});
+  const io=fakeCloud(), uid='u1', mk=dev=>({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:'2026-10-19T10:00:00.000Z',work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}});
   const realPull=io.pull; let gate=null; const waitBoth=new Promise(r=>{gate=r;}); let pulls=0;
   io.pull=async keys=>{ const out=await realPull(keys); if(keys.some(k=>k.indexOf('~lease:')===0)){ pulls++; if(pulls===2) gate(); await waitBoth; } return out; };
   const [a,b]=await Promise.all([W.syncWindow(fakeStore(),mk('office01'),io,{uid,now:new Date('2026-10-19T10:02:00Z')}),
@@ -605,7 +605,7 @@ test('two devices claiming the same free right at the same moment: the compare-a
 
 test('a logged-in browser whose sync window cannot reach the server gets no work right (not treated as a single device); an old console without a device id gets a goal no guard can use',async()=>{
   const st=fakeStore(); st.setItem('unpa-worklog-active','unpa-worklog-v2:u1');
-  const p={v:1,gk:6,seq:1,acct:'abc',device:'office01',countedAt:'2026-10-19T10:00:00.000Z',work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[['1','2026-10-19']],products:[]}};
+  const p={v:1,gk:7,seq:1,acct:'abc',device:'office01',countedAt:'2026-10-19T10:00:00.000Z',work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[['1','2026-10-19']],products:[]}};
   let r=await W.syncWindow(st,p,null,{uid:null,now:new Date('2026-10-19T10:02:00Z')});
   assert.deepEqual(r.goal.lease,{ok:false,why:'cloud'});
   r=await W.syncWindow(fakeStore(),Object.assign({},p,{device:undefined}),null,{now:new Date('2026-10-19T10:02:00Z')});
@@ -613,7 +613,7 @@ test('a logged-in browser whose sync window cannot reach the server gets no work
 });
 
 test('one work right per worklog user: another CMS account never takes it within the month (even after a handover), a right that ended last month is free, and a same-device race keeps it',async()=>{
-  const io=fakeCloud(), uid='u1', mk=(dev,acct,c,o)=>Object.assign({v:1,gk:6,seq:1,acct,device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
+  const io=fakeCloud(), uid='u1', mk=(dev,acct,c,o)=>Object.assign({v:1,gk:7,seq:1,acct,device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
   let r=await W.syncWindow(fakeStore(),mk('office01','aaa','2026-10-19T10:00:00.000Z'),io,{uid,now:new Date('2026-10-19T10:02:00Z')});
   assert.equal(r.goal.lease.ok,true); assert.equal(io.rows['~lease'].data.acct,'aaa');
   await W.syncWindow(fakeStore(),mk('office01','aaa','2026-10-19T10:10:00.000Z',{release:1}),io,{uid,now:new Date('2026-10-19T10:11:00Z')});
@@ -630,7 +630,7 @@ test('one work right per worklog user: another CMS account never takes it within
 });
 
 test('a handover records this month\'s worklog income; a taker whose merged total is lower (a server write was lost) does not get the right',async()=>{
-  const io=fakeCloud(), uid='u1', mk=(dev,c,rv,o)=>Object.assign({v:1,gk:6,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:rv,products:[]}},o||{});
+  const io=fakeCloud(), uid='u1', mk=(dev,c,rv,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:rv,products:[]}},o||{});
   await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:00:00.000Z',[['1','2026-10-19'],['2','2026-10-19']]),io,{uid,now:new Date('2026-10-19T10:02:00Z')});
   await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:05:00.000Z',[['1','2026-10-19'],['2','2026-10-19']],{release:1}),io,{uid,now:new Date('2026-10-19T10:06:00Z')});
   assert.equal(io.rows['~lease'].data.closedWon,1000);
@@ -641,7 +641,7 @@ test('a handover records this month\'s worklog income; a taker whose merged tota
 
 test('a device whose clock is more than a minute off never writes its count time into the shared record; payloads without the current protocol marker get an unusable goal; outbox rows do not blank the evidence',async()=>{
   const io=fakeCloud(), uid='u1'; io.skewMs=10*60e3;
-  const p={v:1,gk:6,seq:1,acct:'abc',device:'skew0001',countedAt:'2026-10-19T12:00:00.000Z',work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}};
+  const p={v:1,gk:7,seq:1,acct:'abc',device:'skew0001',countedAt:'2026-10-19T12:00:00.000Z',work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}};
   const st=fakeStore(); await W.syncWindow(st,p,io,{uid,now:new Date('2026-10-19T12:01:00Z')});
   const v=JSON.parse(st.getItem('unpa-worklog-v2:'+uid)).months['2026-10'];
   assert.equal(v._countedAt,undefined,'시계가 틀린 기기의 집계 시각은 남기지 않는다');
@@ -654,7 +654,7 @@ test('a device whose clock is more than a minute off never writes its count time
 test('while the previous version\'s per-account right is still live for another device, the new single right is not handed out',async()=>{
   const io=fakeCloud(), uid='u1';
   io.rows['~lease:abc']={data:{device:'office01',since:'2026-10-19T09:00:00.000Z',until:'2026-10-19T11:00:00.000Z'},updated_at:'x'};
-  const mk=(dev,c)=>({v:1,gk:6,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}});
+  const mk=(dev,c)=>({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}});
   let r=await W.syncWindow(fakeStore(),mk('home0001','2026-10-19T10:30:00.000Z'),io,{uid,now:new Date('2026-10-19T10:31:00Z')});
   assert.equal(r.goal.lease.ok,false); assert.equal(io.rows['~lease'],undefined);
   r=await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:40:00.000Z'),io,{uid,now:new Date('2026-10-19T10:41:00Z')});
@@ -662,7 +662,7 @@ test('while the previous version\'s per-account right is still live for another 
 });
 
 test('a right never runs past the month: renewing late on the last day ends 5 minutes before the month, so next month it is free; a handover in the last minutes does not block next month',async()=>{
-  const io=fakeCloud(), uid='u1', mk=(dev,c,o)=>Object.assign({v:1,gk:6,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-31',reviews:[],products:[]}},o||{});
+  const io=fakeCloud(), uid='u1', mk=(dev,c,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-31',reviews:[],products:[]}},o||{});
   let r=await W.syncWindow(fakeStore(),mk('office01','2026-10-31T14:20:00.000Z'),io,{uid,now:new Date('2026-10-31T14:30:00Z')});   /* 한국 10/31 23:30 */
   assert.equal(r.goal.lease.until,'2026-10-31T14:55:00.000Z','한국 10/31 23:55까지만');
   const nov=p=>Object.assign(p,{work:{v:1,from:'2026-10-01',to:'2026-11-01',reviews:[],products:[]}});
@@ -687,7 +687,7 @@ test('an inherited target keeps the time it was set, so merging with a stale com
 });
 
 test('a view sync never takes a free right; a second hand-over does not move the hand-over time; reviews left on the handing-over computer go with the right',async()=>{
-  const io=fakeCloud(), uid='u1', mk=(dev,c,o)=>Object.assign({v:1,gk:6,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
+  const io=fakeCloud(), uid='u1', mk=(dev,c,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
   let r=await W.syncWindow(fakeStore(),mk('home0001','2026-10-19T09:00:00.000Z',{view:1}),io,{uid,now:new Date('2026-10-19T09:01:00Z')});
   assert.equal(r.goal.lease.why,'view'); assert.equal(io.rows['~lease'],undefined,'빈 권한도 조회 동기화로는 안 받는다');
   await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:00:00.000Z'),io,{uid,now:new Date('2026-10-19T10:02:00Z')});
@@ -700,7 +700,7 @@ test('a view sync never takes a free right; a second hand-over does not move the
 });
 
 test('recovering a right whose device id was lost: only after it expired, with a confirmed (force) count that covers what that device could have approved',async()=>{
-  const io=fakeCloud(), uid='u1', mk=(dev,c,o)=>Object.assign({v:1,gk:6,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
+  const io=fakeCloud(), uid='u1', mk=(dev,c,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
   await W.syncWindow(fakeStore(),mk('lost0001','2026-10-19T10:00:00.000Z'),io,{uid,now:new Date('2026-10-19T10:02:00Z')});
   let r=await W.syncWindow(fakeStore(),mk('new00001','2026-10-19T10:30:00.000Z',{force:1,countFrom:'2026-07-01'}),io,{uid,now:new Date('2026-10-19T10:31:00Z')});
   assert.equal(r.goal.lease.ok,false,'권한이 아직 살아 있으면 안 된다');
@@ -717,12 +717,12 @@ test('a month created from a stale previous month re-inherits the target once th
   const octOld=Object.assign(monthOf('2026-10'),{target:10000,_t:1000}), octNew=Object.assign(monthOf('2026-10'),{target:5000,_t:2000});
   io.rows['2026-10']={data:octNew,updated_at:'x'};
   const office=fakeStore(); office.setItem('unpa-worklog-v2:'+uid,JSON.stringify({v:1,months:{'2026-10':octOld},dirty:[]}));
-  const r=await W.syncWindow(office,{v:1,gk:6,seq:1,acct:'abc',device:'office01',countedAt:'2026-11-02T00:30:00.000Z',work:{v:1,from:'2026-10-01',to:'2026-11-02',reviews:[],products:[]}},io,{uid,now:new Date('2026-11-02T00:31:00Z')});
+  const r=await W.syncWindow(office,{v:1,gk:7,seq:1,acct:'abc',device:'office01',countedAt:'2026-11-02T00:30:00.000Z',work:{v:1,from:'2026-10-01',to:'2026-11-02',reviews:[],products:[]}},io,{uid,now:new Date('2026-11-02T00:31:00Z')});
   assert.equal(r.goal.month,'2026-11'); assert.equal(r.goal.target,5000,'옛 10,000 이 아니라 나중에 정한 5,000');
 });
 
 test('recovering a lost device\'s right also inherits what that device was still counting: reviews it had taken over, its own ledger-only reviews (its latest list replaces the earlier one) and its month halt',async()=>{
-  const io=fakeCloud(), uid='u1', at=s=>({uid,now:new Date(s)}), mk=(dev,c,o)=>Object.assign({v:1,gk:6,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
+  const io=fakeCloud(), uid='u1', at=s=>({uid,now:new Date(s)}), mk=(dev,c,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
   await W.syncWindow(fakeStore(),mk('home0001','2026-10-19T09:00:00.000Z'),io,at('2026-10-19T09:01:00Z'));
   await W.syncWindow(fakeStore(),mk('home0001','2026-10-19T09:10:00.000Z',{release:1,pendR:['77']}),io,at('2026-10-19T09:11:00Z'));
   let r=await W.syncWindow(fakeStore(),mk('lost0001','2026-10-19T09:20:00.000Z'),io,at('2026-10-19T09:21:00Z'));
@@ -742,7 +742,7 @@ test('recovering a lost device\'s right also inherits what that device was still
 });
 
 test('a sync built before the hand-over click that reaches the server after the hand-over does not re-open the right; a take-back click (higher epoch) does',async()=>{
-  const uid='u1', at=s=>({uid,now:new Date(s)}), mk=(dev,c,o)=>Object.assign({v:1,gk:6,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
+  const uid='u1', at=s=>({uid,now:new Date(s)}), mk=(dev,c,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
   let io=fakeCloud();
   await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:00:00.000Z',{leaseEpoch:0}),io,at('2026-10-19T10:01:00Z'));
   let r=await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:05:00.000Z',{leaseEpoch:1,release:1}),io,at('2026-10-19T10:06:00Z'));
@@ -767,7 +767,7 @@ test('a sync built before the hand-over click that reaches the server after the 
 });
 
 test('a handed-over review that the taker\'s count sees as not approved by me is dropped from the right, but only by a count started after the hand-over; the device\'s own list and the release are untouched',async()=>{
-  const io=fakeCloud(), uid='u1', at=s=>({uid,now:new Date(s)}), mk=(dev,c,o)=>Object.assign({v:1,gk:6,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
+  const io=fakeCloud(), uid='u1', at=s=>({uid,now:new Date(s)}), mk=(dev,c,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
   await W.syncWindow(fakeStore(),mk('home0001','2026-10-19T09:50:00.000Z'),io,at('2026-10-19T09:51:00Z'));
   await W.syncWindow(fakeStore(),mk('home0001','2026-10-19T10:00:00.000Z',{release:1,pendR:['77','78']}),io,at('2026-10-19T10:01:00Z'));
   let r=await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:10:00.000Z'),io,at('2026-10-19T10:11:00Z'));
@@ -784,7 +784,7 @@ test('a handed-over review that the taker\'s count sees as not approved by me is
 });
 
 test('the month halt goes with the right: kept on the row while held, handed over on release, given to the taker; malformed halts are ignored',async()=>{
-  const io=fakeCloud(), uid='u1', at=s=>({uid,now:new Date(s)}), mk=(dev,c,o)=>Object.assign({v:1,gk:6,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
+  const io=fakeCloud(), uid='u1', at=s=>({uid,now:new Date(s)}), mk=(dev,c,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
   const halt={v:7,month:'2026-10',target:1430000,t:Date.parse('2026-10-19T09:59:00Z'),won:1429800};
   await W.syncWindow(fakeStore(),mk('home0001','2026-10-19T10:00:00.000Z',{halt:Object.assign({note:'x',deep:{a:1}},halt)}),io,at('2026-10-19T10:01:00Z'));
   assert.deepEqual(io.rows['~lease'].data.halt,halt,'정해진 칸의 숫자·문자만');
@@ -802,4 +802,85 @@ test('the month halt goes with the right: kept on the row while held, handed ove
   assert.deepEqual(r.goal.lease.halt,halt2,'더 나중에 멈춘 것');
   await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:33:00.000Z',{release:1,halt}),io,at('2026-10-19T10:34:00Z'));
   assert.deepEqual(io.rows['~lease'].data.closedHalt,halt2,'넘길 때도 더 나중에 멈춘 것');
+});
+
+test('a hand-over sync made before a take-back click that reaches the server after the take-back does not close the taken-back right, so no second computer can take it; the row keeps the epoch the right is used at',async()=>{
+  const io=fakeCloud(), uid='u1', at=s=>({uid,now:new Date(s)}), mk=(dev,c,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to:'2026-10-19',reviews:[],products:[]}},o||{});
+  let r=await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:00:00.000Z',{leaseEpoch:0}),io,at('2026-10-19T10:01:00Z'));
+  assert.equal(r.goal.lease.ok,true); assert.equal(io.rows['~lease'].data.grantEpoch,0);
+  /* [넘기기](순번 1)의 동기화 창이 멈췄고, [다시 가져오기](순번 2)의 동기화가 먼저 서버에 닿았다 */
+  r=await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:05:00.000Z',{leaseEpoch:2}),io,at('2026-10-19T10:06:00Z'));
+  assert.equal(r.goal.lease.ok,true); assert.equal(io.rows['~lease'].data.grantEpoch,2);
+  r=await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:03:00.000Z',{leaseEpoch:1,release:1,pendR:['77']}),io,at('2026-10-19T10:07:00Z'));   /* 멈췄던 넘기기가 늦게 닿음 */
+  assert.equal(r.goal.lease.ok,false); assert.equal(r.goal.lease.why,'stale');
+  assert.equal(io.rows['~lease'].data.closed,false,'다시 받은 권한은 열린 채로'); assert.equal(io.rows['~lease'].data.closedAt,undefined);
+  r=await W.syncWindow(fakeStore(),mk('home0001','2026-10-19T10:20:00.000Z',{leaseEpoch:0}),io,at('2026-10-19T10:21:00Z'));
+  assert.equal(r.goal.lease.ok,false,'같은 CMS 계정의 다른 컴퓨터도 받지 못한다'); assert.equal(r.goal.lease.closed,false);
+  r=await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:22:00.000Z',{leaseEpoch:1}),io,at('2026-10-19T10:23:00Z'));   /* 앞 순번의 늦은 보통 동기화 */
+  assert.equal(r.goal.lease.ok,true); assert.equal(io.rows['~lease'].data.grantEpoch,2,'순번은 내려가지 않는다');
+  /* 새로 누른 넘기기(순번 3)는 그대로 닫고, 넘겨받은 기기는 제 순번부터 */
+  r=await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:30:00.000Z',{leaseEpoch:3,release:1}),io,at('2026-10-19T10:31:00Z'));
+  assert.equal(r.goal.lease.why,'released'); assert.equal(io.rows['~lease'].data.closed,true);
+  r=await W.syncWindow(fakeStore(),mk('home0001','2026-10-19T10:40:00.000Z',{leaseEpoch:0}),io,at('2026-10-19T10:41:00Z'));
+  assert.equal(r.goal.lease.ok,true); assert.equal(io.rows['~lease'].data.grantEpoch,0,'다른 기기가 받으면 그 기기 순번부터');
+  r=await W.syncWindow(fakeStore(),mk('home0001','2026-10-19T10:42:00.000Z',{leaseEpoch:0,release:1}),io,at('2026-10-19T10:43:00Z'));
+  assert.equal(r.goal.lease.why,'released','넘겨받은 기기의 넘기기는 앞 기기 순번과 비교하지 않는다');
+  /* 같은 기기의 두 동기화가 겹쳐 앞 순번(2)이 먼저 썼다 — 뒤 순번(4)은 순번을 올려 적은 뒤에만 권한으로 받는다 */
+  const io2=fakeCloud();
+  await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:00:00.000Z',{leaseEpoch:2}),io2,at('2026-10-19T10:01:00Z'));
+  const realClaim=io2.claim; let first=true;
+  io2.claim=async(K,e,d)=>{ if(first){ first=false; await realClaim(K,e,Object.assign({},d,{nonce:'zz',grantEpoch:2})); return false; } return realClaim(K,e,d); };
+  r=await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:10:00.000Z',{leaseEpoch:4}),io2,at('2026-10-19T10:11:00Z'));
+  assert.equal(r.goal.lease.ok,true); assert.equal(io2.rows['~lease'].data.grantEpoch,4);
+  r=await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:05:00.000Z',{leaseEpoch:3,release:1}),io2,at('2026-10-19T10:12:00Z'));
+  assert.equal(r.goal.lease.why,'stale'); assert.equal(io2.rows['~lease'].data.closed,false);
+  io2.claim=async(K,e,d)=>{ await realClaim(K,e,Object.assign({},d,{nonce:'yy'+Math.random(),grantEpoch:4})); return false; };   /* 순번을 올려 적지도 못했다 */
+  r=await W.syncWindow(fakeStore(),mk('office01','2026-10-19T10:20:00.000Z',{leaseEpoch:6}),io2,at('2026-10-19T10:21:00Z'));
+  assert.equal(r.goal.lease.ok,false,'못 올렸으면 권한으로 주지 않는다'); assert.equal(r.goal.lease.why,'stale');
+});
+
+test('a hand-over that is the first sync of a new month hands over only this month\'s reviews and halt — the taker does not count last month\'s handed-over reviews all month',async()=>{
+  const io=fakeCloud(), uid='u1', at=s=>({uid,now:new Date(s)}), mk=(dev,c,to,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to,reviews:[],products:[]}},o||{});
+  /* 10월: 집 컴퓨터가 넘기며 남긴 101·102 를 회사 컴퓨터가 넘겨받았고, 회사 컴퓨터는 10월 마지막 날 목표 직전에서 멈췄다 */
+  await W.syncWindow(fakeStore(),mk('home0001','2026-10-10T00:00:00.000Z','2026-10-10'),io,at('2026-10-10T00:01:00Z'));
+  await W.syncWindow(fakeStore(),mk('home0001','2026-10-10T00:10:00.000Z','2026-10-10',{release:1,pendR:['101','102']}),io,at('2026-10-10T00:11:00Z'));
+  let r=await W.syncWindow(fakeStore(),mk('office01','2026-10-10T00:20:00.000Z','2026-10-10'),io,at('2026-10-10T00:21:00Z'));
+  assert.deepEqual(r.goal.lease.pendR,['101','102']);
+  const octHalt={v:7,month:'2026-10',target:1450000,t:Date.parse('2026-10-31T13:59:00Z'),won:1449800};
+  await W.syncWindow(fakeStore(),mk('office01','2026-10-31T14:00:00.000Z','2026-10-31',{halt:octHalt}),io,at('2026-10-31T14:01:00Z'));
+  assert.deepEqual(io.rows['~lease'].data.pendR,['101','102']); assert.deepEqual(io.rows['~lease'].data.halt,octHalt);
+  /* 11/2: 회사 컴퓨터의 11월 첫 동기화가 넘기기(10월 정지 표시가 원장에 남아 함께 왔다) */
+  await W.syncWindow(fakeStore(),mk('office01','2026-11-01T23:50:00.000Z','2026-11-02',{release:1,pendR:['300'],halt:octHalt}),io,at('2026-11-02T00:00:00Z'));
+  const row=io.rows['~lease'].data;
+  assert.equal(row.closed,true); assert.equal(row.closedMonth,'2026-11');
+  assert.deepEqual(row.closedPendR,['300'],'지난달에 넘겨받은 번호는 넘기지 않는다'); assert.equal(row.closedHalt,null,'지난달 정지도');
+  r=await W.syncWindow(fakeStore(),mk('home0001','2026-11-02T00:10:00.000Z','2026-11-02'),io,at('2026-11-02T00:11:00Z'));
+  assert.equal(r.goal.lease.ok,true); assert.equal(r.goal.month,'2026-11');
+  assert.deepEqual(r.goal.lease.pendR,['300'],'넘겨받는 쪽은 이번 달 번호만 센다'); assert.equal(r.goal.lease.halt,null);
+});
+
+test('the device\'s own ledger-only list and its halt do not outlive the month: a first sync of a new month that sends no list clears them, so recovering that device\'s right does not count last month\'s reviews',async()=>{
+  const io=fakeCloud(), uid='u1', at=s=>({uid,now:new Date(s)}), mk=(dev,c,to,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,work:{v:1,from:'2026-10-01',to,reviews:[],products:[]}},o||{});
+  const octHalt={v:7,month:'2026-10',target:1450000,t:Date.parse('2026-10-31T11:59:00Z'),won:1449800};
+  await W.syncWindow(fakeStore(),mk('lost0001','2026-10-31T12:00:00.000Z','2026-10-31',{ownPendR:['500','501'],halt:octHalt}),io,at('2026-10-31T12:01:00Z'));
+  assert.deepEqual(io.rows['~lease'].data.ownPendR,['500','501']);
+  /* 11/1 첫 동기화가 조회([업데이트]) — 목록도 정지 표시도 보내지 않는다 */
+  let r=await W.syncWindow(fakeStore(),mk('lost0001','2026-11-01T00:00:00.000Z','2026-11-01',{view:1}),io,at('2026-11-01T00:01:00Z'));
+  assert.equal(r.goal.lease.ok,true); assert.equal(io.rows['~lease'].data.month,'2026-11');
+  assert.deepEqual(io.rows['~lease'].data.ownPendR,[],'지난달 목록은 비운다'); assert.equal(io.rows['~lease'].data.halt,null,'지난달 정지도');
+  /* 그 기기 번호를 잃었다 — 권한이 끝난 뒤 넓게 센 집계로 가져온다 */
+  r=await W.syncWindow(fakeStore(),mk('new00001','2026-11-01T01:10:00.000Z','2026-11-01',{force:1,countFrom:'2026-08-01'}),io,at('2026-11-01T01:12:00Z'));
+  assert.equal(r.goal.lease.ok,true); assert.deepEqual(r.goal.lease.pendR,[],'지난달 승인 번호는 이번 달에 세지 않는다');
+  /* 이번 달에 쓴 행이 아니면(지난달 목록이 남은 행) 가져올 때 그 목록을 잇지 않는다 */
+  const io2=fakeCloud();
+  io2.rows['~lease']={data:{device:'lost0002',acct:'abc',since:'2026-11-01T00:00:00.000Z',until:'2026-11-01T01:01:00.000Z',nonce:'n1',closed:false,renewWon:0,
+                            pendR:['700'],ownPendR:['701'],month:'2026-10'},updated_at:'x'};
+  r=await W.syncWindow(fakeStore(),mk('new00002','2026-11-01T01:10:00.000Z','2026-11-01',{force:1,countFrom:'2026-08-01'}),io2,at('2026-11-01T01:12:00Z'));
+  assert.equal(r.goal.lease.ok,true); assert.deepEqual(r.goal.lease.pendR,[]);
+  /* 이번 달에 보낸 목록은 그대로 이어서 센다 */
+  const io3=fakeCloud();
+  await W.syncWindow(fakeStore(),mk('lost0003','2026-10-31T12:00:00.000Z','2026-10-31',{ownPendR:['500']}),io3,at('2026-10-31T12:01:00Z'));
+  await W.syncWindow(fakeStore(),mk('lost0003','2026-11-01T00:00:00.000Z','2026-11-01',{ownPendR:['800']}),io3,at('2026-11-01T00:01:00Z'));
+  r=await W.syncWindow(fakeStore(),mk('new00003','2026-11-01T01:10:00.000Z','2026-11-01',{force:1,countFrom:'2026-08-01'}),io3,at('2026-11-01T01:12:00Z'));
+  assert.equal(r.goal.lease.ok,true); assert.deepEqual(r.goal.lease.pendR,['800']);
 });

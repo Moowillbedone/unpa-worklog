@@ -299,7 +299,7 @@
       reason:String(v.reason||'').slice(0,90),d:v.d,applied:!!v.applied,manual_done:v.manual_done||null};});
     return out;
   }
-  const LEASE_MS=60*60e3,SKEW_MS=5*60e3,CLOCK_MS=60e3,GOAL_PROTOCOL=6;   /* 콘솔이 지금 스냅샷 키(v6)를 쓰는 판일 때만 쓸 수 있는 목표를 준다 */
+  const LEASE_MS=60*60e3,SKEW_MS=5*60e3,CLOCK_MS=60e3,GOAL_PROTOCOL=7;   /* 콘솔이 지금 스냅샷 키(v7)를 쓰는 판일 때만 쓸 수 있는 목표를 준다 */
   const validDevice=d=>typeof d==='string'&&/^[0-9a-z]{6,32}$/.test(d);
   /* 이번 달 작업 권한 — 서버 행 하나를 '바뀌지 않았으면 쓰기'(nonce 비교)로만 바꿔 두 기기가 동시에 가질 수 없게.
      모든 기기 시계가 서버 시각과 1분 안이어야 한다(넘겨받기 기준 5분 여유를 믿을 수 있게) */
@@ -320,6 +320,7 @@
     const o={v:h.v,month:h.month,target:h.target,t:h.t};if(num(h.won))o.won=h.won;return o;
   };
   const laterHalt=(a,b)=>{a=haltOf(a);b=haltOf(b);return !a?b:!b?a:(b.t>a.t?b:a);};
+  const haltIn=(h,m)=>{h=haltOf(h);return h&&h.month===m?h:null;};          /* 그 달(m) 정지만 — 지난달 정지는 옮기지 않는다 */
   async function claimLease(io,p,now,sk,curWon){
     const dev=validDevice(p.device)?p.device:null,acct=typeof p.acct==='string'&&/^[0-9a-z]{1,16}$/.test(p.acct)?p.acct:null;
     const cAt=Date.parse(p.countedAt)||0,t=now.getTime();
@@ -341,13 +342,16 @@
       else{const rows=await io.pull(['~lease:'+acct]);olds=rows||[];}
       for(const r of olds){const o=r&&r.data;if(o&&o.device!==dev&&(Date.parse(o.until)||0)+SKEW_MS>t)return {ok:false,why:'other',closed:false};}
     }
-    const ep=typeof p.leaseEpoch==='number'&&isFinite(p.leaseEpoch)?p.leaseEpoch:null;
+    const ep=typeof p.leaseEpoch==='number'&&isFinite(p.leaseEpoch)?p.leaseEpoch:null,mo=kstMonthOf(t);
     if(mine&&p.release){
       if(cur.closed)return {ok:false,why:'released'};                       /* 이미 넘겨 둠 — 다시 쓰지 않는다(넘겨받는 쪽 기준 시각이 밀리지 않게) */
+      /* 지금 쓰는 권한을 받은 순번(grantEpoch)보다 앞 순번으로 만든 넘기기 — [다시 가져오기] 전에 누른 넘기기가 늦게 닿았다. 다시 받은 권한을 닫지 않는다 */
+      if(typeof cur.grantEpoch==='number'&&ep!==null&&ep<cur.grantEpoch)return {ok:false,why:'stale'};
       /* 넘긴다 — 닫고, 이 기기 원장에 남은(업무일지에 아직 없는·결과가 애매한) 승인 번호를 넘겨받는 쪽이 세도록 함께 적는다.
-         넘길 때의 순번(closedEpoch)과 이 달 정지 표시(closedHalt — 넘겨받는 쪽도 멈춘 채로)도 함께 */
-      const next=Object.assign({},cur,{closed:true,closedAt:now.toISOString(),closedMonth:kstMonthOf(t),closedWon:typeof curWon==='number'?curWon:null,
-                                       closedPendR:idList([...idList(cur.pendR),...idList(p.pendR)]),closedEpoch:ep,closedHalt:laterHalt(p.halt,cur.halt),
+         넘길 때의 순번(closedEpoch)과 이 달 정지 표시(closedHalt — 넘겨받는 쪽도 멈춘 채로)도 함께.
+         행이 지난달 것이면(이번 달 첫 동기화가 넘기기) 지난달에 넘겨받은 번호·지난달 정지는 넘기지 않는다 */
+      const next=Object.assign({},cur,{closed:true,closedAt:now.toISOString(),closedMonth:mo,closedWon:typeof curWon==='number'?curWon:null,
+                                       closedPendR:idList([...(cur.month===mo?idList(cur.pendR):[]),...idList(p.pendR)]),closedEpoch:ep,closedHalt:laterHalt(haltIn(p.halt,mo),haltIn(cur.halt,mo)),
                                        until:now.toISOString(),nonce:nonce()});
       const ok=await io.claim(K,{nonce:cur.nonce==null?null:cur.nonce},next);
       return {ok:false,why:ok?'released':'other'};
@@ -369,8 +373,8 @@
           const forceOk=p.force&&cu<t&&cu+SKEW_MS<=cAt&&/^\d{4}-\d\d-\d\d$/.test(from)&&from<=need
                         &&!(typeof cur.renewWon==='number'&&!(typeof curWon==='number'&&curWon>=cur.renewWon));
           if(!forceOk)return {ok:false,why:'other',closed:false,until:cur.until,need};
-          /* 그 기기가 넘겨받았던 번호·넘겼던 번호·마지막 동기화 때 그 기기 원장에만 있던(결과 애매·업무일지에 아직 없는) 번호를 모두 이어서 센다 */
-          pendR=idList([...idList(cur.pendR),...idList(cur.closedPendR),...idList(cur.ownPendR)]);
+          /* 그 기기가 넘겨받았던 번호·넘겼던 번호·마지막 동기화 때 그 기기 원장에만 있던(결과 애매·업무일지에 아직 없는) 번호를 모두 이어서 센다 — 이번 달에 쓴 행의 목록만 */
+          pendR=cur.month===mo?idList([...idList(cur.pendR),...idList(cur.closedPendR),...idList(cur.ownPendR)]):[];
           pendFrom=new Date(cu+SKEW_MS).toISOString();
         }else{
           const ca=Date.parse(cur.closedAt)||0;
@@ -379,7 +383,7 @@
           pendR=idList(cur.closedPendR);                                     /* 넘긴 기기에 남아 있던 승인 — 넘겨받은 쪽 가드가 센다 */
           pendFrom=new Date(ca+SKEW_MS).toISOString();
         }
-        halt=laterHalt(cur.closedHalt,cur.halt);                             /* 넘긴 기기가 이번 달을 멈췄으면 넘겨받은 쪽도 멈춘 채로 */
+        halt=laterHalt(haltIn(cur.closedHalt,mo),haltIn(cur.halt,mo));       /* 넘긴 기기가 이번 달을 멈췄으면 넘겨받은 쪽도 멈춘 채로 */
       }
     }
     if(p.release)return {ok:false,why:'released'};                         /* 넘겨 둔 기기 — 다시 가져오기 전까지는 받지 않는다 */
@@ -389,15 +393,24 @@
       if(isFinite(from)&&cAt>=from){const drop=new Set(idList(p.dropR));pendR=pendR.filter(id=>!drop.has(id));}
     }
     /* 권한은 달을 넘기지 않는다 — 이번 달 끝 5분 전까지만(다음 달엔 저절로 풀리게). renewWon = 이번 갱신 때 업무일지 이번 달 금액.
-       ownPendR = 이 기기 원장에만 있는 승인 번호(이 기기가 보낸 목록으로 바꾼다 — 번호를 잃은 이 기기를 넘겨받는 쪽이 센다), halt = 이번 달 정지 표시 */
+       ownPendR = 이 기기 원장에만 있는 승인 번호(이 기기가 보낸 목록으로 바꾼다 — 번호를 잃은 이 기기를 넘겨받는 쪽이 센다), halt = 이번 달 정지 표시.
+       grantEpoch = 이 기기가 이 권한을 받아 쓰는 가장 높은 순번(내려가지 않음) — 그보다 앞 순번으로 만든 넘기기는 늦게 닿아도 닫지 못한다. 다른 기기가 받으면 그 기기 순번부터 */
     const next={device:dev,acct,since:mine&&cur.since?cur.since:now.toISOString(),until:new Date(Math.min(t+LEASE_MS,kstNextMonthStart(t)-SKEW_MS)).toISOString(),
                 nonce:nonce(),closed:false,renewWon:typeof curWon==='number'?curWon:null,pendR,pendFrom,
-                ownPendR:Array.isArray(p.ownPendR)?idList(p.ownPendR):(mine?idList(cur.ownPendR):[]),halt:laterHalt(halt,p.halt),month:kstMonthOf(t)};
-    if(cur&&mine&&cur.month&&cur.month!==next.month){next.pendR=[];next.pendFrom=null;}
+                ownPendR:Array.isArray(p.ownPendR)?idList(p.ownPendR):(mine?idList(cur.ownPendR):[]),halt:laterHalt(haltIn(halt,mo),haltIn(p.halt,mo)),month:mo,
+                grantEpoch:Math.max(mine&&typeof cur.grantEpoch==='number'?cur.grantEpoch:-1,ep!==null?ep:-1)};
+    /* 달이 바뀐 첫 갱신: 지난달 목록은 버린다 — 이 기기 원장 목록(ownPendR)도 이번 동기화가 보내지 않았으면(조회·가드 없음) 비운다 */
+    if(cur&&mine&&cur.month&&cur.month!==next.month){next.pendR=[];next.pendFrom=null;if(!Array.isArray(p.ownPendR))next.ownPendR=[];}
     if(await io.claim(K,cur?{nonce:cur.nonce==null?null:cur.nonce}:null,next))return {ok:true,until:next.until,pendR:next.pendR,halt:next.halt};
     /* 못 썼다 — 같은 기기의 다른 동기화가 방금 이어 간 것이면 그대로 내 권한 */
     const back=await read();
-    if(back&&back.device===dev&&back.acct===acct&&!back.closed&&(Date.parse(back.until)||0)>t)return {ok:true,until:back.until,pendR:idList(back.pendR),halt:haltOf(back.halt)};
+    if(back&&back.device===dev&&back.acct===acct&&!back.closed&&(Date.parse(back.until)||0)>t){
+      /* 그 동기화가 이 동기화보다 앞 순번으로 썼으면 순번만 올려 적는다 — 그 사이 순번으로 만든 넘기기가 늦게 닿아도 닫지 못하게. 못 올렸으면 권한으로 주지 않는다 */
+      if(ep===null||(typeof back.grantEpoch==='number'&&back.grantEpoch>=ep)
+         ||await io.claim(K,{nonce:back.nonce==null?null:back.nonce},Object.assign({},back,{grantEpoch:ep,nonce:nonce()})))
+        return {ok:true,until:back.until,pendR:idList(back.pendR),halt:haltOf(back.halt)};
+      return {ok:false,why:'stale'};
+    }
     return {ok:false,why:'other',closed:!!(back&&back.closed)};
   }
   async function syncWindow(store,p,io,opts){

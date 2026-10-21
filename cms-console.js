@@ -2249,7 +2249,7 @@
   var RATE_R=500, RATE_P=600;
   /* 목표 스냅샷은 v3 키(가드 v7 이상만 읽음)에 둔다. 예전 키(v1·v2)에는 남은 금액 0·'일부 실패'로 막은 값을 써서
      업데이트 전 버전 가드가 열린 탭은 승인·등록을 하지 않게 한다 */
-  var GOAL_KEY='unpa-console-goal-v6', GOAL_OLD=['unpa-console-goal-v1','unpa-console-goal-v2','unpa-console-goal-v3','unpa-console-goal-v4','unpa-console-goal-v5'], SESSION_APPROVED={};
+  var GOAL_KEY='unpa-console-goal-v7', GOAL_OLD=['unpa-console-goal-v1','unpa-console-goal-v2','unpa-console-goal-v3','unpa-console-goal-v4','unpa-console-goal-v5','unpa-console-goal-v6'], SESSION_APPROVED={};
   function goalLoad(){ try{ var g=JSON.parse(localStorage.getItem(GOAL_KEY)||'null'); return (g && typeof g==='object') ? g : null; }catch(e){ return null; } }
   function goalSave(g){ try{ localStorage.setItem(GOAL_KEY, JSON.stringify(g));
     var block=JSON.stringify({ month:g.month, target:g.target, won:g.target, at:g.at, countedAt:null, partial:true, note:'새 버전 콘솔·도구로 다시 여세요' });
@@ -2489,7 +2489,7 @@
     /* 넘겨받은 번호 중 이번 집계가 '내 승인 아님'으로 본 것 — 승인된 적이 없다(서버가 넘겨받은 뒤 시작한 집계일 때만 뺀다) */
     var gs=goalLoad(), lp=(gs && gs.lease && Array.isArray(gs.lease.pendR)) ? gs.lease.pendR : [];
     var dropR=(WORK && WORK.notMine) ? lp.map(String).filter(function(id){ return WORK.notMine[id]; }) : [];
-    return { v:1, gk:6, seq:ob.seq||0, acct:acct, device:deviceId(), view:SYNC_ONLY ? 1 : 0, release:rel ? 1 : 0, leaseEpoch:leaseEpoch(),
+    return { v:1, gk:7, seq:ob.seq||0, acct:acct, device:deviceId(), view:SYNC_ONLY ? 1 : 0, release:rel ? 1 : 0, leaseEpoch:leaseEpoch(),
              force:(WORK && WORK.force) ? 1 : 0, countFrom:(WORK && WORK.countFrom) || null,
              pendR:(rel && pids) ? pids : [], ownPendR:(!SYNC_ONLY && pids) ? pids : undefined, dropR:dropR, halt:halt, countedAt:(WORK && WORK.startedAt) || null, builtAt:new Date().toISOString(), monthPartial:!WORK || monthFailed(WORK),
              work:{ v:1, from:AUTO_FROM, to:ymd(new Date()), reviews:rv, products:pv, partial:!!(WORK && WORK.failed.length) },
@@ -2565,9 +2565,15 @@
                       && (pl===null || (pl && pl.ok && Date.parse(pl.until)>nowT)));   /* 작업 권한이 없는 스냅샷은 지키지 않는다 */
       /* 새 결과의 작업 권한이 없거나(넘김·다른 기기) 이번이 넘기기 동기화면 예전 스냅샷을 지키지 않는다 — 권한 변화가 바로 반영되게 */
       var incL=ev.data.goal ? ev.data.goal.lease : undefined;
-      /* 응답을 받는 지금 이 기기가 넘겨 둔 상태이거나, 넘기기·다시 가져오기를 누르기 전에 만든 동기화의 응답이면 권한으로 쓰지 않는다 */
-      if(ev.data.goal && incL && incL.ok && (leaseReleased() || !payload || payload.leaseEpoch!==leaseEpoch()))
-        ev.data.goal.lease=incL={ ok:false, why: leaseReleased() ? 'released' : 'stale' };
+      /* 응답을 받는 지금 이 기기가 넘겨 둔 상태면 권한으로 쓰지 않는다.
+         넘기기·다시 가져오기를 누르기 전에 만든 동기화의 응답이면 그 권한 결과는 ok 든 아니든 통째로 쓰지 않는다 — 그 뒤 동기화가 받아 둔
+         지금 권한(아직 안 끝남)이 있으면 그대로 두고, 없으면 쓸 수 없는 권한('stale')으로. 서버가 'stale'(늦게 닿은 넘기기)이라 한 응답도 지금 권한을 덮지 않는다 */
+      var plOk=!!(pl && pl.ok && Date.parse(pl.until)>nowT);
+      if(ev.data.goal && incL){
+        if(leaseReleased()){ if(incL.ok) incL={ ok:false, why:'released' }; }
+        else if(!payload || payload.leaseEpoch!==leaseEpoch() || incL.why==='stale') incL=plOk ? pl : { ok:false, why:'stale' };
+        ev.data.goal.lease=incL;
+      }
       var newer=!!(prevGood && payload && !payload.release && (incL===null || (incL && incL.ok)) && pc>pcT && prevGoal.month===(ev.data.goal||{}).month && prevGoal.target===(ev.data.goal||{}).target);
       if(ev.data.goal && ev.data.goal.target>0 && !newer){
         /* countedAt = 이 합계의 바탕이 된 CMS 집계를 시작한 시각, partial = 이번 달 집계가 일부 실패.
@@ -2751,7 +2757,7 @@
   }
   /* 월 목표 가드(cms-claude.js)를 업무일지 사이트에서 불러온다 — Claude 도구와 같은 원장·같은 정지 표시를 쓴다 */
   /* 이 콘솔과 맞는 가드(v7 이상)인가 — 예전 버전이 탭에 남아 있으면 새로 불러와 바꾼다 */
-  function guardOk(){ var G=window.UnpaGuard; return !!(G && G.VERSION>=11 && G.reserveSafe && G.keys && G.keys.goal===GOAL_KEY); }
+  function guardOk(){ var G=window.UnpaGuard; return !!(G && G.VERSION>=12 && G.reserveSafe && G.keys && G.keys.goal===GOAL_KEY); }
   /* 넘기기·다시 가져오기를 누를 때마다 오르는 번호 — 그 전에 만든 동기화의 응답은 작업 권한으로 쓰지 않는다 */
   function leaseEpoch(){ try{ return parseInt(localStorage.getItem('unpa-lease-epoch')||'0',10)||0; }catch(e){ return 0; } }
   function bumpEpoch(){ try{ localStorage.setItem('unpa-lease-epoch', String(leaseEpoch()+1)); }catch(e){} }
