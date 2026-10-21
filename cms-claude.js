@@ -13,9 +13,9 @@
    애매하면 센다: 확인을 누른 뒤 결과가 안 보여도 원장에서 지우지 않는다 (늦게 멈추는 것보다 일찍 멈추는 쪽).
    수정요청·미노출·브랜드 등록·기존 제품 편집은 수입에 들어가지 않으므로 막지 않는다. */
 (function(root){
-  var RATE={ r:500, p:600 }, VERSION=10, HALT_V=7, OLD_DAYS=70;
+  var RATE={ r:500, p:600 }, VERSION=11, HALT_V=7, OLD_DAYS=70;
   /* 목표 스냅샷은 v2 키에서 읽는다 — v1 키에는 새 콘솔이 '일부 실패'로 막아 둔 값만 남아, 예전 버전 가드(시각 기준)가 열린 탭은 아무것도 하지 않는다 */
-  var GOAL_KEY='unpa-console-goal-v5', LEDGER_KEY='unpa-claude-ledger-v1', SENT_KEY='unpa-console-sent-v1', OUTBOX_KEY='unpa-console-outbox-v1';
+  var GOAL_KEY='unpa-console-goal-v6', LEDGER_KEY='unpa-claude-ledger-v1', SENT_KEY='unpa-console-sent-v1', OUTBOX_KEY='unpa-console-outbox-v1';
   var MAX_AGE=60*60e3, MARGIN=5*60e3, KEEP=45*86400e3;
   var NAME={ r:'리뷰 승인', p:'제품 등록' };
   var store=function(){ return root.localStorage; };
@@ -105,8 +105,10 @@
       spent+=RATE.r; n.c++; seenR[id]=1;
     });
     var w=g.won+spent, left=g.target-w;
-    /* 정지는 지금 셈법(v7)으로 쓴 것만 — 예전 셈법(재승인 500원 등)으로 걸린 정지는 한 번 다시 따진다 */
-    var halt=l.halt && l.halt.v>=HALT_V && l.halt.month===gi.month && l.halt.target===g.target ? l.halt : null;
+    /* 정지는 지금 셈법(v7)으로 쓴 것만 — 예전 셈법(재승인 500원 등)으로 걸린 정지는 한 번 다시 따진다.
+       작업 권한과 함께 넘겨받은 정지(넘긴 컴퓨터가 이번 달을 멈췄음)도 이 컴퓨터 정지와 똑같이 본다 */
+    var sameHalt=function(h){ return !!(h && h.v>=HALT_V && h.month===gi.month && h.target===g.target); }, lh=g.lease && g.lease.halt;
+    var halt=sameHalt(l.halt) ? l.halt : (sameHalt(lh) && typeof lh.t==='number' && isFinite(lh.t)) ? lh : null;
     if(halt) return { ok:false, halted:true, month:gi.month, target:g.target, won:w, left:left,
       why:'이번 달은 목표 직전에서 멈춘 상태입니다 (멈춘 시각 '+hm(halt.t)+' · 이번 달 '+won(w)+' · 목표까지 '+won(Math.max(0,left))+' 남음). 목표를 올리면 다시 진행합니다' };
     return { ok:true, month:gi.month, target:g.target, base:g.won, spent:spent, n:n, won:w, left:left,

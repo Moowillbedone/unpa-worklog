@@ -1473,6 +1473,8 @@
     if(t && t.id==='csSyncBtn'){ ev.preventDefault(); ev.stopPropagation(); syncNow(); }
     if(t && t.id==='csLeaseBtn'){ ev.preventDefault(); ev.stopPropagation();
       var act=t.getAttribute('data-act');
+      /* 가져오기(force)는 이 클릭으로 시작하는 넓은 집계에만 붙는다 — 이미 돌고 있는 집계·동기화가 있으면 끝난 뒤 다시 누르게 한다 */
+      if(act==='force' && (WORK_SYNC || SYNCING)){ alert('지금 CMS 집계·업무일지 동기화가 진행 중입니다 — 끝난 뒤 다시 누르세요.'); return; }
       if(act==='release' && !confirm('이 컴퓨터의 이번 달 작업 권한(승인·제품 등록)을 넘깁니다.\n넘긴 뒤에는 이 컴퓨터에서 승인·등록을 하지 않고, 다른 컴퓨터에서 검수 콘솔을 열어 동기화하면 넘어갑니다.\n진행할까요?')) return;
       if(act==='force' && !confirm('작업 권한이 남은 기기를 더 쓸 수 없을 때만 누르세요(그 기기에서 사이트 데이터를 지웠거나 다른 브라우저였던 경우).\n그 기기가 마지막에 승인했을 수 있는 리뷰까지 덮도록 CMS를 더 넓게(오래) 집계한 뒤 넘겨받습니다.\n진행할까요?')) return;
       try{ if(act==='release') localStorage.setItem('unpa-lease-release','1'); else if(act==='reclaim') localStorage.removeItem('unpa-lease-release'); }catch(e){}
@@ -1482,6 +1484,7 @@
       if(act==='force'){
         var until=Date.parse(t.getAttribute('data-until'))||Date.now();
         WORK_DAYS_OVERRIDE=Math.min(400, Math.max(WORK_DAYS, Math.ceil((Date.now()-(until-71*864e5))/864e5)+1));
+        /* collectWork 가 시작할 때 읽고 바로 지운다 — 그 집계(WORK.force)로 만든 동기화에만 붙는다. 집계 전에 그만뒀으면(계정 확인 실패) 여기서 지운다 */
         FORCE_LEASE=true; startWorkSync().catch(function(){}).then(function(){ FORCE_LEASE=false; WORK_DAYS_OVERRIDE=0; });
         return;
       }
@@ -2246,7 +2249,7 @@
   var RATE_R=500, RATE_P=600;
   /* 목표 스냅샷은 v3 키(가드 v7 이상만 읽음)에 둔다. 예전 키(v1·v2)에는 남은 금액 0·'일부 실패'로 막은 값을 써서
      업데이트 전 버전 가드가 열린 탭은 승인·등록을 하지 않게 한다 */
-  var GOAL_KEY='unpa-console-goal-v5', GOAL_OLD=['unpa-console-goal-v1','unpa-console-goal-v2','unpa-console-goal-v3','unpa-console-goal-v4'], SESSION_APPROVED={};
+  var GOAL_KEY='unpa-console-goal-v6', GOAL_OLD=['unpa-console-goal-v1','unpa-console-goal-v2','unpa-console-goal-v3','unpa-console-goal-v4','unpa-console-goal-v5'], SESSION_APPROVED={};
   function goalLoad(){ try{ var g=JSON.parse(localStorage.getItem(GOAL_KEY)||'null'); return (g && typeof g==='object') ? g : null; }catch(e){ return null; } }
   function goalSave(g){ try{ localStorage.setItem(GOAL_KEY, JSON.stringify(g));
     var block=JSON.stringify({ month:g.month, target:g.target, won:g.target, at:g.at, countedAt:null, partial:true, note:'새 버전 콘솔·도구로 다시 여세요' });
@@ -2365,7 +2368,9 @@
 
   async function collectWork(me, onProgress){
     var now=new Date(), dates=[], startedAt=now.toISOString();   /* 이 시각 뒤에 한 승인은 이번 집계에 없을 수 있다 — 목표 가드가 따로 센다 */
-    for(var i=0;i<(WORK_DAYS_OVERRIDE||WORK_DAYS);i++) dates.push(ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate()-i)));
+    /* [권한이 남은 기기를 못 쓸 때: 가져오기]로 시작한 넓은 집계인가 — 시작할 때 읽고 바로 지운다(이 집계로 만든 동기화만 force 를 보낸다) */
+    var force=!!FORCE_LEASE, nDays=WORK_DAYS_OVERRIDE||WORK_DAYS; FORCE_LEASE=false; WORK_DAYS_OVERRIDE=0;
+    for(var i=0;i<nDays;i++) dates.push(ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate()-i)));
     var reviews={}, products={}, failed=[], next=0, doneN=0, watch={}, mine=[], notMine={};
     var watchIds=Object.assign({}, pendingLoad(), hidefpLoad());
     async function worker(){
@@ -2413,7 +2418,7 @@
       pg++;
     }
     return { reviews:reviews, products:products, failed:failed, watch:watch, mine:mine, notMine:notMine, at:new Date().toISOString(), startedAt:startedAt,
-             countFrom:dates[dates.length-1] };
+             countFrom:dates[dates.length-1], force:force };
   }
 
   /* ── 보관함: 아직 업무일지에 못 넘긴 검수기록·실행 결과 ── */
@@ -2475,11 +2480,18 @@
     /* 남은 검수 목록을 못 불러왔으면(BACKLOG 없음) 남은 일·미등록 칸은 비우지 않고 그대로 둔다 */
     /* acct = CMS 계정의 해시(계정 이름은 넘기지 않는다) — 업무일지가 계정마다 마지막 집계 시각을 기억한다 */
     var acct=null; if(ME){ var h=5381; for(var i=0;i<ME.length;i++) h=(Math.imul(h,33)^ME.charCodeAt(i))>>>0; acct=h.toString(36); }
-    var rel=leaseReleased(), G=window.UnpaGuard;
-    return { v:1, gk:5, seq:ob.seq||0, acct:acct, device:deviceId(), view:SYNC_ONLY ? 1 : 0, release:rel ? 1 : 0, leaseEpoch:leaseEpoch(),
-             force:FORCE_LEASE ? 1 : 0, countFrom:(WORK && WORK.countFrom) || null,
-             /* 넘길 때: 이 기기 원장에 남은(업무일지에 아직 없는·결과가 애매한) 승인 번호 — 넘겨받는 쪽이 센다 */
-             pendR:(rel && G && G.pendingReviewIds) ? G.pendingReviewIds() : [], countedAt:(WORK && WORK.startedAt) || null, builtAt:new Date().toISOString(), monthPartial:!WORK || monthFailed(WORK),
+    var rel=leaseReleased(), G=window.UnpaGuard, full=!SYNC_ONLY || rel;
+    /* 이 기기 원장에만 있는(업무일지에 아직 없는·결과가 애매한) 승인 번호 — 넘길 때(pendR)와 조회가 아닌 동기화마다(ownPendR) 보낸다.
+       서버 권한 행에 남아, 이 기기 번호를 잃었을 때 넘겨받는 쪽이 센다 */
+    var pids=(full && G && G.pendingReviewIds) ? G.pendingReviewIds() : null;
+    /* 이번 달 정지 표시 — 넘겨받는 쪽도 멈춘 채로 (지금 셈법 v7 이상만) */
+    var halt=(full && G && G.ledger) ? (G.ledger().halt || null) : null; if(halt && !(halt.v>=7)) halt=null;
+    /* 넘겨받은 번호 중 이번 집계가 '내 승인 아님'으로 본 것 — 승인된 적이 없다(서버가 넘겨받은 뒤 시작한 집계일 때만 뺀다) */
+    var gs=goalLoad(), lp=(gs && gs.lease && Array.isArray(gs.lease.pendR)) ? gs.lease.pendR : [];
+    var dropR=(WORK && WORK.notMine) ? lp.map(String).filter(function(id){ return WORK.notMine[id]; }) : [];
+    return { v:1, gk:6, seq:ob.seq||0, acct:acct, device:deviceId(), view:SYNC_ONLY ? 1 : 0, release:rel ? 1 : 0, leaseEpoch:leaseEpoch(),
+             force:(WORK && WORK.force) ? 1 : 0, countFrom:(WORK && WORK.countFrom) || null,
+             pendR:(rel && pids) ? pids : [], ownPendR:(!SYNC_ONLY && pids) ? pids : undefined, dropR:dropR, halt:halt, countedAt:(WORK && WORK.startedAt) || null, builtAt:new Date().toISOString(), monthPartial:!WORK || monthFailed(WORK),
              work:{ v:1, from:AUTO_FROM, to:ymd(new Date()), reviews:rv, products:pv, partial:!!(WORK && WORK.failed.length) },
              audit:ob.audit||{}, pending:(SYNC_ONLY && !BACKLOG) ? null : pendingList(), backlog:backlogList(), remain:remainList(), console:consoleState() };
   }
@@ -2739,7 +2751,7 @@
   }
   /* 월 목표 가드(cms-claude.js)를 업무일지 사이트에서 불러온다 — Claude 도구와 같은 원장·같은 정지 표시를 쓴다 */
   /* 이 콘솔과 맞는 가드(v7 이상)인가 — 예전 버전이 탭에 남아 있으면 새로 불러와 바꾼다 */
-  function guardOk(){ var G=window.UnpaGuard; return !!(G && G.VERSION>=10 && G.reserveSafe && G.keys && G.keys.goal===GOAL_KEY); }
+  function guardOk(){ var G=window.UnpaGuard; return !!(G && G.VERSION>=11 && G.reserveSafe && G.keys && G.keys.goal===GOAL_KEY); }
   /* 넘기기·다시 가져오기를 누를 때마다 오르는 번호 — 그 전에 만든 동기화의 응답은 작업 권한으로 쓰지 않는다 */
   function leaseEpoch(){ try{ return parseInt(localStorage.getItem('unpa-lease-epoch')||'0',10)||0; }catch(e){ return 0; } }
   function bumpEpoch(){ try{ localStorage.setItem('unpa-lease-epoch', String(leaseEpoch()+1)); }catch(e){} }
