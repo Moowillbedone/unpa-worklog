@@ -884,3 +884,89 @@ test('the device\'s own ledger-only list and its halt do not outlive the month: 
   r=await W.syncWindow(fakeStore(),mk('new00003','2026-11-01T01:10:00.000Z','2026-11-01',{force:1,countFrom:'2026-08-01'}),io3,at('2026-11-01T01:12:00Z'));
   assert.equal(r.goal.lease.ok,true); assert.deepEqual(r.goal.lease.pendR,['800']);
 });
+
+test('a hand-over clicked seconds before midnight at month end that reaches the server after midnight: the November row gets no October income, reviews or halt, so the same-account taker gets the right in November',async()=>{
+  const io=fakeCloud(), uid='u1', at=s=>({uid,now:new Date(s)}), oct=[['1','2026-10-31'],['2','2026-10-31']];
+  const mk=(dev,c,b,to,rv,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,builtAt:b,work:{v:1,from:'2026-10-01',to,reviews:rv,products:[]}},o||{});
+  const octHalt={v:7,month:'2026-10',target:1450000,t:Date.parse('2026-10-31T14:50:00Z'),won:1000};
+  await W.syncWindow(fakeStore(),mk('office01','2026-10-31T13:59:00.000Z','2026-10-31T13:59:30.000Z','2026-10-31',oct),io,at('2026-10-31T14:00:00Z'));   /* 한국 10/31 23:00 — 10월 1,000원 */
+  /* 23:59:55 에 누른 넘기기 — 동기화 창이 서버 확인을 기다리다 11/1 00:00:03 에 반영 */
+  let r=await W.syncWindow(fakeStore(),mk('office01','2026-10-31T14:58:00.000Z','2026-10-31T14:59:55.000Z','2026-10-31',oct,{release:1,pendR:['555'],halt:octHalt}),io,at('2026-10-31T15:00:03Z'));
+  assert.equal(r.goal.lease.why,'released');
+  const row=io.rows['~lease'].data;
+  assert.equal(row.closed,true); assert.equal(row.closedMonth,'2026-11');
+  assert.equal(row.closedWon,null,'10월 금액(1,000)을 11월에 닫은 행에 적지 않는다 — 이 기록엔 11월이 아직 없다');
+  assert.deepEqual(row.closedPendR,[],'10월에 만든 넘기기의 번호(10월 승인)는 넘기지 않는다'); assert.equal(row.closedHalt,null);
+  /* 자정 전에 시작한 집계(그 동기화가 11월에 닿아도)로는 넘겨받지 못한다 — 넘긴 뒤 5분 지나 시작한 집계여야 */
+  r=await W.syncWindow(fakeStore(),mk('home0001','2026-10-31T14:59:50.000Z','2026-10-31T15:00:20.000Z','2026-11-01',oct),io,at('2026-10-31T15:00:30Z'));
+  assert.equal(r.goal.lease.ok,false); assert.equal(r.goal.lease.closed,true); assert.equal(r.goal.lease.after,'2026-10-31T15:05:03.000Z');
+  r=await W.syncWindow(fakeStore(),mk('home0001','2026-10-31T15:06:00.000Z','2026-10-31T15:06:40.000Z','2026-11-01',oct),io,at('2026-10-31T15:07:00Z'));
+  assert.equal(r.goal.lease.ok,true,'같은 CMS 계정의 다른 컴퓨터가 11월에 받는다 (예전: 한 달 내내 behind)'); assert.equal(r.goal.month,'2026-11');
+  assert.deepEqual(r.goal.lease.pendR,[]); assert.equal(r.goal.lease.halt,null);
+  /* 만든 시각이 없는 동기화(예전 형식)는 같은 달로 본다 — 번호를 더 세는 쪽 */
+  const io2=fakeCloud();
+  await W.syncWindow(fakeStore(),mk('office01','2026-10-31T13:59:00.000Z',undefined,'2026-10-31',oct),io2,at('2026-10-31T14:00:00Z'));
+  await W.syncWindow(fakeStore(),mk('office01','2026-10-31T14:58:00.000Z',undefined,'2026-10-31',oct,{release:1,pendR:['556']}),io2,at('2026-10-31T15:00:03Z'));
+  assert.deepEqual(io2.rows['~lease'].data.closedPendR,['556']);
+});
+
+test('a sync built last month that reaches the server in the new month does not put last month\'s ledger-only list on the row: it neither replaces this month\'s list nor survives a month-change renewal',async()=>{
+  const io=fakeCloud(), uid='u1', at=s=>({uid,now:new Date(s)});
+  const mk=(dev,c,b,to,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,builtAt:b,work:{v:1,from:'2026-10-01',to,reviews:[],products:[]}},o||{});
+  await W.syncWindow(fakeStore(),mk('office01','2026-10-31T12:00:00.000Z','2026-10-31T12:00:30.000Z','2026-10-31',{ownPendR:['500']}),io,at('2026-10-31T12:01:00Z'));
+  /* 10/31 23:59:50 에 만든 동기화가 늦어지는 사이 11/1 00:03 에 만든 동기화가 먼저 닿았다 */
+  await W.syncWindow(fakeStore(),mk('office01','2026-10-31T15:02:00.000Z','2026-10-31T15:03:00.000Z','2026-11-01',{ownPendR:['600']}),io,at('2026-10-31T15:03:10Z'));
+  assert.deepEqual(io.rows['~lease'].data.ownPendR,['600']);
+  let r=await W.syncWindow(fakeStore(),mk('office01','2026-10-31T14:58:00.000Z','2026-10-31T14:59:50.000Z','2026-10-31',{ownPendR:['500','501']}),io,at('2026-10-31T15:03:30Z'));
+  assert.equal(r.goal.lease.ok,true); assert.deepEqual(io.rows['~lease'].data.ownPendR,['600'],'지난달 목록으로 바꾸지 않는다');
+  /* 11월 첫 갱신이 10월에 만든 동기화 — 10월 목록을 11월 행에 남기지 않으니, 그 기기 번호를 잃어 가져와도 10월 번호를 세지 않는다 */
+  const io2=fakeCloud();
+  await W.syncWindow(fakeStore(),mk('lost0001','2026-10-31T12:00:00.000Z','2026-10-31T12:00:30.000Z','2026-10-31',{ownPendR:['500']}),io2,at('2026-10-31T12:01:00Z'));
+  await W.syncWindow(fakeStore(),mk('lost0001','2026-10-31T14:58:00.000Z','2026-10-31T14:59:50.000Z','2026-10-31',{ownPendR:['500','501']}),io2,at('2026-10-31T15:00:05Z'));
+  assert.equal(io2.rows['~lease'].data.month,'2026-11'); assert.deepEqual(io2.rows['~lease'].data.ownPendR,[]);
+  r=await W.syncWindow(fakeStore(),mk('new00001','2026-10-31T16:06:00.000Z','2026-10-31T16:06:30.000Z','2026-11-01',{force:1,countFrom:'2026-08-01'}),io2,at('2026-10-31T16:07:00Z'));
+  assert.equal(r.goal.lease.ok,true); assert.deepEqual(r.goal.lease.pendR,[],'10월 번호는 11월에 세지 않는다');
+});
+
+test('a renewal built last month that reaches the server in the new month does not record last month\'s income as the renewal amount, so recovering that lost device in the new month is not blocked',async()=>{
+  const io=fakeCloud(), uid='u1', at=s=>({uid,now:new Date(s)}), oct=[['1','2026-10-31'],['2','2026-10-31']];
+  const mk=(dev,c,b,to,rv,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,builtAt:b,work:{v:1,from:'2026-10-01',to,reviews:rv,products:[]}},o||{});
+  await W.syncWindow(fakeStore(),mk('lost0001','2026-10-31T12:00:00.000Z','2026-10-31T12:00:30.000Z','2026-10-31',oct),io,at('2026-10-31T12:01:00Z'));
+  assert.equal(io.rows['~lease'].data.renewWon,1000);
+  await W.syncWindow(fakeStore(),mk('lost0001','2026-10-31T14:58:00.000Z','2026-10-31T14:59:50.000Z','2026-10-31',oct),io,at('2026-10-31T15:00:05Z'));
+  assert.equal(io.rows['~lease'].data.month,'2026-11');
+  assert.equal(io.rows['~lease'].data.renewWon,null,'11월 행에 10월 금액(1,000)을 적지 않는다 — 이 기록엔 11월이 아직 없다');
+  const r=await W.syncWindow(fakeStore(),mk('new00001','2026-10-31T16:06:00.000Z','2026-10-31T16:06:30.000Z','2026-11-01',oct,{force:1,countFrom:'2026-08-01'}),io,at('2026-10-31T16:07:00Z'));
+  assert.equal(r.goal.lease.ok,true,'11월 금액이 10월 금액보다 적어도 가져온다 (예전: 11월 내내 못 가져옴)');
+  assert.equal(io.rows['~lease'].data.renewWon,0,'가져온 쪽 갱신 금액은 11월 것');
+});
+
+test('a device not on Korean time: the row gets the Korean month\'s income, and the lists it sends are judged by when they were built (Korean month), not by its local date',async()=>{
+  const uid='u1', at=s=>({uid,now:new Date(s)}), oct=[['1','2026-10-31'],['2','2026-10-31']];
+  const mk=(dev,c,b,to,rv,o)=>Object.assign({v:1,gk:7,seq:1,acct:'abc',device:dev,countedAt:c,builtAt:b,work:{v:1,from:'2026-10-01',to,reviews:rv,products:[]}},o||{});
+  /* 한국보다 늦은 시간대(UTC) 기기 — 한국은 11/1 04:00~05:00 인데 기기 날짜(work.to)는 10/31 */
+  let io=fakeCloud();
+  await W.syncWindow(fakeStore(),mk('office01','2026-10-31T18:59:00.000Z','2026-10-31T18:59:30.000Z','2026-10-31',oct),io,at('2026-10-31T19:00:00Z'));
+  assert.equal(io.rows['~lease'].data.month,'2026-11'); assert.equal(io.rows['~lease'].data.renewWon,null,'기기 날짜의 달(10월) 금액이 아니다');
+  await W.syncWindow(fakeStore(),mk('office01','2026-10-31T19:58:00.000Z','2026-10-31T19:59:00.000Z','2026-10-31',oct,{release:1,pendR:['901']}),io,at('2026-10-31T20:00:00Z'));
+  let row=io.rows['~lease'].data;
+  assert.equal(row.closedMonth,'2026-11'); assert.equal(row.closedWon,null);
+  assert.deepEqual(row.closedPendR,['901'],'한국 11월에 만든 목록은 기기 날짜가 10월이어도 넘긴다');
+  let r=await W.syncWindow(fakeStore(),mk('home0001','2026-10-31T20:06:00.000Z','2026-10-31T20:06:30.000Z','2026-11-01',oct),io,at('2026-10-31T20:07:00Z'));
+  assert.equal(r.goal.lease.ok,true); assert.deepEqual(r.goal.lease.pendR,['901']);
+  /* 한국보다 이른 시간대(UTC+10) 기기 — 한국은 10/31 23:00~23:30 인데 기기 날짜는 11/1 */
+  io=fakeCloud();
+  await W.syncWindow(fakeStore(),mk('office01','2026-10-31T13:59:00.000Z','2026-10-31T13:59:30.000Z','2026-11-01',oct),io,at('2026-10-31T14:00:00Z'));
+  assert.equal(io.rows['~lease'].data.month,'2026-10'); assert.equal(io.rows['~lease'].data.renewWon,1000,'기기 날짜의 달(11월, 0원)이 아니라 한국 10월 금액');
+  await W.syncWindow(fakeStore(),mk('office01','2026-10-31T14:28:00.000Z','2026-10-31T14:29:00.000Z','2026-11-01',oct,{release:1,pendR:['902']}),io,at('2026-10-31T14:30:00Z'));
+  row=io.rows['~lease'].data;
+  assert.equal(row.closedMonth,'2026-10'); assert.equal(row.closedWon,1000);
+  assert.deepEqual(row.closedPendR,['902'],'한국 10월에 만든 목록은 기기 날짜가 11월이어도 버리지 않는다');
+  const saved=JSON.parse(JSON.stringify(io.rows['2026-10']));
+  io.rows['2026-10'].data._auto.r['31']=['1']; io.rows['2026-10'].data.days['31'].r=1; io.rows['2026-10'].data.days['31'].auto={r:1,p:0};   /* 서버 달 기록이 덮여 2번이 빠졌다 */
+  r=await W.syncWindow(fakeStore(),mk('home0001','2026-10-31T14:36:00.000Z','2026-10-31T14:36:30.000Z','2026-10-31',[['1','2026-10-31']]),io,at('2026-10-31T14:37:00Z'));
+  assert.equal(r.goal.lease.why,'behind','닫을 때 금액이 10월 것이라 빠진 기록을 알아챈다');
+  io.rows['2026-10']=saved;
+  r=await W.syncWindow(fakeStore(),mk('home0001','2026-10-31T14:38:00.000Z','2026-10-31T14:38:30.000Z','2026-10-31',oct),io,at('2026-10-31T14:39:00Z'));
+  assert.equal(r.goal.lease.ok,true); assert.deepEqual(r.goal.lease.pendR,['902']);
+});

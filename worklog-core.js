@@ -343,6 +343,11 @@
       for(const r of olds){const o=r&&r.data;if(o&&o.device!==dev&&(Date.parse(o.until)||0)+SKEW_MS>t)return {ok:false,why:'other',closed:false};}
     }
     const ep=typeof p.leaseEpoch==='number'&&isFinite(p.leaseEpoch)?p.leaseEpoch:null,mo=kstMonthOf(t);
+    /* 지난달에 만든 동기화가 이번 달에 닿았다(달 마지막 자정 직전에 누른 넘기기 등) — 그 동기화가 보낸 달 목록(넘길 번호·기기 원장 번호·뺄 번호·정지)은
+       지난달 것이라 이번 달 행에 쓰지 않는다. 만든 시각(builtAt, 한국 달)으로 본다: 목록은 콘솔 가드가 한국 시간 달로 만들고, work.to 는 기기 시간대 날짜라
+       한국 달과 다를 수 있다(그걸로 보면 이번 달 번호를 버릴 수 있다). 만든 시각을 모르면 같은 달로 본다(더 세는 쪽) */
+    const bAt=Date.parse(p.builtAt);
+    if(isFinite(bAt)&&kstMonthOf(bAt)<mo)p=Object.assign({},p,{pendR:[],ownPendR:undefined,dropR:[],halt:null});
     if(mine&&p.release){
       if(cur.closed)return {ok:false,why:'released'};                       /* 이미 넘겨 둠 — 다시 쓰지 않는다(넘겨받는 쪽 기준 시각이 밀리지 않게) */
       /* 지금 쓰는 권한을 받은 순번(grantEpoch)보다 앞 순번으로 만든 넘기기 — [다시 가져오기] 전에 누른 넘기기가 늦게 닿았다. 다시 받은 권한을 닫지 않는다 */
@@ -476,7 +481,10 @@
       /* 이번 달 작업 권한(승인·제품 등록) — CMS 계정마다 한 기기만. 다른 기기가 최근 한 승인은 그 기기가 동기화하기 전엔 안 보이므로,
          권한을 넘겨받으려면 앞 기기의 권한이 끝난 뒤(시계 차 5분 여유) 시작한 CMS 집계가 있어야 한다 */
       if(cloud==='on')try{
-        const mk0=p.work.to.slice(0,7),mm=(JSON.parse(store.getItem(key))||{}).months||{},md0=mm[mk0];
+        /* won0 = 권한 행이 적히는 달(이 창 시각의 한국 시간 달)의 업무일지 금액 — 닫을 때 금액(closedWon)·갱신 때 금액(renewWon)이 된다.
+           지난달에 만든 동기화가 자정 뒤 닿았거나 기기 시간대가 한국이 아니면 work.to 의 달과 다르다(지난달 금액을 이번 달 행에 적으면 넘겨받는 쪽이 한 달 내내 'behind').
+           이 기록에 그 달이 아직 없으면 null(모름 — 비교하지 않는다) */
+        const mk0=kstMonthOf(now.getTime()),mm=(JSON.parse(store.getItem(key))||{}).months||{},md0=mm[mk0];
         let won0=null;if(md0){let r=0,q=0;Object.values(md0.days||{}).forEach(d=>{r+=d.r||0;q+=d.p||0;});won0=r*500+q*600;}
         lease=await claimLease(io,p,now,sk,won0);
       }catch(e){lease={ok:false,why:'cloud'};}
