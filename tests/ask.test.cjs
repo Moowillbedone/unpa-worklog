@@ -7,11 +7,11 @@ const path=require('node:path');
 const root=path.resolve(__dirname,'..');
 const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
 
-function askWork(o,ex){
-  const fn=html.split('function askWork(o,ex){')[1].split('\nfunction askLoad')[0];
+function askWork(o,ex,peer){
+  const fn=html.split('function askWork(o,ex,peer){')[1].split('\nfunction askLoad')[0];
   const ctx={JSON,Object,String,Array};
-  vm.createContext(ctx); vm.runInContext('function askWork(o,ex){'+fn+';globalThis.f=askWork;',ctx);
-  return JSON.parse(JSON.stringify(ctx.f(o,ex)));
+  vm.createContext(ctx); vm.runInContext('function askWork(o,ex,peer){'+fn+';globalThis.f=askWork;',ctx);
+  return JSON.parse(JSON.stringify(ctx.f(o,ex,peer)));
 }
 const row=(id,d,status,extra)=>Object.assign({id,d,brand:'b',product:'p',status},extra||{});
 
@@ -73,4 +73,31 @@ test('the 컨펌 대기 hint counts 보류 and 도용 separately, matching the �
   }}),{hold:2,plag:1});
   assert.deepEqual(n(null),{hold:0,plag:0});
   assert.match(html,/검수 예외의 '\+waitTabs\+' 탭에서/,'안내 문구가 보류·도용 탭 이름을 함께 말한다');
+});
+
+/* 동료에게 맡긴 작성일 (업무일지 동료 검수 칸의 [맡김]) — 2026-10-31 */
+test('dates handed to the colleague stay out of the request, new reviews and 수정완료 alike, and are counted apart',()=>{
+  const o={at:'2026-10-31T09:00:00Z',backlog:[
+    row('487500','2026-10-28','PENDING'),row('487501','2026-10-28','PENDING'),row('487502','2026-10-28','UPDATED'),
+    row('487900','2026-10-30','PENDING'),row('488000','2026-10-31','PENDING'),row('486600','2026-10-26','UPDATED'),
+    row('487503','2026-10-28','PENDING',{blocked:true}),
+  ]};
+  const w=askWork(o,null,new Set(['2026-10-28','2026-10-30']));
+  assert.deepEqual(w.dates,[{d:'2026-10-31',n:1}],'맡긴 10/28·10/30 은 새 리뷰에서 빠진다');
+  assert.deepEqual(w.upd,['486600'],'맡긴 날의 수정완료(487502)도 내 요청에서 빠진다');
+  assert.deepEqual(w.peer,[{d:'2026-10-28',n:3},{d:'2026-10-30',n:1}],'맡긴 날 남은 건수는 따로 — 정지 사용자 건은 세지 않는다');
+  assert.equal(w.text,'언파 검수 — 10/31 1건 전체 진행해줘 (승인·수정요청·미노출·제품/브랜드 등록까지) / 수정완료 1건 검토해줘: 486600');
+  /* 배열로 넘겨도, 안 넘겨도 된다 */
+  assert.deepEqual(askWork(o,null,['2026-10-30']).peer,[{d:'2026-10-30',n:1}]);
+  const none=askWork(o,null);
+  assert.deepEqual(none.peer,[]); assert.equal(none.n,4,'맡긴 날을 안 넘기면 10/28·10/30 도 내 새 리뷰로 센다');
+  /* 전부 맡긴 날이면 보낼 문구가 없다 */
+  assert.equal(askWork({backlog:[row('1','2026-10-28','PENDING')]},null,new Set(['2026-10-28'])).text,'');
+});
+
+test('the request modal, the ✏️ badge and the update summary all read the same handed-off dates',()=>{
+  assert.match(html,/return askWork\(o,ex,peerDaySet\(\)\);/,'📋 요청 문구는 업무일지에 표시한 맡긴 날을 쓴다');
+  const upd=html.split('function updatedReviews(){')[1].split('\nfunction renderUpdList')[0];
+  assert.match(upd,/peerDaySet\(\)/,'✏️ 수정완료 배지도');
+  assert.match(html,/\+\(info\.remain\?updRemainHtml\(info\.remain\):''\)/,'업데이트 결과의 남은 검수도');
 });

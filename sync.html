@@ -26,7 +26,7 @@
   <div class="st" style="font-size:12px"><a href="./" target="_blank" rel="noopener">업무일지 열기 ↗</a> · 반영이 끝나면 이 창은 저절로 닫힙니다.</div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-<script src="worklog-core.js?v=15"></script>
+<script src="worklog-core.js?v=16"></script>
 <script>
 /* 검수 콘솔(cms.unpa.me)이 이 창을 열고 CMS 집계를 넘긴다.
    여기서 이 브라우저의 업무일지·검수기록 저장소에 반영하고 결과를 돌려준 뒤 닫힌다.
@@ -128,6 +128,14 @@
       return Object.keys(it).filter(function(k){ return it[k] && it[k].ign===true; }).map(String).slice(0,2000); }
     catch(e){ return null; }
   }
+  /* 업무일지 동료 검수 칸에서 '맡김'으로 표시한 작성일 — 콘솔이 남은 검수·전체 스캔에서 뺀다(동료 몫) */
+  function peerDays(){
+    try{ var k=localStorage.getItem('unpa-worklog-active')||'unpa-worklog-v1', o=JSON.parse(localStorage.getItem(k)||'null'), ms=(o&&o.months)||{}, out=[];
+      Object.keys(ms).forEach(function(m){ var t=ms[m]; if(!t||!t.days||!/^\d{4}-\d{2}$/.test(m)) return;
+        Object.keys(t.days).forEach(function(dd){ var x=t.days[dd]; if(x&&x.peer&&x.peer.on===true&&/^\d{2}$/.test(dd)) out.push(m+'-'+dd); }); });
+      return out.sort().slice(-400); }
+    catch(e){ return null; }
+  }
   function show(res){
     if(!res.ok){ st.innerHTML='<span class="bad">반영 실패</span> — '+String(res.error||'').replace(/[<>&]/g,''); return; }
     st.innerHTML='<span class="ok">반영 완료</span> · 오늘('+md(res.today.d)+') 리뷰 <b>'+res.today.r+'</b> · 제품 <b>'+res.today.p+'</b>'
@@ -152,13 +160,13 @@
     var res;
     try{ res=await apply(ev.data.payload); }catch(e){ res={ok:false,error:String(e&&e.message||e)}; }
     show(res);
-    try{ src.postMessage(Object.assign({type:'unpa-sync-done',nonce:nonce,seq:ev.data.payload&&ev.data.payload.seq},res,{ignored:ignoredIds()}), CMS); }catch(e){}
+    try{ src.postMessage(Object.assign({type:'unpa-sync-done',nonce:nonce,seq:ev.data.payload&&ev.data.payload.seq},res,{ignored:ignoredIds(),peerDays:peerDays()}), CMS); }catch(e){}
     setTimeout(function(){ window.close(); }, res.ok ? (res.nChanges ? 6000 : 2500) : 15000);
   });
   /* 서버 무시 목록은 길어야 몇 초만 기다린다 — 늦으면 이 브라우저 것으로 먼저 시작하고, 반영 끝에 다시 알린다 */
   (async function(){
     try{ var c=await within(CLOUD, 5000); if(c) await within(pullExc(c), 5000); }catch(e){}
-    src.postMessage({type:'unpa-sync-ready',nonce:nonce,ignored:ignoredIds()}, CMS);
+    src.postMessage({type:'unpa-sync-ready',nonce:nonce,ignored:ignoredIds(),peerDays:peerDays()}, CMS);
   })();
   setTimeout(function(){ if(!done) st.textContent='콘솔 응답이 없습니다. 이 창을 닫고 콘솔에서 다시 시도하세요.'; }, 60000);
 })();

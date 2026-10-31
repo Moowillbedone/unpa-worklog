@@ -1513,15 +1513,16 @@
     paintStart(backlog, sd);
   }
   /* 시작 화면 그리기 — 목록은 다시 받지 않는다. 동기화로 '무시' 목록이 바뀌면 이것만 다시 부른다 */
-  function paintStart(backlog, sd){
+  function paintStart(allBacklog, sd){
     START_SD=sd;
     var manual=manualHtml(sd);
+    var backlog=allBacklog.filter(function(b){ return !isPeerDate(b.date); }), peerB=allBacklog.filter(function(b){ return isPeerDate(b.date); });
     var total=0, upd=0, ign=0;
     backlog.forEach(function(b){ total+=b.rows.length; upd+=bUpdated(b); ign+=bIgnored(b); });
     var warns='';
-    if(backlog.failed && backlog.failed.length)
-      warns+='<div style="margin-top:8px;font-size:11.5px;color:#ff8f6b">⚠ 조회 실패 '+backlog.failed.length+'일 ('
-        +backlog.failed.slice(0,6).map(function(d){ return d.slice(5); }).join(', ')+(backlog.failed.length>6?' …':'')
+    if(allBacklog.failed && allBacklog.failed.length)
+      warns+='<div style="margin-top:8px;font-size:11.5px;color:#ff8f6b">⚠ 조회 실패 '+allBacklog.failed.length+'일 ('
+        +allBacklog.failed.slice(0,6).map(function(d){ return d.slice(5); }).join(', ')+(allBacklog.failed.length>6?' …':'')
         +') — 이 날짜는 목록에 없습니다. 잠시 뒤 콘솔을 다시 열어 주세요.</div>';
     if(!tplMap.product_match || !tplMap.swatch)
       warns+='<div style="margin-top:8px;font-size:11.5px;color:#ff8f6b">⚠ 수정요청 안내 문구를 불러오지 못했습니다 — 제품 재선택·발색샷 요청은 보낼 수 없습니다. 새로고침 후 다시 실행해 주세요.</div>';
@@ -1533,6 +1534,8 @@
             +(bIgnored(b)?' <span style="color:#6b7f77">무시 '+bIgnored(b)+'</span>':'')+'</span></div>';
         }).join('') + (backlog.length>14?'<div style="color:#6b7f77;font-size:11px;margin-top:3px">… 외 '+(backlog.length-14)+'일</div>':'')
       : '<div style="color:#3ddc97">짝수일에 남은 일이 없습니다 🎉</div>';
+    if(peerB.length) list+='<div style="margin-top:6px;color:#b9a7f5">🤝 동료에게 맡긴 날 — 스캔하지 않습니다: '
+      +peerB.map(function(b){ return b.date.slice(5)+' '+b.rows.length+'건'; }).join(' · ')+'</div>';
     box.innerHTML=head(
       '<div style="margin-top:9px;color:#9fb4ab">📋 남은 일 · 짝수일 최근 '+BACKLOG_DAYS+'일</div>'
       +'<div style="margin-top:6px;font-size:12px;color:#9fb4ab">'+list+'</div>'+warns
@@ -1588,6 +1591,31 @@
     if(mine && BACKLOG && box.querySelector('#csStart')){ paintStart(BACKLOG, START_SD); return; }
     var before=results.length;
     results=results.filter(function(r){ return r.applied || !isIgn(r.id); });
+    if(mine && results.length!==before && !window.__CONSOLE_RUNNING && !document.getElementById('csGrid') && box.querySelector('#csRun')) renderQueue(SCAN_DATE);
+  }
+  /* 업무일지 동료 검수 칸에서 '맡김'으로 표시한 작성일 — 동기화 창이 알려 주면 이 브라우저에 적어 둔다.
+     그날 리뷰는 동료 몫이라 남은 일 목록·전체 스캔·수정완료 검토에서 뺀다. 남은 건수(미등록 칸)는 그대로 센다(동료 진행 상황) */
+  var PEER_KEY='unpa-console-peerdays-v1';
+  function peerLoad(){ try{ var o=JSON.parse(localStorage.getItem(PEER_KEY)||'null'); return (o && o.days && typeof o.days==='object') ? o.days : {}; }catch(e){ return {}; } }
+  var PEERD=peerLoad();
+  function isPeerDate(d){ return PEERD[String(d)]===1; }
+  function peerSet(list){
+    var next={}; (list||[]).forEach(function(d){ if(validDate(String(d))) next[String(d)]=1; });
+    var a=Object.keys(PEERD).sort().join(','), b=Object.keys(next).sort().join(',');
+    PEERD=next;
+    try{ localStorage.setItem(PEER_KEY, JSON.stringify({ at:new Date().toISOString(), days:next })); }catch(e){}
+    return a!==b;
+  }
+  function jobDate(r){ var d=(r && r.date) || SCAN_DATE; return validDate(d) ? d : null; }
+  function isPeerJob(r){ var d=jobDate(r); return !!d && isPeerDate(d); }
+  function peerApply(list){
+    if(!Array.isArray(list)) return;                  /* 예전 업무일지(목록 없음) — 적어 둔 것을 그대로 둔다 */
+    if(!peerSet(list) || SYNC_ONLY) return;
+    var mine=box && box.isConnected;
+    if(mine && BACKLOG && box.querySelector('#csStart')){ paintStart(BACKLOG, START_SD); return; }
+    /* 목록이 오기 전에 스캔해 둔 맡긴 날 리뷰는 결과에서 뺀다(실행 직전에도 runJobs 가 한 번 더 거른다) */
+    var before=results.length;
+    results=results.filter(function(r){ return r.applied || !isPeerJob(r); });
     if(mine && results.length!==before && !window.__CONSOLE_RUNNING && !document.getElementById('csGrid') && box.querySelector('#csRun')) renderQueue(SCAN_DATE);
   }
   function bUpdated(b){ return b.rows.filter(function(x){ return x.status==='UPDATED' && !isIgn(x.id); }).length; }
@@ -2059,6 +2087,12 @@
       jobs=jobs.filter(function(r){ return !isIgn(r.id); });
       if(!jobs.length){ alert('선택한 건은 모두 업무일지에서 무시한 리뷰입니다.\n처리하려면 업무일지 › 검수 예외 › 무시 탭에서 복원한 뒤 다시 여세요.'); return; }
     }
+    /* 동료에게 맡긴 날(업무일지 동료 검수 칸)의 리뷰는 보내지 않는다 — 목록이 오기 전에 스캔해 둔 건이 남아 있어도 */
+    var nPeer=jobs.filter(isPeerJob).length;
+    if(nPeer){
+      jobs=jobs.filter(function(r){ return !isPeerJob(r); });
+      if(!jobs.length){ alert('선택한 건은 모두 동료에게 맡긴 날의 리뷰입니다.\n처리하려면 업무일지 동료 검수 칸에서 [맡김]을 해제한 뒤 다시 여세요.'); return; }
+    }
     /* 안내 문구를 못 불러왔으면 수정요청은 만들 수 없다 — 실행 도중이 아니라 지금 알린다 */
     var noReq=jobs.filter(function(r){ return !buildReq(r); });
     if(noReq.length){
@@ -2099,7 +2133,7 @@
       return;
     }
     var summ=Object.keys(byAct).map(function(k){ return ACT[k].t+' '+byAct[k]+'건'; }).join(' · ');
-    if(!confirm('실제로 '+jobs.length+'건을 처리합니다.\n\n'+summ+goalNote+(nIgn?'\n\n업무일지에서 무시한 '+nIgn+'건은 뺐습니다.':'')+'\n\n진행할까요?')) return;
+    if(!confirm('실제로 '+jobs.length+'건을 처리합니다.\n\n'+summ+goalNote+(nIgn?'\n\n업무일지에서 무시한 '+nIgn+'건은 뺐습니다.':'')+(nPeer?'\n\n동료에게 맡긴 날의 '+nPeer+'건은 뺐습니다.':'')+'\n\n진행할까요?')) return;
 
     window.__CONSOLE_RUNNING=true;
     var run=document.getElementById('csRun'); if(run){ run.disabled=true; run.textContent='실행 중…'; }
@@ -2365,13 +2399,17 @@
     return Array.isArray(by) && by.length ? String(by[by.length-1]||'').trim().toLowerCase() : '';
   }
   function localDay(iso){ var d=new Date(iso); return isFinite(d.getTime()) ? ymd(d) : null; }
+  /* 다른 계정 — 업무일지 기록에는 계정 해시만 남긴다(내보내기·서버에 이름이 안 남게). 이름(이메일 앞부분)은 이 브라우저 업무일지에만 따로 둔다.
+     코드에는 누구의 계정도 적지 않는다 */
+  function peerKey(e){ var s=String(e||'').trim().toLowerCase(); if(!s) return '?'; var h=5381; for(var i=0;i<s.length;i++) h=(Math.imul(h,33)^s.charCodeAt(i))>>>0; return h.toString(36); }
+  function peerLabel(e){ return String(e||'').split('@')[0].toLowerCase().replace(/[^0-9a-z._-]/g,'').slice(0,24) || '?'; }
 
   async function collectWork(me, onProgress){
     var now=new Date(), dates=[], startedAt=now.toISOString();   /* 이 시각 뒤에 한 승인은 이번 집계에 없을 수 있다 — 목표 가드가 따로 센다 */
     /* [권한이 남은 기기를 못 쓸 때: 가져오기]로 시작한 넓은 집계인가 — 시작할 때 읽고 바로 지운다(이 집계로 만든 동기화만 force 를 보낸다) */
     var force=!!FORCE_LEASE, nDays=WORK_DAYS_OVERRIDE||WORK_DAYS; FORCE_LEASE=false; WORK_DAYS_OVERRIDE=0;
     for(var i=0;i<nDays;i++) dates.push(ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate()-i)));
-    var reviews={}, products={}, failed=[], next=0, doneN=0, watch={}, mine=[], notMine={};
+    var reviews={}, products={}, failed=[], next=0, doneN=0, watch={}, mine=[], notMine={}, peer={}, peerNames={};
     var watchIds=Object.assign({}, pendingLoad(), hidefpLoad());
     async function worker(){
       while(next<dates.length){
@@ -2383,6 +2421,10 @@
           if(r.status!==200 || !rows){ failed.push(sd); break; }
           rows.forEach(function(x){
             if(!x || x.id==null) return;
+            /* 이 작성일 리뷰를 누가 승인했나 — 다른 계정(동료)이 승인한 건수는 업무일지 동료 검수 칸에 (내 수입과는 따로).
+               내 담당인 짝수일과 동료에게 맡긴 날만 센다(홀수일은 원래 다른 담당자 날) */
+            if(x.approvedAt && sd>=AUTO_FROM && (+sd.slice(8)%2===0 || isPeerDate(sd))){ var who=lastActor(x), q=peer[sd]||(peer[sd]={me:0,by:{}});
+              if(who===me) q.me++; else { var pk=peerKey(who); q.by[pk]=(q.by[pk]||0)+1; if(who) peerNames[pk]=peerLabel(who); } }
             /* 대기 목록에 있는 리뷰는 그 뒤 상태를 지켜본다 (배우기) */
             if(watchIds[String(x.id)]) watch[String(x.id)]={ status:x.status, productName:x.productName||'', brandName:x.brandName||'',
                                                              visible:x.visible, actor:lastActor(x) };
@@ -2417,8 +2459,10 @@
       if(prow.length<300 || (oldest && oldest<since)) break;
       pg++;
     }
+    /* 다른 계정 승인이 있는 작성일만 넘긴다 (그날 내 승인 수와 함께) */
+    var peerDays={}; Object.keys(peer).forEach(function(d){ if(Object.keys(peer[d].by).length) peerDays[d]=peer[d]; });
     return { reviews:reviews, products:products, failed:failed, watch:watch, mine:mine, notMine:notMine, at:new Date().toISOString(), startedAt:startedAt,
-             countFrom:dates[dates.length-1], force:force };
+             countFrom:dates[dates.length-1], countTo:dates[0], peer:peerDays, peerNames:peerNames, force:force };
   }
 
   /* ── 보관함: 아직 업무일지에 못 넘긴 검수기록·실행 결과 ── */
@@ -2493,7 +2537,10 @@
              force:(WORK && WORK.force) ? 1 : 0, countFrom:(WORK && WORK.countFrom) || null,
              pendR:(rel && pids) ? pids : [], ownPendR:(!SYNC_ONLY && pids) ? pids : undefined, dropR:dropR, halt:halt, countedAt:(WORK && WORK.startedAt) || null, builtAt:new Date().toISOString(), monthPartial:!WORK || monthFailed(WORK),
              work:{ v:1, from:AUTO_FROM, to:ymd(new Date()), reviews:rv, products:pv, partial:!!(WORK && WORK.failed.length) },
-             audit:ob.audit||{}, pending:(SYNC_ONLY && !BACKLOG) ? null : pendingList(), backlog:backlogList(), remain:remainList(), console:consoleState() };
+             audit:ob.audit||{}, pending:(SYNC_ONLY && !BACKLOG) ? null : pendingList(), backlog:backlogList(), remain:remainList(), console:consoleState(),
+             peer:(WORK && WORK.peer && WORK.countFrom && WORK.countTo) ? { v:1, at:WORK.at, from:WORK.countFrom>AUTO_FROM ? WORK.countFrom : AUTO_FROM, to:WORK.countTo,
+                    failed:(WORK.failed||[]).filter(validDate), days:WORK.peer } : null,
+             peerNames:(WORK && WORK.peerNames) || null };
   }
   /* 이 브라우저(기기) 번호 — 업무일지 서버가 이번 달 작업 권한을 한 기기에만 준다 */
   function deviceId(){
@@ -2520,7 +2567,7 @@
     PRE={ win:PRE_WIN, nonce:nonce, ready:false };
     window.addEventListener('message', function(ev){
       if(!PRE || ev.origin!==WL_ORIGIN || ev.source!==PRE.win || !ev.data || ev.data.nonce!==PRE.nonce) return;
-      if(ev.data.type==='unpa-sync-ready'){ PRE.ready=true; PRE.ignored=ev.data.ignored; }
+      if(ev.data.type==='unpa-sync-ready'){ PRE.ready=true; PRE.ignored=ev.data.ignored; PRE.peerDays=ev.data.peerDays; }
     });
   }
   function preProgress(text){
@@ -2542,16 +2589,17 @@
     SYNCING=true;
     /* 넘길 집계는 창이 '준비' 신호와 함께 최신 무시 목록을 준 다음에 만든다 — 수정완료 수가 한 번 늦게 따라가지 않게 */
     var payload=null;
-    var postData=function(ignored){ ignApply(ignored); payload=workPayload(); w.postMessage({ type:'unpa-sync-data', nonce:nonce, payload:payload }, WL_ORIGIN); };
+    var postData=function(ignored, peerDays){ ignApply(ignored); peerApply(peerDays); payload=workPayload(); w.postMessage({ type:'unpa-sync-data', nonce:nonce, payload:payload }, WL_ORIGIN); };
     syncStatus('📒 업무일지에 반영 중…');
     var timer;
     var finish=function(){ SYNCING=false; clearTimeout(timer); window.removeEventListener('message', onMsg); };
     var onMsg=function(ev){
       if(ev.origin!==WL_ORIGIN || ev.source!==w || !ev.data || ev.data.nonce!==nonce) return;
-      if(ev.data.type==='unpa-sync-ready'){ if(!payload) postData(ev.data.ignored); return; }
+      if(ev.data.type==='unpa-sync-ready'){ if(!payload) postData(ev.data.ignored, ev.data.peerDays); return; }
       if(ev.data.type!=='unpa-sync-done') return;
       finish();
       ignApply(ev.data.ignored);     /* 서버에서 받아 합친 무시 목록 (다른 컴퓨터에서 한 것까지) */
+      peerApply(ev.data.peerDays);   /* 동료에게 맡긴 작성일 (다른 컴퓨터에서 표시한 것까지) */
       if(!ev.data.ok){ syncButton('<span style="color:#ff8f6b">⚠ 업무일지 반영 실패 — '+esc(String(ev.data.error||'').slice(0,80))+'</span>'); return; }
       if(ev.data.console) applyConsoleState(ev.data.console);
       /* 다른 탭이 더 최근 집계로 남긴 스냅샷은 덮지 않는다 — 단 가드가 받아 주는 스냅샷일 때만(미래 시각·1시간 넘음·일부 실패·번호 목록 없음이면 새 것으로 바꾼다) */
@@ -2604,7 +2652,7 @@
     };
     window.addEventListener('message', onMsg);
     /* 미리 연 창이 이미 준비 신호를 보냈으면 기다리지 않고 바로 넘긴다 */
-    if(pre && pre.ready) postData(pre.ignored);
+    if(pre && pre.ready) postData(pre.ignored, pre.peerDays);
     timer=setTimeout(function(){ finish(); syncButton('<span style="color:#ff8f6b">⚠ 업무일지 창 응답 없음</span>'); }, 45000);
     return true;
   }
@@ -2613,11 +2661,14 @@
   function syncOnlyDone(){
     var rm=remainList();
     if(rm){
-      var ds=Object.keys(rm.days).filter(function(d){ return rm.days[d].n>0; }).sort();
+      var md=function(d){ return (+d.slice(5,7))+'/'+(+d.slice(8))+' '+rm.days[d].n; };
+      var all=Object.keys(rm.days).filter(function(d){ return rm.days[d].n>0; }).sort();
+      var ds=all.filter(function(d){ return !isPeerDate(d); }), pds=all.filter(function(d){ return isPeerDate(d); });
       var n=ds.reduce(function(s,d){ return s+rm.days[d].n; },0);
       var note=document.createElement('div'); note.style.cssText='margin-top:6px;font-size:11.5px;color:#9fb4ab';
       note.innerHTML='📋 남은 검수 <b style="color:#e8f1ed">'+n+'</b>건'
-        +(ds.length?' · '+ds.map(function(d){ return (+d.slice(5,7))+'/'+(+d.slice(8))+' '+rm.days[d].n; }).join(', '):' — 짝수일 모두 끝')
+        +(ds.length?' · '+ds.map(md).join(', '):' — 짝수일 모두 끝')
+        +(pds.length?' · 🤝 동료 맡김 '+pds.map(md).join(', '):'')
         +(BACKLOG && BACKLOG.failed && BACKLOG.failed.length?' <span style="color:#f5c451">(조회 실패 '+BACKLOG.failed.length+'일은 그대로 둠)</span>':'');
       box.appendChild(note);
     }

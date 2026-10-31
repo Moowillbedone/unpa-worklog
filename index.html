@@ -7,7 +7,7 @@
 <meta name="color-scheme" content="light" />
 <meta name="theme-color" content="#eef1f0" />
 <title>리뷰·제품등록 업무일지</title>
-<script src="worklog-core.js"></script>
+<script src="worklog-core.js?v=16"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <style>
@@ -92,6 +92,7 @@ body{margin:0;background:var(--bg);color:var(--tx);
 /* ── table ── */
 .tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r2);background:var(--surface)}
 table{border-collapse:separate;border-spacing:0;width:100%;font-size:13px;min-width:760px}
+table.daytbl{min-width:900px}
 th,td{padding:0;text-align:left}
 thead th{background:var(--sunk);color:var(--mid);font-size:11.5px;font-weight:800;letter-spacing:.02em;
   padding:11px 13px;white-space:nowrap;position:sticky;top:0;z-index:2;border-bottom:2px solid var(--line2)}
@@ -114,6 +115,15 @@ td input.num.auto{box-shadow:inset 3px 0 0 var(--mint,#3ddc97)}
 td input.memo.auto{box-shadow:inset 3px 0 0 var(--mint,#3ddc97);font-weight:700}
 .unregw{display:flex;align-items:center;gap:6px}
 .pendb{flex:none;font-size:11px;font-weight:800;color:var(--mint-dk);background:var(--mint-lt);border-radius:20px;padding:1px 8px;white-space:nowrap}
+/* 동료 검수 칸 — [맡김] 표시와 CMS 기준 다른 계정 승인 건수 */
+.peerw{display:flex;align-items:center;gap:7px;flex-wrap:wrap;min-height:34px}
+.peerb{flex:none;border:1.5px dashed var(--line2);background:transparent;color:var(--dim);border-radius:20px;padding:2px 10px;font:inherit;font-size:11.5px;font-weight:700;cursor:pointer;white-space:nowrap;line-height:20px}
+.peerb:hover{border-color:var(--violet);color:var(--violet)}
+.peerb:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(124,92,214,.22)}
+.peerb.on{border-style:solid;border-color:var(--violet);background:var(--violet-lt);color:var(--violet)}
+.peerc{font-size:11.5px;font-weight:700;color:var(--mid);white-space:nowrap}
+.peerc.full{color:var(--mint-dk)}
+tr.peer .unregw input{color:var(--dim)}
 .autoInfo{font-size:12px;color:var(--dim)}
 .autoInfo b{color:inherit}
 .autoInfo details{display:inline}
@@ -307,14 +317,15 @@ tfoot td.inc{color:var(--mint-dk);font-size:14px}
   <div class="card">
     <div class="chd"><h2 id="dayTitle">일별 기록</h2><span class="hint" id="autoHint">숫자 칸을 클릭해 바로 입력 · 자동 저장</span></div>
     <div class="tw">
-      <table>
+      <table class="daytbl">
         <thead><tr>
           <th style="width:88px">날짜</th>
           <th style="width:112px">리뷰 검수</th>
           <th style="width:112px">제품 등록</th>
           <th style="width:118px;text-align:right">예상 수입</th>
-          <th>리뷰 수정여부</th>
-          <th>미등록 제품수</th>
+          <th style="width:140px">리뷰 수정여부</th>
+          <th style="width:160px">미등록 제품수</th>
+          <th title="동료(다른 검수자)에게 맡긴 작성일을 표시합니다 — 업데이트 때 CMS에서 그날 리뷰를 다른 계정이 승인한 건수도 함께 보입니다">동료 검수</th>
         </tr></thead>
         <tbody id="dayBody"></tbody>
         <tfoot id="dayFoot"></tfoot>
@@ -841,6 +852,47 @@ function unregCell(d, dd){
   const badge = p && !auto && p.n > 0 ? `<span class="pendb" title="${htmlEscape(tip)}">남은 ${p.n}</span>` : '';
   return `<div class="unregw"><input class="memo${auto?' auto':''}" type="text" value="${htmlEscape(d.unreg)}" placeholder="—" data-d="${dd}" data-f="unreg" title="${htmlEscape(tip)}">${badge}</div>`;
 }
+/* 동료 검수 칸 — [맡김]은 사람이 누르는 표시(이 작성일 리뷰는 동료에게 맡겼음), 옆 숫자는 CMS 기준 그날 작성 리뷰를 다른 계정이 승인한 건수.
+   담당인 짝수일과 맡긴 날만 보인다 — 홀수일은 원래 다른 담당자 날이라 늘 차 있다. 내 수입(리뷰·제품 수)과는 상관없다 */
+const isPeerDay = d => !!(d && d.peer && d.peer.on === true);
+function peerCell(d, dd){
+  const on = isPeerDay(d), even = (+dd) % 2 === 0;
+  if (!on && !even) return '';
+  const c = d.peerCms, ot = c && Number.isSafeInteger(c.ot) ? c.ot : 0, me = c && Number.isSafeInteger(c.me) ? c.me : 0;
+  const pend = d.pend && Number.isSafeInteger(d.pend.n) ? d.pend.n : null;
+  let info = '';
+  if (ot > 0){
+    const full = me === 0 && pend === 0, at = new Date(c.at), p2 = n => String(n).padStart(2,'0');
+    let names = {}; try { names = JSON.parse(localStorage.getItem('unpa-peer-names-v1') || '{}') || {}; } catch (e) {}
+    const by = Object.entries(c.by || {}).filter(([,n]) => Number.isSafeInteger(n) && n > 0).sort((a,b) => b[1]-a[1])
+      .map(([k,n], i) => (typeof names[k] === 'string' && names[k] ? names[k] : k === '?' ? '승인자 모름' : '다른 계정 ' + (i+1)) + ' ' + n + '건').join(' · ');
+    const tip = 'CMS 기준 이 날 작성 리뷰를 다른 계정이 승인: ' + (by || ot + '건') + (me ? ' · 내 승인 ' + me + '건' : '')
+      + (pend == null ? '' : pend ? ' · 아직 남은 검수 ' + pend + '건' : ' · 남은 검수 없음')
+      + (isFinite(at) ? ' · ' + p2(at.getMonth()+1) + '-' + p2(at.getDate()) + ' ' + p2(at.getHours()) + ':' + p2(at.getMinutes()) + ' 확인' : '')
+      + ' — 내 수입(리뷰·제품 수)에는 들어가지 않습니다';
+    const txt = full ? '✓ 전부 ' + num(ot) + '건' : '동료 ' + num(ot) + (me ? ' · 나 ' + num(me) : '') + (pend ? ' · 남은 ' + num(pend) : '');
+    info = `<span class="peerc${full ? ' full' : ''}" title="${htmlEscape(tip)}">${txt}</span>`;
+  }
+  const btip = on ? '동료에게 맡긴 날로 표시됨 — 📋 요청 문구·✏️ 수정완료·남은 검수에서 뺍니다. 다시 누르면 해제합니다'
+                  : '이 날 작성된 리뷰를 동료에게 맡겼으면 눌러 표시하세요 — 내 할 일 목록에서 빠집니다';
+  return `<div class="peerw"><button type="button" class="peerb${on ? ' on' : ''}" data-pd="${dd}" aria-pressed="${on}" title="${htmlEscape(btip)}">${on ? '🤝 맡김' : '맡김'}</button>${info}</div>`;
+}
+/* 동료에게 맡긴 작성일 — 'YYYY-MM-DD' 모음 (📋 요청 문구·✏️ 수정완료·업데이트 결과에서 뺀다) */
+function peerDaySet(){
+  const out = new Set();
+  Object.keys(ST).forEach(m => { const t = ST[m]; if (!t || !t.days) return;
+    Object.keys(t.days).forEach(dd => { if (isPeerDay(t.days[dd])) out.add(m + '-' + dd); }); });
+  return out;
+}
+/* 맡김 표시 — 새 합치기 규칙은 peer.t 로 합치지만, 그날 기록의 수정 시각(day._t)도 함께 바꿔 둔다:
+   이 기능을 모르는 예전 업무일지(캐시된 탭·다른 컴퓨터)가 합칠 때도 이 날 기록이 이겨 표시가 지워지지 않게 */
+function setPeer(m, dd){
+  const day = month(m).days[dd], on = !isPeerDay(day), t = Date.now();
+  day.peer = { on, t }; day._t = t;
+  save(m); renderAll(false);
+  const nb = $('#dayBody').querySelector('.peerb[data-pd="' + dd + '"]'); if (nb) nb.focus();   /* 표를 다시 그려도 키보드 위치 유지 */
+  toast(on ? (+m.slice(5,7)) + '/' + (+dd) + ' 작성 리뷰를 동료에게 맡긴 날로 표시했습니다' : (+m.slice(5,7)) + '/' + (+dd) + ' 맡김 표시를 해제했습니다');
+}
 function renderDays(){
   const t = month(cur), n = daysIn(cur);
   const nowKey = TODAY_M + '-' + TODAY_D;
@@ -854,24 +906,26 @@ function renderDays(){
     const au = d.auto, tip = f => !au ? '' : 'CMS 자동 집계 '+au[f]+'건 — 직접 고쳐도 다음 동기화 때 CMS 기준으로 바로잡힙니다'
       + ((d[f]||0)!==au[f] ? ' · 지금 칸 값 '+(d[f]||0)+' (CMS와 다름)' : '')
       + (d.manual && d.manual[f]!==au[f] ? ' · 바로잡기 전 적혀 있던 값 '+d.manual[f] : '');
-    rows += `<tr class="${cls}">` +
+    rows += `<tr class="${cls}${isPeerDay(d) ? ' peer' : ''}">` +
       `<td class="d">${+cur.slice(5,7)}/${i} <span style="opacity:.5">${'일월화수목금토'[wd]}</span>${au&&(au.r||au.p)?`<button class="evl" data-ev="${key}" title="이 날 작업 목록 (작업 증빙)">≡</button>`:''}</td>` +
       `<td><input class="num${au?' auto':''}" type="number" min="0" value="${d.r||''}" placeholder="0" data-d="${dd}" data-f="r" inputmode="numeric" title="${htmlEscape(tip('r'))}"></td>` +
       `<td><input class="num${au?' auto':''}" type="number" min="0" value="${d.p||''}" placeholder="0" data-d="${dd}" data-f="p" inputmode="numeric" title="${htmlEscape(tip('p'))}"></td>` +
       `<td class="inc ${inc>0?'pos':'zero'}">${inc>0?won(inc):'—'}</td>` +
       `<td><input class="memo" type="text" value="${htmlEscape(d.memo)}" placeholder="—" data-d="${dd}" data-f="memo"></td>` +
       `<td>${unregCell(d, dd)}</td>` +
+      `<td>${peerCell(d, dd)}</td>` +
     `</tr>`;
   }
   $('#dayBody').innerHTML = rows;
   const tt = totals(cur);
   $('#dayFoot').innerHTML = `<tr><td>합계</td><td style="text-align:right;padding-right:13px">${num(tt.r)}</td>` +
-    `<td style="text-align:right;padding-right:13px">${num(tt.p)}</td><td class="inc">${won(tt.inc)}</td><td colspan="2"></td></tr>`;
+    `<td style="text-align:right;padding-right:13px">${num(tt.p)}</td><td class="inc">${won(tt.inc)}</td><td colspan="3"></td></tr>`;
   $('#dayTitle').textContent = mFull(cur) + ' 일별 기록';
   $('#dayBody').querySelectorAll('input').forEach(el => {
     el.addEventListener('change', () => edit(cur, el.dataset.d, el.dataset.f, el.value));
   });
   $('#dayBody').querySelectorAll('.evl').forEach(b => { b.onclick = () => openEvidence(b.dataset.ev); });
+  $('#dayBody').querySelectorAll('.peerb').forEach(b => { b.onclick = () => setPeer(cur, b.dataset.pd); });
 }
 
 /* ── 렌더: 차트 ── */
@@ -945,6 +999,7 @@ function renderMonths(){
 function renderAll(charts){
   $('#mcur').textContent = mFull(cur);
   renderKpi(); renderToday(); renderDays(); renderMonths();
+  if (typeof renderUpdBadge === 'function') renderUpdBadge();   /* '동료 맡김' 날짜는 기록 안에 있다 — 다시 그릴 때마다 배지·📋 요청 문구도 다시 센다 */
   if (charts !== false) renderCharts(); else { renderCharts(); }
 }
 
@@ -1081,6 +1136,14 @@ function updStatLast(){
 function updOpenCms(){
   try{ window.open(updCmsUrl(),'unpa-cms'); }catch(e){}
 }
+/* 업데이트 결과의 남은 검수 — 동료에게 맡긴 작성일은 내 남은 일에서 빼고 따로 보인다 */
+function updRemainHtml(rm){
+  const pd=peerDaySet(), md=d=>(+d.slice(5,7))+'/'+(+d.slice(8)), ds=Object.keys(rm.days||{}).sort();
+  const mine=ds.filter(d=>!pd.has(d)), peer=ds.filter(d=>pd.has(d)), n=mine.reduce((a,d)=>a+rm.days[d],0);
+  return '<br>📋 남은 검수 <b>'+n+'</b>건'+(mine.length?' · '+mine.map(d=>md(d)+' '+rm.days[d]).join(', '):' — 짝수일 모두 끝')
+    +(peer.length?' · 🤝 동료 맡김 '+peer.map(d=>md(d)+' '+rm.days[d]).join(', '):'')
+    +' <span style="font-weight:400">(미등록 제품수 칸에 반영)</span>';
+}
 /* 동기화 창이 반영을 마치면 (storage 이벤트) 결과를 띄운다 */
 function updSynced(){
   const info=updLastInfo(); if(!info) return;
@@ -1090,9 +1153,7 @@ function updSynced(){
   st.innerHTML='✅ 업데이트 완료 '+htmlEscape(new Date(info.at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}))
     +' · 오늘 리뷰 <b>'+(t.r||0)+'</b> · 제품 <b>'+(t.p||0)+'</b>'
     +(info.nChanges?' · 바뀐 날 <b>'+info.nChanges+'</b>일':' · 바뀐 날 없음')
-    +(info.remain?'<br>📋 남은 검수 <b>'+info.remain.n+'</b>건'+(Object.keys(info.remain.days).length
-        ?' · '+Object.keys(info.remain.days).sort().map(d=>(+d.slice(5,7))+'/'+(+d.slice(8))+' '+info.remain.days[d]).join(', ')
-        :' — 짝수일 모두 끝')+' <span style="font-weight:400">(미등록 제품수 칸에 반영)</span>':'')
+    +(info.remain?updRemainHtml(info.remain):'')
     +(info.partial?'<br><span style="color:#b57611">일부 날짜 조회 실패 — 다음 업데이트 때 채움</span>':'')
     +(info.cloud==='on'?'<br>☁ 다른 컴퓨터 기록과도 합쳤습니다':'');
   toast('업무일지를 CMS 기준으로 업데이트했습니다');
@@ -1121,15 +1182,17 @@ function updatedReviews(){
   let o=null, ex=null;
   try{ o=JSON.parse(localStorage.getItem('unpa-pending-v1')||'null'); }catch(e){}
   try{ ex=JSON.parse(localStorage.getItem('unpa-exceptions-v1')||'null'); }catch(e){}
-  if(!o||!Array.isArray(o.backlog)) return {at:null,list:[]};
-  const ign=(ex&&ex.items)||{};
-  return {at:o.at||null, list:o.backlog.filter(x=>x&&x.status==='UPDATED'&&!x.blocked&&!(ign[x.id]&&ign[x.id].ign===true))};
+  if(!o||!Array.isArray(o.backlog)) return {at:null,list:[],peer:0};
+  const ign=(ex&&ex.items)||{}, pd=typeof peerDaySet==='function'?peerDaySet():new Set();
+  const all=o.backlog.filter(x=>x&&x.status==='UPDATED'&&!x.blocked&&!(ign[x.id]&&ign[x.id].ign===true));
+  return {at:o.at||null, list:all.filter(x=>!pd.has(x.d)), peer:all.length-all.filter(x=>!pd.has(x.d)).length};
 }
 function renderUpdList(){
-  const {at,list}=updatedReviews(), p2=n=>String(n).padStart(2,'0'), mdd=d=>(+d.slice(5,7))+'/'+(+d.slice(8,10));
+  const {at,list,peer}=updatedReviews(), p2=n=>String(n).padStart(2,'0'), mdd=d=>(+d.slice(5,7))+'/'+(+d.slice(8,10));
   const t=at?new Date(at):null;
   $('#updListHint').innerHTML=(t&&isFinite(t)?'CMS 기준 <b>'+p2(t.getMonth()+1)+'-'+p2(t.getDate())+' '+p2(t.getHours())+':'+p2(t.getMinutes())+'</b> 확인':'아직 CMS에서 확인한 적이 없습니다')
-    +' · 짝수일 최근 60일 · 정지 사용자·무시한 건 제외 · <b>'+list.length+'건</b>';
+    +' · 짝수일 최근 60일 · 정지 사용자·무시한 건 제외 · <b>'+list.length+'건</b>'
+    +(peer?' · 🤝 동료에게 맡긴 날 '+peer+'건 제외':'');
   if(!list.length){ $('#updListBody').innerHTML='<div style="color:var(--mint-dk);font-weight:700">수정완료된 리뷰가 없습니다 🎉</div>'; return; }
   const byD={}; list.forEach(x=>{ (byD[x.d]=byD[x.d]||[]).push(x); });
   $('#updListBody').innerHTML=Object.keys(byD).sort().map(d=>'<div class="updday">'+htmlEscape(/^\d{4}-\d{2}-\d{2}$/.test(d)?mdd(d)+' 작성':String(d))+' · '+byD[d].length+'건</div>'
@@ -1158,11 +1221,14 @@ window.addEventListener('storage',e=>{ if(e.key==='unpa-pending-v1'||e.key==='un
 /* ── 📋 요청 문구 ──
    채팅에 붙여 넣을 한 줄. 키워드 '언파 검수'로 시작하고, CMS 에 남은 새 리뷰(작성일별 건수)와 유저 수정완료 번호를 담는다.
    새 리뷰 = 남은 목록(backlog)에서 수정완료·정지 사용자·검수 예외에 올린 건(보류·무시 — 이미 아는 건)을 뺀 것.
-   수정완료 = ✏️ 배지와 같은 기준(무시한 건만 뺀다). */
-function askWork(o,ex){
-  const items=(ex&&ex.items)||{}, rows=(o&&Array.isArray(o.backlog))?o.backlog:[], days={}, upd=[];
+   수정완료 = ✏️ 배지와 같은 기준(무시한 건만 뺀다).
+   동료에게 맡긴 작성일(peer — 업무일지 동료 검수 칸에서 표시)은 새 리뷰도 수정완료도 넣지 않고 peer 에 따로 센다. */
+function askWork(o,ex,peer){
+  const items=(ex&&ex.items)||{}, rows=(o&&Array.isArray(o.backlog))?o.backlog:[], days={}, upd=[], pd={};
+  const isPeer=d=>!!peer&&(typeof peer.has==='function'?peer.has(d):Array.isArray(peer)&&peer.indexOf(d)>=0);
   rows.forEach(x=>{
     if(!x||!x.id||x.blocked) return;
+    if(isPeer(x.d)){ pd[x.d]=(pd[x.d]||0)+1; return; }
     const e=items[x.id];
     if(x.status==='UPDATED'){ if(!(e&&e.ign===true)) upd.push(String(x.id)); return; }
     if(e||!/^\d{4}-\d{2}-\d{2}$/.test(x.d)) return;
@@ -1172,7 +1238,8 @@ function askWork(o,ex){
   const mdd=d=>(+d.slice(5,7))+'/'+(+d.slice(8,10)), parts=[];
   if(dates.length) parts.push(dates.map(x=>mdd(x.d)+' '+x.n+'건').join(' · ')+' 전체 진행해줘 (승인·수정요청·미노출·제품/브랜드 등록까지)');
   if(upd.length) parts.push('수정완료 '+upd.length+'건 검토해줘: '+upd.join(', '));
-  return {at:(o&&o.at)||null, dates, n, upd, text:parts.length?'언파 검수 — '+parts.join(' / '):''};
+  return {at:(o&&o.at)||null, dates, n, upd, text:parts.length?'언파 검수 — '+parts.join(' / '):'',
+          peer:Object.keys(pd).sort().map(d=>({d,n:pd[d]}))};
 }
 /* 검수 예외 중 컨펌을 기다리는 건 — 검수 예외 화면의 탭과 같은 기준(도용은 상태와 관계없이 도용 탭)으로 나눠 센다 */
 function askWaiting(ex){
@@ -1184,7 +1251,7 @@ function askLoad(){
   let o=null, ex=null;
   try{ o=JSON.parse(localStorage.getItem('unpa-pending-v1')||'null'); }catch(e){}
   try{ ex=JSON.parse(localStorage.getItem('unpa-exceptions-v1')||'null'); }catch(e){}
-  return askWork(o,ex);
+  return askWork(o,ex,peerDaySet());
 }
 function renderAsk(){
   const w=askLoad(), p2=n=>String(n).padStart(2,'0'), t=w.at?new Date(w.at):null;
@@ -1195,7 +1262,8 @@ function renderAsk(){
   const waitTxt=[wait.hold?'보류 <b>'+wait.hold+'</b>건':'',wait.plag?'도용 <b>'+wait.plag+'</b>건':''].filter(Boolean).join(' · ');
   const waitTabs=[wait.hold?'보류':'',wait.plag?'도용':''].filter(Boolean).join('·');
   $('#askHint').innerHTML=(t&&isFinite(t)?'CMS 기준 <b>'+p2(t.getMonth()+1)+'-'+p2(t.getDate())+' '+p2(t.getHours())+':'+p2(t.getMinutes())+'</b> 확인':'아직 CMS에서 확인한 적이 없습니다 — 🔄 업데이트를 먼저 눌러 주세요')
-    +' · 새 리뷰 <b>'+w.n+'</b>건 · 수정완료 <b>'+w.upd.length+'</b>건';
+    +' · 새 리뷰 <b>'+w.n+'</b>건 · 수정완료 <b>'+w.upd.length+'</b>건'
+    +(w.peer.length?'<br>🤝 동료에게 맡긴 날은 뺐습니다 — '+w.peer.map(x=>(+x.d.slice(5,7))+'/'+(+x.d.slice(8,10))+' 남은 '+x.n+'건').join(' · '):'');
   $('#askText').className='askbox'+(w.text?'':' none');
   $('#askText').textContent=w.text||'남은 새 리뷰도, 수정완료 건도 없습니다 🎉';
   $('#askBody').innerHTML=waitTxt?'<div class="step" style="font-size:12.3px;color:var(--amber)">검수 예외에 컨펌을 기다리는 건이 '+waitTxt+' 있어요 — 🚩 검수 예외의 '+waitTabs+' 탭에서 보고 채팅으로 알려 주세요.</div>':'';
@@ -1352,7 +1420,14 @@ async function pullAll(){
           /* 회사·집이 같은 달을 따로 고쳤다 — 자동 장부는 합치고, 칸마다 나중에 고친 쪽을 쓴다. 고른 뒤 다시 올린다 */
           ST[row.month]=Object.assign(WorklogCore.mergeMonth(loc,row.data),{_u:new Date().toISOString(),_remote:row.updated_at});merged++;
         }
-        else if (!dirty.has(row.month)&&(!loc || remT >= locT)){ ST[row.month] = Object.assign({}, row.data, {_u: row.updated_at,_remote:row.updated_at}); n++; }
+        else if (!dirty.has(row.month)&&(!loc || remT >= locT)){
+          ST[row.month] = Object.assign({}, row.data, {_u: row.updated_at,_remote:row.updated_at}); n++;
+          /* 이 기능을 모르는 예전 업무일지가 올린 기록이면 '동료 맡김' 표시가 빠져 있을 수 있다 — 이쪽이 더 나중 표시면 되살려 다시 올린다 */
+          if (loc && loc.days){ let kept = 0; const dd0 = ST[row.month].days || (ST[row.month].days = {});
+            Object.keys(loc.days).forEach(dd => { const lp = loc.days[dd] && loc.days[dd].peer, rp = dd0[dd] && dd0[dd].peer;
+              if (lp && Number.isSafeInteger(lp.t) && (!rp || (rp.t || 0) < lp.t)){ if (!dd0[dd]) dd0[dd] = { r:0, p:0, memo:'', unreg:'' }; dd0[dd].peer = lp; kept++; } });
+            if (kept) dirty.add(row.month); }
+        }
       }
     });
     persist(); renderAll();
@@ -1753,7 +1828,9 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
       var cls={}; o.items.forEach(function(x){ cls[String(x.id)]=x; });
       var old=(window.WorklogCore&&WorklogCore.latestVerdicts)?WorklogCore.latestVerdicts(jget('unpa-audit-v1')||{}):{};
       var G={}; GROUPS.forEach(function(g){ G[g[0]]=[]; });
+      var pd=typeof peerDaySet==='function'?peerDaySet():new Set(), nPeer=0;
       o.backlog.forEach(function(b){
+        if(pd.has(b.d)){ nPeer++; return; }      /* 동료에게 맡긴 날 — 내 할 일이 아니다 */
         var c=cls[String(b.id)], v=old[String(b.id)];
         var act=c ? c.action : (v && !v.applied ? v.action : null);
         var x={ id:b.id, d:b.d, status:b.status, st:c&&c.st, done:v&&v.manual_done,
@@ -1765,8 +1842,8 @@ const ACCOUNT_READY=BOOT_READY.then(async () => {
               : act==='approve' ? 'approve' : 'unknown';
         G[k].push(x);
       });
-      hint.textContent='CMS 기준 · 검수 대기 '+o.backlog.length+'건 (짝수일 최근 60일) · '+when+' 확인';
-      if(!o.backlog.length){ body.innerHTML='<div style="color:var(--mint-dk);font-weight:700">CMS 에 남은 검수 대기가 없습니다 🎉</div>'; return; }
+      hint.textContent='CMS 기준 · 검수 대기 '+(o.backlog.length-nPeer)+'건 (짝수일 최근 60일) · '+when+' 확인'+(nPeer?' · 🤝 동료에게 맡긴 날 '+nPeer+'건 제외':'');
+      if(o.backlog.length===nPeer){ body.innerHTML='<div style="color:var(--mint-dk);font-weight:700">CMS 에 남은 검수 대기가 없습니다 🎉</div>'; return; }
       var byDate=function(list){ var m={}; list.forEach(function(x){ m[x.d]=(m[x.d]||0)+1; }); return Object.keys(m).sort().map(function(d){ return md(d)+' '+m[d]+'건'; }).join(' · '); };
       body.innerHTML=GROUPS.filter(function(g){ return G[g[0]].length; }).map(function(g){
         var list=G[g[0]].sort(function(a,b){ return a.d<b.d?-1:a.d>b.d?1:0; });

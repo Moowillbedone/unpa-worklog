@@ -9,7 +9,9 @@ if(!chart)throw Error('기존 로컬 파일의 Chart.js 번들을 찾지 못했�
 const core=fs.readFileSync(path.join(root,'worklog-core.js'),'utf8');
 const data=JSON.parse(fs.readFileSync(path.join(root,'data/log.json'),'utf8'));
 require('../worklog-core.js').months(data.months||data);
-html=html.replace('<script src="worklog-core.js"></script>',()=>'<script>'+core+'</script>');
+const coreTag=/<script src="worklog-core\.js(?:\?v=\d+)?"><\/script>/;
+if(!coreTag.test(html))throw Error('index.html 의 worklog-core.js 태그를 찾지 못했습니다');
+html=html.replace(coreTag,()=>'<script>'+core+'</script>');
 html=html.replace(/<script src="https:\/\/cdnjs.cloudflare.com\/ajax\/libs\/Chart.js\/[^\"]+"><\/script>/,()=>'<script>'+chart+'</script>');
 html=html.replace("const res = await fetch('data/log.json?t=' + Date.now(), {cache:'no-store'});",()=>"const res = {ok:true,json:async()=> ("+JSON.stringify(data).replace(/</g,'\\u003c')+")};");
 fs.writeFileSync(path.join(root,'worklog-local.html'),html);

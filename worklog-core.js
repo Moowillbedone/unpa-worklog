@@ -97,6 +97,11 @@
      이미 미노출된 리뷰는 콘솔이 세지 않는다(검수·등록할 필요가 없으므로).
      칸이 비었거나 숫자면 CMS 건수로 맞추고(0 이면 비움), 사람이 적은 메모("유민지", "이월" 등)는 그대로 둔다 — 건수는 day.pend 에 따로 둔다. */
   function isAutoUnreg(v){return !String(v==null?'':v).trim()||/^\d+$/.test(String(v).trim());}
+  /* 기록에 없는 달이면 만든다 — 목표는 바로 앞 달 것을 이어받는다 */
+  function ensureMonth(out,mm){
+    if(!out[mm]){const prev=Object.keys(out).filter(k=>k<mm&&out[k]&&integer(out[k].target)).sort().pop();out[mm]=blankMonth(mm,prev?out[prev].target:1450000);const tc=prev?(out[prev]._t||out[prev]._tc||0):0;if(tc)out[mm]._tc=tc;}
+    return out[mm];
+  }
   function applyRemain(out,remain){
     const touched=new Set();
     if(!remain||!remain.days)return [];
@@ -105,8 +110,7 @@
       const x=remain.days[d];
       if(!date(d)||!x||!integer(x.n))continue;
       const mm=d.slice(0,7),dd=d.slice(8);
-      if(!out[mm]){const prev=Object.keys(out).filter(k=>k<mm&&out[k]&&integer(out[k].target)).sort().pop();out[mm]=blankMonth(mm,prev?out[prev].target:1450000);const tc=prev?(out[prev]._t||out[prev]._tc||0):0;if(tc)out[mm]._tc=tc;}
-      const t=out[mm];if(!t.days[dd])t.days[dd]={r:0,p:0,memo:'',unreg:''};
+      const t=ensureMonth(out,mm);if(!t.days[dd])t.days[dd]={r:0,p:0,memo:'',unreg:''};
       const day=t.days[dd],pend={n:x.n,reg:x.reg|0,upd:x.upd|0,blocked:x.blocked|0,at};
       const want=x.n>0?String(x.n):'';
       const same=day.pend&&day.pend.n===pend.n&&day.pend.reg===pend.reg&&day.pend.upd===pend.upd&&day.pend.blocked===pend.blocked;
@@ -116,13 +120,57 @@
     }
     return [...touched];
   }
+  /* ── 동료 검수 칸 ─────────────────────────────────────────
+     ① 동료에게 맡긴 날 day.peer={on,t} — 사람이 업무일지에서 누른다. 기기끼리는 나중에 바꾼 쪽(t)이 이긴다.
+     ② 다른 계정 승인 day.peerCms={me,ot,by,at} — 콘솔이 CMS 에서 센 리뷰 작성일별 승인 계정.
+        콘솔이 넘기는 것: { at, from, to, failed:[작성일], days:{ 'YYYY-MM-DD':{ me, by:{ 계정:건수 } } } }
+        by 는 내 계정이 아닌 승인자만 — 계정은 해시로만 남긴다(내보내기·서버에 이름이 안 남게. 이름은 이 브라우저 'unpa-peer-names-v1' 에만).
+        from~to 안인데 days 에 없는 날은 다른 계정 승인이 없는 날. 담당인 짝수일과 맡긴 날만 적는다(홀수일은 원래 다른 담당자 날).
+     둘 다 표시만 한다 — 내 수입(리뷰·제품 수)에는 들어가지 않는다. */
+  function peerBy(by){
+    const out={};if(!by||typeof by!=='object'||Array.isArray(by))return out;
+    for(const k of Object.keys(by).slice(0,20)){const n=by[k],kk=String(k).toLowerCase().replace(/[^0-9a-z._-]/g,'').slice(0,24)||'?';if(integer(n)&&n>0)out[kk]=(out[kk]||0)+n;}
+    return out;
+  }
+  function peerSame(a,b){
+    if(!a||!b||a.me!==b.me||a.ot!==b.ot)return false;
+    const ka=Object.keys(a.by||{}).sort(),kb=Object.keys(b.by||{}).sort();
+    return ka.join(',')===kb.join(',')&&ka.every(k=>a.by[k]===b.by[k]);
+  }
+  function applyPeer(out,peer,minFrom){
+    const touched=new Set();
+    if(!peer||!peer.days||typeof peer.days!=='object'||!date(peer.from)||!date(peer.to)||peer.from>peer.to)return [];
+    const at=String(peer.at||'');if(isNaN(Date.parse(at)))return [];
+    const failed=new Set((Array.isArray(peer.failed)?peer.failed:[]).filter(date));
+    /* 자동 집계를 시작한 날(work.from) 앞은 손대지 않는다 — 예전 달을 새로 만들지 않게 */
+    const start=date(minFrom)&&minFrom>peer.from?minFrom:peer.from;
+    for(let d=start,i=0;d<=peer.to&&i<400;d=nextDay(d),i++){
+      if(failed.has(d))continue;                          /* 이 날은 못 셌다 — 있던 값을 그대로 둔다 */
+      const x=peer.days[d],mm=d.slice(0,7),dd=d.slice(8);
+      const day=out[mm]&&out[mm].days&&out[mm].days[dd],cur=day&&day.peerCms;
+      if(+dd%2===1&&!(day&&day.peer&&day.peer.on===true))continue;   /* 홀수일은 맡긴 날만 */
+      const by=x?peerBy(x.by):{},ot=Object.keys(by).reduce((a,k)=>a+by[k],0),me=x&&integer(x.me)?x.me:0;
+      if(cur&&String(cur.at||'')>=at)continue;            /* 더 최근에 센 값이 이미 있다 */
+      if(!ot){
+        /* 다른 계정 승인이 없는 날 — 예전에 있던 값만 0 으로 덮는다(지우면 다른 기기에 남은 옛 값이 합칠 때 되살아난다) */
+        if(cur&&cur.ot>0){day.peerCms={me,ot:0,by:{},at};touched.add(mm);}
+        continue;
+      }
+      const v={me,ot,by,at};
+      if(cur&&peerSame(cur,v))continue;                   /* 그대로면 달을 바꾼 것으로 치지 않는다 */
+      if(!day)continue;                                   /* 표시만 하는 값이라 기록에 없는 달·날은 만들지 않는다(빈 달이 서버 기록을 덮지 않게) */
+      day.peerCms=v;touched.add(mm);
+    }
+    return [...touched];
+  }
   /* 브라우저에 저장된 업무일지 원문(JSON 문자열)에 자동 집계를 반영한다. 원문이 깨졌으면 손대지 않는다. */
-  function syncStore(raw,work,base,now,remain){
+  function syncStore(raw,work,base,now,remain,peer){
     const store=raw?JSON.parse(raw):(base||{v:1,months:{},dirty:[]});
     if(!store||typeof store!=='object'||!store.months)throw Error('업무일지 저장 형식 오류');
     months(store.months);
     const res=applyWork(store.months,work);
     applyRemain(res.months,remain).forEach(m=>{if(res.touched.indexOf(m)<0)res.touched.push(m);});
+    applyPeer(res.months,peer,work&&work.from).forEach(m=>{if(res.touched.indexOf(m)<0)res.touched.push(m);});
     months(res.months);
     const at=(now||new Date()).toISOString();
     res.touched.forEach(m=>{res.months[m]._u=at;});
@@ -204,6 +252,11 @@
       /* 남은 검수 건수: 더 최근에 CMS 를 훑은 쪽. 칸이 숫자(자동)면 그 건수로, 메모면 메모 그대로 */
       const pL=L&&L.pend,pR=R&&R.pend;
       if(pL||pR){const P=!pL?pR:!pR?pL:(String(pR.at||'')>String(pL.at||'')?pR:pL);d.pend=P;if(isAutoUnreg(d.unreg))d.unreg=P.n>0?String(P.n):'';}
+      /* 동료 검수 칸: 맡김 표시는 나중에 바꾼 쪽(t), 다른 계정 승인은 더 최근에 센 쪽(at) — 그날 어느 기기 값이 이겼는지(_t)와 따로 */
+      const kL=L&&L.peer,kR=R&&R.peer;
+      if(kL||kR)d.peer=!kL?kR:!kR?kL:((kR.t||0)>(kL.t||0)?kR:kL);
+      const cL=L&&L.peerCms,cR=R&&R.peerCms;
+      if(cL||cR)d.peerCms=!cL?cR:!cR?cL:(String(cR.at||'')>String(cL.at||'')?cR:cL);
       /* 숫자: 자동 집계 날은 합친 장부 건수(CMS 기준) 그대로 */
       if(win.auto||(other&&other.auto)){
         const ar=((led.r||{})[dd]||[]).length,ap=((led.p||{})[dd]||[]).length;
@@ -279,7 +332,7 @@
      1) 이 브라우저의 업무일지·작업 증빙·검수기록·남은 일에 반영
      2) 로그인했으면 서버와 합치고, 합친 결과를 이 브라우저에도 되돌려 쓴다
      3) 합쳐진 콘솔 경험(배운 연결·전송 기록 등)을 콘솔에 돌려준다 */
-  const EV_KEY='unpa-evidence-v1',AUDIT_KEY='unpa-audit-v1',PENDING_KEY='unpa-pending-v1';
+  const EV_KEY='unpa-evidence-v1',AUDIT_KEY='unpa-audit-v1',PENDING_KEY='unpa-pending-v1',PEER_NAMES_KEY='unpa-peer-names-v1';
   function readJSON(store,k,fb){try{const v=store.getItem(k);return v?JSON.parse(v):fb;}catch(e){return fb;}}
   function writeAudit(store,obj){
     /* 저장공간이 모자라면 오래된 날부터 덜어 가며 다시 쓴다 */
@@ -430,8 +483,14 @@
       if(old&&old.months){months(old.months);base={v:1,months:old.months,dirty:Object.keys(old.months)};}
       else if(opts.base)base=opts.base;
     }
-    const res=syncStore(store.getItem(key),p.work,base,now,p.remain);
+    const res=syncStore(store.getItem(key),p.work,base,now,p.remain,p.peer);
     store.setItem(key,res.value);
+    /* 다른 계정 해시 → 이름(이메일 앞부분). 이 브라우저에만 두고 서버·내보내기에는 넣지 않는다 */
+    if(p.peerNames&&typeof p.peerNames==='object'&&!Array.isArray(p.peerNames)){
+      const names=readJSON(store,PEER_NAMES_KEY,null)||{};
+      Object.keys(p.peerNames).slice(0,30).forEach(k=>{const v=String(p.peerNames[k]||'').toLowerCase().replace(/[^0-9a-z._-]/g,'').slice(0,24);if(/^[0-9a-z?]{1,16}$/.test(k)&&v)names[k]=v;});
+      try{store.setItem(PEER_NAMES_KEY,JSON.stringify(names));}catch(e){}
+    }
     /* 이 기록이 담고 있는 가장 최근 CMS 집계 시각(달마다·CMS 계정마다 — 계정은 해시로만) — 다른 기기 집계까지 합친 수입과
        가드의 '집계 뒤' 기준을 맞춘다. 일부 실패한 집계는 안 쓴다 */
     const acct=typeof p.acct==='string'&&/^[0-9a-z]{1,16}$/.test(p.acct)?p.acct:null;
@@ -515,6 +574,6 @@
     return {ok:true,today:res.today,changes:res.changes.slice(0,20),nChanges:res.changes.length,auditDays,auditError,cloud,console:consoleOut,remain,
             verdicts:verdictsFor(audit,p.backlog),goal};
   }
-  return {date,months,mergeAudit,unappliedIds,applyWork,applyRemain,isAutoUnreg,syncStore,syncAudit,syncWindow,latestVerdicts,verdictsFor,
+  return {date,months,mergeAudit,unappliedIds,applyWork,applyRemain,applyPeer,isAutoUnreg,syncStore,syncAudit,syncWindow,latestVerdicts,verdictsFor,
           evidenceFrom,mergeEvidence,mergeMonth,mergeAlias,mergeSent,mergeTexts,mergeGate,mergeConsole,mergeByTime,mergeExceptions,EXC_IGN:1,monthsBack,cloudSync};
 });

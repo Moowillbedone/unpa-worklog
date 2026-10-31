@@ -114,7 +114,7 @@ test('the sync window tells the console which reviews were ignored',()=>{
   assert.equal(JSON.stringify(ctx.f()),'[]');
   store['unpa-exceptions-v1']=JSON.stringify({v:1,items:{'1':{ign:true},'2':{ign:false},'3':{}}});
   assert.equal(JSON.stringify(ctx.f()),'["1"]');
-  assert.match(s,/\{ignored:ignoredIds\(\)\}/,'완료 신호에 실어 보낸다');
+  assert.match(s,/\{ignored:ignoredIds\(\),peerDays:peerDays\(\)\}/,'완료 신호에 실어 보낸다 (동료에게 맡긴 날짜와 함께)');
 });
 
 /* cms-console.js — 무시 목록은 수정완료 검토·전체 스캔에서만 빼고, 남은 건수는 CMS 그대로 */
