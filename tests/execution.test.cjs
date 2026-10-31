@@ -902,7 +902,10 @@ test('only one CMS count runs at a time: asking again while one is running waits
 test('after the CMS count, a leftover approval reservation for a review the count saw as not approved by me is dropped',async()=>{
   const {api,ctx}=harness(); api.setMe('me@example.com');
   api.goalSave(snap({target:100000,won:0}));
-  ctx.localStorage.setItem('unpa-claude-ledger-v1',JSON.stringify({v:1,items:{'r:555':{k:'r',t:Date.now()-3600e3,src:'c',u:1},'r:556':{k:'r',t:Date.now()-3600e3,u:1}}}));
+  /* 예약 시각은 집계 전이면서 이번 달(한국 시간) 안이어야 한다 — 달이 바뀐 첫 한 시간에도 지난달로 넘어가지 않게 */
+  const kNow=new Date(Date.now()+9*3600e3), kMonthStart=Date.UTC(kNow.getUTCFullYear(),kNow.getUTCMonth(),1)-9*3600e3;
+  const rt=Math.max(Date.now()-3600e3, kMonthStart+1000);
+  ctx.localStorage.setItem('unpa-claude-ledger-v1',JSON.stringify({v:1,items:{'r:555':{k:'r',t:rt,src:'c',u:1},'r:556':{k:'r',t:rt,u:1}}}));
   assert.equal(ctx.UnpaGuard.status().spent,1000);
   ctx.__route=(url)=>{
     if(/\/admin\/reviews\?/.test(url)) return {status:200,body:{results:/startDate=(\d{4}-\d\d-\d\d)/.exec(url)[1]===api.workPayload().work.to?[{id:555,status:'PENDING_APPROVAL',createdAt:new Date().toISOString()}]:[],totalCount:0}};
